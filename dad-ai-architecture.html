@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DAD-AI — System Architecture</title>
+<style>
+  :root {
+    --bg: #0f0f10;
+    --surface: #18181b;
+    --surface-2: #222226;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --text: #e8e8e6;
+    --text-muted: #888884;
+    --text-dim: #555552;
+
+    --blue: #378ADD;
+    --blue-bg: rgba(55,138,221,0.1);
+    --blue-border: rgba(55,138,221,0.25);
+
+    --teal: #1D9E75;
+    --teal-bg: rgba(29,158,117,0.1);
+    --teal-border: rgba(29,158,117,0.25);
+
+    --amber: #EF9F27;
+    --amber-bg: rgba(239,159,39,0.1);
+    --amber-border: rgba(239,159,39,0.25);
+
+    --purple: #7F77DD;
+    --purple-bg: rgba(127,119,221,0.1);
+    --purple-border: rgba(127,119,221,0.25);
+
+    --red: #E24B4A;
+    --red-bg: rgba(226,75,74,0.08);
+    --red-border: rgba(226,75,74,0.25);
+
+    --gray-bg: rgba(255,255,255,0.04);
+    --gray-border: rgba(255,255,255,0.1);
+
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "SF Mono", "Fira Code", monospace;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 48px 32px 80px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* PAGE HEADER */
+  .page-header {
+    margin-bottom: 48px;
+  }
+  .page-eyebrow {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .page-title {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .page-subtitle {
+    font-size: 15px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    max-width: 560px;
+  }
+
+  /* SECTION */
+  .section {
+    margin-bottom: 40px;
+  }
+  .section-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    padding-left: 2px;
+  }
+
+  /* GRID LAYOUTS */
+  .grid-4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  /* FLOW ARROW */
+  .flow-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    color: var(--text-dim);
+    font-size: 18px;
+    margin: 4px 0;
+  }
+
+  /* BASE CARD */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .card-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  /* SOURCE CARDS */
+  .source-card {
+    background: var(--gray-bg);
+    border: 1px solid var(--gray-border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .source-icon {
+    font-size: 18px;
+    margin-bottom: 8px;
+  }
+  .source-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  .source-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* INTELLIGENCE CARD */
+  .intel-card {
+    background: var(--purple-bg);
+    border: 1px solid var(--purple-border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+  }
+  .intel-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .intel-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--purple);
+    flex-shrink: 0;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .intel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .intel-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .intel-pill {
+    font-size: 12px;
+    color: var(--purple);
+    background: rgba(127,119,221,0.12);
+    border: 1px solid var(--purple-border);
+    border-radius: 100px;
+    padding: 3px 10px;
+  }
+
+  /* PANEL CARDS */
+  .panel {
+    border-radius: var(--radius);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .panel-blue   { background: var(--blue-bg);  border: 1px solid var(--blue-border); }
+  .panel-teal   { background: var(--teal-bg);  border: 1px solid var(--teal-border); }
+  .panel-amber  { background: var(--amber-bg); border: 1px solid var(--amber-border); }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .panel-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .panel-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: auto;
+  }
+
+  /* SESSION ROWS */
+  .session-group-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+  .session-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+    gap: 12px;
+  }
+  .session-name {
+    font-size: 13px;
+    color: var(--text);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-pill {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 100px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .status-working { background: rgba(55,138,221,0.15); color: #6ab0f5; border: 1px solid rgba(55,138,221,0.3); }
+  .status-waiting { background: rgba(239,159,39,0.15); color: #f0b84a; border: 1px solid rgba(239,159,39,0.3); }
+  .status-settled { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
+  .status-running { background: rgba(29,158,117,0.15); color: #3dd4a0; border: 1px solid rgba(29,158,117,0.3); }
+  .status-idle    { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
+
+  /* AGENT ROWS */
+  .agent-block {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .agent-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .agent-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .agent-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* BRIEF ITEMS */
+  .brief-section-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .brief-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+  }
+  .brief-num {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--amber);
+    min-width: 16px;
+  }
+  .brief-text {
+    font-size: 13px;
+    color: var(--text);
+  }
+  .flag-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--red-bg);
+    border: 1px solid var(--red-border);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+  }
+  .flag-icon {
+    font-size: 12px;
+    color: var(--red);
+    flex-shrink: 0;
+  }
+  .flag-text {
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* OUTPUT CARDS */
+  .output-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .output-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  .output-icon-blue  { background: var(--blue-bg); }
+  .output-icon-teal  { background: var(--teal-bg); }
+  .output-icon-amber { background: var(--amber-bg); }
+  .output-body {}
+  .output-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  .output-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* DIVIDER */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 8px 0;
+  }
+
+  /* NOTE */
+  .note {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding-left: 2px;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div class="page-eyebrow">Design Operations</div>
+  <div class="page-title">DAD-AI — Command center</div>
+  <div class="page-subtitle">Three-layer system: data sources → intelligence engine → your daily command screen. Replaces Claude's sidebar chaos with a brand-organized, Linear-connected workspace.</div>
+</div>
+
+
+<!-- LAYER 1: DATA SOURCES -->
+<div class="section">
+  <div class="section-label">Layer 1 — Data sources</div>
+  <div class="grid-4">
+
+    <div class="source-card">
+      <div class="source-icon">📋</div>
+      <div class="source-title">Linear</div>
+      <div class="source-desc">Live API connection. Reads all tasks, priorities, and quarterly goals across every brand.</div>
+    </div>
+
+    <div class="source-card">
+      <div class="source-icon">💬</div>
+      <div class="source-title">Claude chats</div>
+      <div class="source-desc">Organized by brand and project type — research, content creation, agent building, design decisions.</div>
+    </div>
+
+    <div class="source-card">
+      <div class="source-icon">🤖</div>
+      <div class="source-title">Always-on agents</div>
+      <div class="source-desc">Background workers running continuously — Design Portal coder, research gatherer, others as needed.</div>
+    </div>
+
+    <div class="source-card">
+      <div class="source-icon">🎨</div>
+      <div class="source-title">Figma + Drive</div>
+      <div class="source-desc">File links attached to sessions so each chat connects directly to the relevant design files.</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="flow-arrow">↓</div>
+
+
+<!-- LAYER 2: INTELLIGENCE ENGINE -->
+<div class="section">
+  <div class="section-label">Layer 2 — Intelligence engine</div>
+  <div class="intel-card">
+    <div class="intel-header">
+      <div class="intel-dot"></div>
+      <div class="intel-title">Claude scheduling + prioritization engine</div>
+    </div>
+    <div class="intel-pills">
+      <span class="intel-pill">Reads Linear live</span>
+      <span class="intel-pill">Balances quarterly goals vs sprint tasks</span>
+      <span class="intel-pill">Generates daily brief every morning</span>
+      <span class="intel-pill">Generates weekly plan every Friday 5pm</span>
+      <span class="intel-pill">Flags overdue or at-risk items</span>
+      <span class="intel-pill">Surfaces research focus when appropriate</span>
+    </div>
+  </div>
+</div>
+
+<div class="flow-arrow">↓</div>
+
+
+<!-- LAYER 3: COMMAND CENTER -->
+<div class="section">
+  <div class="section-label">Layer 3 — Command center (browser, second screen)</div>
+  <div class="grid-3">
+
+    <!-- SESSION BOARD -->
+    <div class="panel panel-blue">
+      <div class="panel-header">
+        <div class="panel-dot" style="background: var(--blue);"></div>
+        <div class="panel-name">Session board</div>
+        <div class="panel-desc">AI chats by brand</div>
+      </div>
+
+      <div class="session-group-label">Conduit</div>
+      <div class="session-row">
+        <div class="session-name">Download page — platform detection</div>
+        <div class="status-pill status-working">Working</div>
+      </div>
+      <div class="session-row">
+        <div class="session-name">Hosted Conduit graphic ⚑</div>
+        <div class="status-pill status-waiting">Waiting</div>
+      </div>
+
+      <div class="session-group-label">Ryve</div>
+      <div class="session-row">
+        <div class="session-name">iOS App Store launch video</div>
+        <div class="status-pill status-working">Working</div>
+      </div>
+      <div class="session-row">
+        <div class="session-name">Expo SDK upgrade review</div>
+        <div class="status-pill status-working">Working</div>
+      </div>
+
+      <div class="session-group-label">Psiphon VPN</div>
+      <div class="session-row">
+        <div class="session-name">Brand booklet — 20-spread wireframe</div>
+        <div class="status-pill status-waiting">Waiting</div>
+      </div>
+
+      <div class="session-group-label">Forge</div>
+      <div class="session-row">
+        <div class="session-name">Homepage redesign brief</div>
+        <div class="status-pill status-settled">Settled</div>
+      </div>
+
+      <div class="note">+ new session per brand</div>
+    </div>
+
+
+    <!-- AGENT MONITOR -->
+    <div class="panel panel-teal">
+      <div class="panel-header">
+        <div class="panel-dot" style="background: var(--teal);"></div>
+        <div class="panel-name">Agent monitor</div>
+        <div class="panel-desc">Always-on workers</div>
+      </div>
+
+      <div class="agent-block">
+        <div class="agent-header-row">
+          <div class="agent-name">Design Portal coder</div>
+          <div class="status-pill status-running">Running</div>
+        </div>
+        <div class="agent-meta">3 tasks queued · last active 14m ago</div>
+        <hr class="divider">
+        <div class="agent-meta">Backlog: UX improvements, self-researched updates, code implementation</div>
+      </div>
+
+      <div class="agent-block">
+        <div class="agent-header-row">
+          <div class="agent-name">Research gatherer</div>
+          <div class="status-pill status-idle">Idle</div>
+        </div>
+        <div class="agent-meta">5 new articles · last run 2h ago</div>
+        <hr class="divider">
+        <div class="agent-meta">Tracks: design news, best practices, competitor moves, motion design</div>
+      </div>
+
+      <div class="note">Agents run without you. You review output, approve or redirect.</div>
+    </div>
+
+
+    <!-- DAILY BRIEF -->
+    <div class="panel panel-amber">
+      <div class="panel-header">
+        <div class="panel-dot" style="background: var(--amber);"></div>
+        <div class="panel-name">Daily brief</div>
+        <div class="panel-desc">Generated each morning</div>
+      </div>
+
+      <div class="brief-section-label">Focus — top 3 today</div>
+      <div class="brief-item">
+        <div class="brief-num">01</div>
+        <div class="brief-text">Conduit download page — platform detection frames</div>
+      </div>
+      <div class="brief-item">
+        <div class="brief-num">02</div>
+        <div class="brief-text">Hosted Conduit graphic — start brief (flagged Aug 4)</div>
+      </div>
+      <div class="brief-item">
+        <div class="brief-num">03</div>
+        <div class="brief-text">Review Ryve Expo SDK notes with Harrison</div>
+      </div>
+
+      <div class="brief-section-label" style="margin-top: 4px;">Flags</div>
+      <div class="flag-item">
+        <div class="flag-icon">▲</div>
+        <div class="flag-text">Q3 brand booklet wireframe — overdue against quarterly goal</div>
+      </div>
+      <div class="flag-item">
+        <div class="flag-icon">▲</div>
+        <div class="flag-text">Social AI pipeline — no sessions active, Q3 target</div>
+      </div>
+
+      <div class="note">Weekly plan generated Friday at 5pm. Balances sprint tasks with quarterly goals.</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="flow-arrow">↓</div>
+
+
+<!-- YOUR ACTIONS -->
+<div class="section">
+  <div class="section-label">Your actions — human supervision layer</div>
+  <div class="grid-3">
+
+    <div class="output-card">
+      <div class="output-icon output-icon-blue">💬</div>
+      <div class="output-body">
+        <div class="output-title">Open chat in Claude</div>
+        <div class="output-desc">Jump into a session from the board. Review output, give direction, close when done. You decide what ships.</div>
+      </div>
+    </div>
+
+    <div class="output-card">
+      <div class="output-icon output-icon-teal">🔍</div>
+      <div class="output-body">
+        <div class="output-title">Review agent output</div>
+        <div class="output-desc">Agent worked while you were away. You approve, redirect, or add to its queue. Nothing auto-publishes.</div>
+      </div>
+    </div>
+
+    <div class="output-card">
+      <div class="output-icon output-icon-amber">📅</div>
+      <div class="output-body">
+        <div class="output-title">Execute your schedule</div>
+        <div class="output-desc">Brief tells you what to work on. You work block by block, updating Linear as you go. Friday: review week + plan next.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- BUILD ORDER NOTE -->
+<div class="section">
+  <div class="section-label">Build order</div>
+  <div class="card">
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="display: flex; gap: 14px; align-items: flex-start;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--blue); min-width: 24px; padding-top: 2px;">01</div>
+        <div>
+          <div class="card-title">Session board — Cloudflare app with persistent storage</div>
+          <div class="card-sub">Immediate value. Replaces the broken sidebar. You can see all sessions on your second screen from day one.</div>
+        </div>
+      </div>
+      <hr class="divider">
+      <div style="display: flex; gap: 14px; align-items: flex-start;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--teal); min-width: 24px; padding-top: 2px;">02</div>
+        <div>
+          <div class="card-title">Linear API connection → daily brief</div>
+          <div class="card-sub">Wire in live task data. Claude reads your Linear, generates your morning focus list and Friday weekly plan.</div>
+        </div>
+      </div>
+      <hr class="divider">
+      <div style="display: flex; gap: 14px; align-items: flex-start;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--amber); min-width: 24px; padding-top: 2px;">03</div>
+        <div>
+          <div class="card-title">Agent monitor</div>
+          <div class="card-sub">Add once you have agents worth monitoring. The Design Portal coder and research gatherer are the first two.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

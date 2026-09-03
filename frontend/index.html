@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Hub</title>
+<style>
+  :root {
+    --bg: #0f0f10;
+    --surface: #18181b;
+    --surface-2: #222226;
+    --surface-3: #2a2a2f;
+    --border: rgba(255,255,255,0.07);
+    --border-strong: rgba(255,255,255,0.14);
+    --text: #e4e4e0;
+    --text-muted: #7a7a74;
+    --text-dim: #444442;
+    --radius: 8px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; display: flex; flex-direction: column; }
+
+  /* TOPBAR */
+  .topbar { height: 44px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; background: var(--surface); }
+  .topbar-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .topbar-sep { width: 1px; height: 16px; background: var(--border-strong); }
+  .topbar-sub { font-size: 12px; color: var(--text-muted); }
+
+  /* LAYOUT */
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* SIDEBAR */
+  .sidebar { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; overflow-y: auto; }
+  .sidebar::-webkit-scrollbar { width: 3px; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+  .sb-section { padding: 14px 0 6px; }
+  .sb-label { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); padding: 0 12px 5px; }
+  .sb-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; border: none; background: none; width: 100%; text-align: left; color: var(--text-muted); font-size: 13px; font-family: var(--font); transition: background .1s, color .1s; }
+  .sb-item:hover { background: var(--surface-2); color: var(--text); }
+  .sb-item.active { background: var(--surface-2); color: var(--text); font-weight: 500; }
+  .sb-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .sb-name { flex: 1; }
+  .sb-badge { font-size: 10px; font-weight: 600; min-width: 16px; height: 15px; border-radius: 8px; background: var(--surface-3); color: var(--text-muted); display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+
+  /* MAIN */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .main-header { padding: 14px 18px 13px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .main-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .main-title { font-size: 16px; font-weight: 600; color: var(--text); letter-spacing: -.02em; }
+  .main-actions { margin-left: auto; display: flex; gap: 8px; }
+  .btn { font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-strong); background: none; color: var(--text-muted); cursor: pointer; font-family: var(--font); transition: background .1s, color .1s; }
+  .btn:hover { background: var(--surface-2); color: var(--text); }
+  .btn-primary { background: var(--surface-2); color: var(--text); }
+  .main-body { flex: 1; overflow-y: auto; padding: 16px 18px 40px; display: flex; flex-direction: column; gap: 16px; }
+  .main-body::-webkit-scrollbar { width: 3px; }
+  .main-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+  /* PROJECT HUB CARD */
+  .hub-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+
+  .hub-header { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 10px; }
+  .hub-color-bar { width: 3px; height: 36px; border-radius: 2px; flex-shrink: 0; margin-top: 2px; }
+  .hub-header-text { flex: 1; }
+  .hub-name { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 3px; letter-spacing: -.01em; }
+  .hub-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+
+  /* CAPABILITIES */
+  .hub-capabilities { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
+  .cap-row { display: flex; align-items: center; gap: 7px; }
+  .cap-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+  .cap-label { font-size: 12px; color: var(--text-muted); }
+  .cap-add { font-size: 11px; color: var(--text-dim); background: none; border: none; cursor: pointer; font-family: var(--font); padding: 2px 0; text-align: left; }
+  .cap-add:hover { color: var(--text-muted); }
+
+  /* RESOURCES */
+  .hub-resources { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .res-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 100px; border: .5px solid var(--border-strong); background: var(--surface-2); color: var(--text-muted); cursor: pointer; text-decoration: none; transition: border-color .1s, color .1s; }
+  .res-chip:hover { color: var(--text); border-color: rgba(255,255,255,.22); }
+  .res-icon { font-size: 11px; }
+  .res-type { font-size: 10px; opacity: .55; margin-left: 1px; }
+  .res-add { font-size: 11px; color: var(--text-dim); background: none; border: none; cursor: pointer; font-family: var(--font); padding: 3px 6px; }
+  .res-add:hover { color: var(--text-muted); }
+
+  /* CHATS */
+  .hub-chats { display: flex; flex-direction: column; }
+  .chats-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px 6px; }
+  .chats-label { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); }
+  .chats-add { font-size: 11px; color: var(--text-dim); background: none; border: none; cursor: pointer; font-family: var(--font); }
+  .chats-add:hover { color: var(--text-muted); }
+
+  .chat-row { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-top: .5px solid var(--border); }
+  .chat-row:hover { background: var(--surface-2); }
+  .type-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 100px; flex-shrink: 0; white-space: nowrap; }
+  .t-design   { background: rgba(55,138,221,.15);  color: #6ab0f5; }
+  .t-research { background: rgba(29,158,117,.15);  color: #3dd4a0; }
+  .t-writing  { background: rgba(239,159,39,.15);  color: #f0b84a; }
+  .t-agent    { background: rgba(127,119,221,.15); color: #a89ff5; }
+
+  .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .chat-title { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-notes { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic; }
+
+  .status-btn { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; flex-shrink: 0; cursor: pointer; border: .5px solid transparent; font-family: var(--font); white-space: nowrap; }
+  .s-active  { background: rgba(55,138,221,.18); color: #6ab0f5; border-color: rgba(55,138,221,.3); }
+  .s-waiting { background: rgba(239,159,39,.18);  color: #f0b84a; border-color: rgba(239,159,39,.3); }
+  .s-done    { background: rgba(255,255,255,.05); color: var(--text-muted); border-color: var(--border); }
+
+  .chat-link { font-size: 13px; color: var(--text-dim); text-decoration: none; flex-shrink: 0; padding: 2px 4px; border-radius: 4px; }
+  .chat-link:hover { color: var(--text); background: var(--surface-3); }
+  .chat-link-none { opacity: .2; pointer-events: none; }
+
+  /* EMPTY */
+  .empty { text-align: center; padding: 48px 24px; color: var(--text-dim); font-size: 13px; }
+
+  /* MODAL */
+  .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 100; align-items: center; justify-content: center; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px; width: 440px; max-width: 92vw; display: flex; flex-direction: column; gap: 14px; }
+  .modal-title { font-size: 15px; font-weight: 600; color: var(--text); }
+  .modal-field { display: flex; flex-direction: column; gap: 5px; }
+  .modal-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .modal-input { background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; padding: 8px 11px; font-size: 13px; color: var(--text); font-family: var(--font); outline: none; width: 100%; }
+  .modal-input:focus { border-color: rgba(255,255,255,.22); }
+  .modal-input::placeholder { color: var(--text-dim); }
+  select.modal-input option { background: #222226; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+  /* TOAST */
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 16px; font-size: 13px; color: var(--text); z-index: 200; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* AGENT SESSIONS */
+  .agent-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+  .agent-card.waiting { border-color: rgba(239,159,39,.35); }
+  .agent-top { display: flex; align-items: center; gap: 9px; padding: 11px 14px 9px; }
+  .agent-syspill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: rgba(127,119,221,.15); color: #a89ff5; flex-shrink: 0; }
+  .agent-id { font-size: 12px; color: var(--text-muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agent-time { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+  .agent-prompt { padding: 0 14px 10px; font-size: 14px; color: var(--text); line-height: 1.45; }
+  .agent-detail { padding: 0 14px 11px; font-size: 12px; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; }
+  .agent-actions { display: flex; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--border); align-items: center; flex-wrap: wrap; }
+  .agent-reply { flex: 1; min-width: 180px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 10px; font-size: 13px; color: var(--text); font-family: var(--font); outline: none; }
+  .agent-reply:focus { border-color: rgba(255,255,255,.25); }
+  .agent-answered { padding: 9px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
+  .agent-answered b { color: var(--text); font-weight: 500; }
+  .agent-link { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 4px 9px; border: 1px solid var(--border-strong); border-radius: 6px; flex-shrink: 0; }
+  .agent-link:hover { color: var(--text); }
+  .agent-group-label { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); margin: 4px 0 8px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-title">Design Hub</div>
+  <div class="topbar-sep"></div>
+  <div class="topbar-sub" id="topbar-sub">Loading…</div>
+</div>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+    <div class="main-header" id="main-header" style="display:none">
+      <div class="main-dot" id="header-dot"></div>
+      <div class="main-title" id="header-title"></div>
+      <div class="main-actions">
+        <button class="btn btn-primary" id="btn-add-chat" onclick="openChatModal()">+ chat</button>
+        <button class="btn" onclick="openResourceModal()">+ resource</button>
+        <button class="btn" onclick="openCapabilityModal()">+ note</button>
+      </div>
+    </div>
+    <div class="main-body" id="main-body"><div class="empty">Select a project</div></div>
+  </div>
+</div>
+
+<!-- CHAT MODAL -->
+<div class="modal-bg" id="modal-chat">
+  <div class="modal">
+    <div class="modal-title">Add chat session</div>
+    <div class="modal-field"><div class="modal-label">Title</div><input class="modal-input" id="c-title" placeholder="e.g. Download page copy"></div>
+    <div class="modal-field"><div class="modal-label">What this chat does</div><input class="modal-input" id="c-notes" placeholder="e.g. Creates website copy for the platform detection page"></div>
+    <div class="modal-field"><div class="modal-label">Type</div>
+      <select class="modal-input" id="c-type">
+        <option value="design">Design</option>
+        <option value="research">Research</option>
+        <option value="writing">Writing</option>
+        <option value="agent">Agent</option>
+      </select>
+    </div>
+    <div class="modal-field"><div class="modal-label">Chat URL (paste once)</div><input class="modal-input" id="c-url" placeholder="https://claude.ai/chat/… or chatgpt.com/…"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitChat()">Add chat</button>
+    </div>
+  </div>
+</div>
+
+<!-- RESOURCE MODAL -->
+<div class="modal-bg" id="modal-resource">
+  <div class="modal">
+    <div class="modal-title">Add resource link</div>
+    <div class="modal-field"><div class="modal-label">Label</div><input class="modal-input" id="r-label" placeholder="e.g. design-hub repo"></div>
+    <div class="modal-field"><div class="modal-label">URL</div><input class="modal-input" id="r-url" placeholder="https://…"></div>
+    <div class="modal-field"><div class="modal-label">Type</div>
+      <select class="modal-input" id="r-type">
+        <option value="github">GitHub</option>
+        <option value="cloudflare">Cloudflare</option>
+        <option value="figma">Figma</option>
+        <option value="linear">Linear</option>
+        <option value="claude">Claude chat</option>
+        <option value="chatgpt">ChatGPT chat</option>
+        <option value="gemini">Gemini chat</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitResource()">Add resource</button>
+    </div>
+  </div>
+</div>
+
+<!-- CAPABILITY MODAL -->
+<div class="modal-bg" id="modal-cap">
+  <div class="modal">
+    <div class="modal-title">Add purpose note</div>
+    <div class="modal-field"><div class="modal-label">What does this project do?</div><input class="modal-input" id="cap-label" placeholder="e.g. Creates UX designs for mobile app flows"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitCapability()">Add note</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = 'https://design-hub-worker.d-bell.workers.dev/api';
+let activeProjectId = null;
+let sidebarData = [];
+
+const statusCycle = { active: 'waiting', waiting: 'done', done: 'active' };
+const statusLabel = { active: 'Active', waiting: 'Waiting', done: 'Done' };
+const statusClass = { active: 's-active', waiting: 's-waiting', done: 's-done' };
+
+const resIcon = { github: '⌥', cloudflare: '☁', figma: '✦', linear: '◈', claude: '◆', chatgpt: '◉', gemini: '✧', other: '→' };
+const resLabel = { github: 'github', cloudflare: 'cloudflare', figma: 'figma', linear: 'linear', claude: 'claude', chatgpt: 'chatgpt', gemini: 'gemini', other: 'link' };
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadSidebar() {
+  sidebarData = await api('/sidebar');
+  let total = 0;
+  let html = `<div class="sb-section">
+      <div class="sb-label">Systems</div>
+      <button class="sb-item" id="sb-agents" onclick="showAgents()">
+        <div class="sb-dot" style="background:#a89ff5"></div>
+        <span class="sb-name">Agent sessions</span>
+        <span class="sb-badge" id="agent-badge" style="display:none"></span>
+      </button>
+    </div>`;
+  for (const section of sidebarData) {
+    html += `<div class="sb-section"><div class="sb-label">${esc(section.name)}</div>`;
+    for (const p of section.projects) {
+      total += p.active_count || 0;
+      const active = activeProjectId === p.id ? 'active' : '';
+      html += `<button class="sb-item ${active}" onclick="selectProject('${p.id}','${esc(p.name)}','${esc(p.color)}')">
+        <div class="sb-dot" style="background:${p.color}"></div>
+        <span class="sb-name">${esc(p.name)}</span>
+        ${p.active_count > 0 ? `<span class="sb-badge">${p.active_count}</span>` : ''}
+      </button>`;
+    }
+    html += '</div>';
+  }
+  document.getElementById('sidebar').innerHTML = html;
+  document.getElementById('topbar-sub').textContent = total ? `${total} active` : 'Session board';
+}
+
+async function selectProject(id, name, color) {
+  activeProjectId = id;
+  document.getElementById('main-header').style.display = 'flex';
+  document.getElementById('header-dot').style.background = color;
+  document.getElementById('header-title').textContent = name;
+  document.getElementById('main-body').innerHTML = '<div class="empty" style="padding:32px;color:var(--text-dim)">Loading…</div>';
+  document.querySelectorAll('.sb-item').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('onclick').includes(`'${id}'`));
+  });
+  const p = await api(`/projects/${id}`);
+  renderProject(p);
+}
+
+function renderProject(p) {
+  const caps = p.capabilities || [];
+  const resources = p.resources || [];
+  const chats = p.chats || [];
+
+  const capsHtml = caps.map(c => `
+    <div class="cap-row">
+      <div class="cap-dot"></div>
+      <span class="cap-label">${esc(c.label)}</span>
+    </div>`).join('') + `<button class="cap-add" onclick="openCapabilityModal()">+ add note</button>`;
+
+  const resHtml = resources.map(r => `
+    <a class="res-chip" href="${esc(r.url)}" target="_blank" rel="noopener">
+      <span class="res-icon">${resIcon[r.type] || '→'}</span>
+      ${esc(r.label)}
+      <span class="res-type">${resLabel[r.type] || 'link'}</span>
+    </a>`).join('') + `<button class="res-add" onclick="openResourceModal()">+ add</button>`;
+
+  const chatsHtml = chats.length ? chats.map(c => `
+    <div class="chat-row">
+      <span class="type-pill t-${c.type}">${c.type}</span>
+      <div class="chat-info">
+        <div class="chat-title" title="${esc(c.title)}">${esc(c.title)}</div>
+        ${c.notes ? `<div class="chat-notes">${esc(c.notes)}</div>` : ''}
+      </div>
+      <button class="status-btn ${statusClass[c.status]}"
+        onclick="cycleStatus('${c.id}','${c.status}',this)">${statusLabel[c.status]}</button>
+      ${c.url
+        ? `<a class="chat-link" href="${esc(c.url)}" target="_blank" rel="noopener" title="Open chat">↗</a>`
+        : `<span class="chat-link chat-link-none">↗</span>`}
+    </div>`).join('')
+    : '<div style="padding:12px 16px;font-size:12px;color:var(--text-dim);font-style:italic">No chats yet — add one above</div>';
+
+  document.getElementById('main-body').innerHTML = `
+    <div class="hub-card">
+      <div class="hub-header">
+        <div class="hub-color-bar" style="background:${p.color}"></div>
+        <div class="hub-header-text">
+          <div class="hub-name">${esc(p.name)}</div>
+          ${p.description ? `<div class="hub-desc">${esc(p.description)}</div>` : ''}
+        </div>
+      </div>
+      <div class="hub-capabilities">${capsHtml}</div>
+      <div class="hub-resources">${resHtml}</div>
+      <div class="hub-chats">
+        <div class="chats-header">
+          <span class="chats-label">AI chats</span>
+          <button class="chats-add" onclick="openChatModal()">+ add chat</button>
+        </div>
+        ${chatsHtml}
+      </div>
+    </div>`;
+}
+
+async function cycleStatus(id, current, el) {
+  const next = statusCycle[current];
+  el.className = `status-btn ${statusClass[next]}`;
+  el.textContent = statusLabel[next];
+  el.onclick = () => cycleStatus(id, next, el);
+  await api(`/chats/${id}`, { method: 'PATCH', body: { status: next } });
+  toast(`Marked ${statusLabel[next].toLowerCase()}`);
+  loadSidebar();
+}
+
+function openChatModal() {
+  ['c-title','c-notes','c-url'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('modal-chat').classList.add('open');
+  setTimeout(() => document.getElementById('c-title').focus(), 50);
+}
+function openResourceModal() {
+  ['r-label','r-url'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('modal-resource').classList.add('open');
+  setTimeout(() => document.getElementById('r-label').focus(), 50);
+}
+function openCapabilityModal() {
+  document.getElementById('cap-label').value = '';
+  document.getElementById('modal-cap').classList.add('open');
+  setTimeout(() => document.getElementById('cap-label').focus(), 50);
+}
+function closeModals() {
+  document.querySelectorAll('.modal-bg').forEach(m => m.classList.remove('open'));
+}
+
+async function submitChat() {
+  const title = document.getElementById('c-title').value.trim();
+  if (!title) { document.getElementById('c-title').focus(); return; }
+  await api('/chats', { method: 'POST', body: {
+    project_id: activeProjectId,
+    title,
+    notes: document.getElementById('c-notes').value.trim() || null,
+    type: document.getElementById('c-type').value,
+    url: document.getElementById('c-url').value.trim() || null,
+  }});
+  closeModals();
+  toast('Chat added');
+  const p = await api(`/projects/${activeProjectId}`);
+  renderProject(p);
+  loadSidebar();
+}
+
+async function submitResource() {
+  const label = document.getElementById('r-label').value.trim();
+  const url = document.getElementById('r-url').value.trim();
+  if (!label || !url) return;
+  await api('/resources', { method: 'POST', body: {
+    project_id: activeProjectId,
+    label, url,
+    type: document.getElementById('r-type').value,
+  }});
+  closeModals();
+  toast('Resource added');
+  const p = await api(`/projects/${activeProjectId}`);
+  renderProject(p);
+}
+
+async function submitCapability() {
+  const label = document.getElementById('cap-label').value.trim();
+  if (!label) return;
+  await api('/capabilities', { method: 'POST', body: { project_id: activeProjectId, label }});
+  closeModals();
+  toast('Note added');
+  const p = await api(`/projects/${activeProjectId}`);
+  renderProject(p);
+}
+
+document.querySelectorAll('.modal-bg').forEach(m => m.addEventListener('click', e => { if (e.target === m) closeModals(); }));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(); });
+
+
+// ── AGENT SESSIONS ────────────────────────────────
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const then = new Date(ts.replace(' ', 'T') + 'Z');
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (isNaN(mins)) return '';
+  if (mins < 1) return 'now';
+  if (mins < 60) return mins + 'm';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h';
+  return Math.floor(hrs / 24) + 'd';
+}
+
+async function refreshAgentBadge() {
+  try {
+    const rows = await api('/agent/sessions');
+    const waiting = rows.filter(r => r.status === 'waiting').length;
+    const badge = document.getElementById('agent-badge');
+    if (badge) {
+      badge.style.display = waiting ? 'flex' : 'none';
+      badge.textContent = waiting;
+    }
+    return rows;
+  } catch { return []; }
+}
+
+async function showAgents() {
+  activeProjectId = null;
+  document.getElementById('main-header').style.display = 'flex';
+  document.getElementById('header-dot').style.background = '#a89ff5';
+  document.getElementById('header-title').textContent = 'Agent sessions';
+  document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
+  const btn = document.getElementById('sb-agents');
+  if (btn) btn.classList.add('active');
+  document.getElementById('main-body').innerHTML = '<div class="empty">Loading…</div>';
+
+  let rows = [];
+  try { rows = await api('/agent/sessions'); }
+  catch { document.getElementById('main-body').innerHTML = '<div class="empty">Could not load agent sessions.</div>'; return; }
+
+  if (!rows.length) {
+    document.getElementById('main-body').innerHTML =
+      '<div class="empty">No agent sessions yet.<br><span style="font-size:12px">They appear here once a system posts to /api/agent/session</span></div>';
+    return;
+  }
+
+  const waiting = rows.filter(r => r.status === 'waiting');
+  const other = rows.filter(r => r.status !== 'waiting');
+  let html = '';
+  if (waiting.length) html += '<div class="agent-group-label">Needs your decision</div>' + waiting.map(agentCard).join('');
+  if (other.length) html += '<div class="agent-group-label" style="margin-top:14px">Everything else</div>' + other.map(agentCard).join('');
+  document.getElementById('main-body').innerHTML = html;
+  refreshAgentBadge();
+}
+
+function agentCard(r) {
+  const isWaiting = r.status === 'waiting';
+  const safeId = esc(r.id);
+  const statusPill = { active:'s-active', waiting:'s-waiting', done:'s-done', error:'s-waiting' }[r.status] || 's-done';
+  const statusText = { active:'Running', waiting:'Waiting', done:'Done', error:'Error' }[r.status] || r.status;
+
+  return `<div class="agent-card ${isWaiting ? 'waiting' : ''}">
+    <div class="agent-top">
+      <span class="agent-syspill">${esc(r.system)}</span>
+      <span class="agent-id">${safeId}</span>
+      <span class="status-btn ${statusPill}" style="cursor:default">${statusText}</span>
+      <span class="agent-time">${timeAgo(r.updated_at)}</span>
+    </div>
+    ${r.prompt ? `<div class="agent-prompt">${esc(r.prompt)}</div>` : ''}
+    ${r.detail ? `<div class="agent-detail">${esc(r.detail)}</div>` : ''}
+    ${isWaiting ? `
+      <div class="agent-actions">
+        <input class="agent-reply" id="reply-${btoa(r.id).replace(/=/g,'')}" placeholder="Your decision…"
+          onkeydown="if(event.key==='Enter')respondAgent('${safeId}', this)">
+        <button class="btn btn-primary" onclick="respondAgent('${safeId}', this.previousElementSibling)">Send</button>
+        ${r.url ? `<a class="agent-link" href="${esc(r.url)}" target="_blank" rel="noopener">Open ↗</a>` : ''}
+      </div>` : ''}
+    ${r.response ? `<div class="agent-answered">Answered <b>${esc(r.response)}</b> · ${timeAgo(r.responded_at)} ago</div>` : ''}
+  </div>`;
+}
+
+async function respondAgent(id, inputEl) {
+  const value = (inputEl.value || '').trim();
+  if (!value) { inputEl.focus(); return; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/respond`, { method:'PATCH', body:{ response: value } });
+    toast('Response sent');
+    showAgents();
+  } catch { toast('Could not send response'); }
+}
+
+loadSidebar().then(refreshAgentBadge);
+</script>
+</body>
+</html>
