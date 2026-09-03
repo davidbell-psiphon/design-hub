@@ -1,13 +1,14 @@
 // Allowed origins - your Pages deployments
 const ALLOWED_ORIGINS = [
-  'https://design-hub-7y2.pages.dev',
-  'http://localhost:8788',
+    'https://design-hub-7y2.pages.dev',
+    'https://design-hub-git.pages.dev',
+    'http://localhost:8788',
 ];
 
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '';
-  // Allow any *.design-hub-7y2.pages.dev preview URL too
-  const allowed = ALLOWED_ORIGINS.includes(origin) || /^https:\/\/[a-z0-9]+\.design-hub-7y2\.pages\.dev$/.test(origin);
+  const allowed = ALLOWED_ORIGINS.includes(origin) ||
+   /^https:\/\/[a-z0-9]+\.design-hub-(7y2|git)\.pages\.dev$/.test(origin);
   return {
     'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Credentials': 'true',
