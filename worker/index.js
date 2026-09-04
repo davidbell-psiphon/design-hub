@@ -166,7 +166,7 @@ async function readLinear(env) {
       issues(
         first: 100
         filter: {
-          state: { type: { in: [backlog, unstarted] } }
+          state: { type: { in: ["backlog", "unstarted"] } }
         }
       ) {
         nodes {
