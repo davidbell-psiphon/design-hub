@@ -205,6 +205,7 @@ async function readLinear(env) {
 
   const nodes = (data.data && data.data.issues && data.data.issues.nodes) || [];
   let inserted = 0;
+  let updated = 0;
   let skipped = 0;
 
   for (const issue of nodes) {
@@ -216,20 +217,37 @@ async function readLinear(env) {
     const track = TEAM_TRACK[teamName] || null;
     const brand = TEAM_BRAND[teamName] || detectBrand(issue);
 
-    // Idempotency: skip if we already have a row for this issue.
+    const detail = (issue.description || '').slice(0, 300) || null;
+    const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
+
+    // Upsert rather than skip. Rows written before the Piece 4 columns existed
+    // have no linear_uuid, and without it the trigger button has nothing to
+    // apply a label to. Refreshing on every read also keeps linear_state
+    // current, which is what sorts a card into Queued vs Backlog.
+    //
+    // Only Linear-owned facts get overwritten. Anything the human or the agent
+    // owns — status, phase, prompt, response, triggered_at, figma_url — is left
+    // alone, and a manual brand/track reassignment survives because those two
+    // are only filled in when still null.
     const existing = await env.DB.prepare(
       `SELECT id FROM agent_sessions WHERE linear_id = ?`
     ).bind(issue.identifier).first();
-    if (existing) { skipped++; continue; }
-
-    const detail = (issue.description || '').slice(0, 300) || null;
-    const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
 
     await env.DB.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,
           linear_id, team, linear_uuid, linear_state, title)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         project      = COALESCE(agent_sessions.project, excluded.project),
+         track        = COALESCE(agent_sessions.track, excluded.track),
+         detail       = excluded.detail,
+         url          = excluded.url,
+         team         = excluded.team,
+         linear_uuid  = excluded.linear_uuid,
+         linear_state = excluded.linear_state,
+         title        = excluded.title,
+         updated_at   = datetime('now')`
     ).bind(
       'linear/' + issue.identifier,
       'design-ai',
@@ -246,10 +264,10 @@ async function readLinear(env) {
       linearState || null,
       issue.title
     ).run();
-    inserted++;
+    if (existing) { updated++; } else { inserted++; }
   }
 
-  return { inserted, skipped };
+  return { inserted, updated, skipped };
 }
 
 // ─── LINEAR LABEL TRIGGER ──────────────────────────
