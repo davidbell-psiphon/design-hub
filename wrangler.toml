@@ -8,4 +8,4 @@ database_name = "design-hub"
 database_id = "b785c9c7-15fb-4234-bf62-58f038b90775"
 
 [triggers]
-crons = ["0 13 * * 1-5"]
+crons = ["0 13 * * 3,5"]

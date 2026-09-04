@@ -122,15 +122,43 @@ export default {
 };
 
 // ─── LINEAR READER ─────────────────────────────────
-// Queries Linear for issues labelled "needs-design" assigned to / subscribed
-// by Dave Bell whose state TYPE is "unstarted" (Linear's type for Todo).
+// Pulls every issue assigned to Dave Bell, across all teams, sitting in
+// Backlog or Todo. No label filter — gathering is not triggering.
 // Writes one agent_sessions row per new issue with status = 'waiting'.
 // Idempotent: skips issues whose linear_id already has a row.
-const TEAM_PROJECT = {
+//
+// Team names that map to exactly one brand go straight into TEAM_BRAND.
+// 'Websites' (and any other unmapped team) covers multiple brands, so its
+// brand is guessed from the issue's Linear project name, then labels, then
+// title — e.g. project "Conduit Website" -> brand "conduit". A guess of
+// null just means the card needs a manual brand assignment in the Hub.
+const TEAM_BRAND = {
+  'Conduit App': 'conduit',
+  'Ryve App': 'ryve',
+  'Psiphon App': 'psiphon',
+  'Forge': 'forge',
+};
+const TEAM_TRACK = {
   'Conduit App': 'app',
   'Ryve App': 'app',
+  'Psiphon App': 'app',
+  'Forge': 'website',
   'Websites': 'website',
 };
+const BRAND_KEYWORDS = ['conduit', 'ryve', 'psiphon', 'forge'];
+
+function detectBrand(issue) {
+  const haystacks = [
+    issue.project && issue.project.name,
+    ...((issue.labels && issue.labels.nodes) || []).map(l => l.name),
+    issue.title,
+  ].filter(Boolean).map(s => s.toLowerCase());
+  for (const text of haystacks) {
+    const hit = BRAND_KEYWORDS.find(brand => text.includes(brand));
+    if (hit) return hit;
+  }
+  return null;
+}
 
 async function readLinear(env) {
   const query = `
@@ -138,8 +166,7 @@ async function readLinear(env) {
       issues(
         first: 100
         filter: {
-          labels: { name: { eq: "needs-design" } }
-          state: { type: { eq: "unstarted" } }
+          state: { type: { in: [backlog, unstarted] } }
         }
       ) {
         nodes {
@@ -149,7 +176,8 @@ async function readLinear(env) {
           description
           url
           assignee { name }
-          subscribers { nodes { name } }
+          project { name }
+          labels { nodes { name } }
           team { name }
         }
       }
@@ -179,16 +207,13 @@ async function readLinear(env) {
   let skipped = 0;
 
   for (const issue of nodes) {
-    // Dave Bell must be assignee OR subscriber.
+    // Assigned to Dave Bell only — not subscribers. Matches "assigned to me".
     const assignee = issue.assignee && issue.assignee.name;
-    const subs = (issue.subscribers && issue.subscribers.nodes ? issue.subscribers.nodes : []).map(s => s.name);
-    const isDave = assignee === 'Dave Bell' || subs.includes('Dave Bell');
-    if (!isDave) { skipped++; continue; }
+    if (assignee !== 'Dave Bell') { skipped++; continue; }
 
-    // Map team -> project type; skip any team not in the map.
     const teamName = issue.team && issue.team.name;
-    const project = TEAM_PROJECT[teamName];
-    if (!project) { skipped++; continue; }
+    const track = TEAM_TRACK[teamName] || null;
+    const brand = TEAM_BRAND[teamName] || detectBrand(issue);
 
     // Idempotency: skip if we already have a row for this issue.
     const existing = await env.DB.prepare(
@@ -201,12 +226,13 @@ async function readLinear(env) {
 
     await env.DB.prepare(
       `INSERT INTO agent_sessions
-         (id, system, project, phase, status, prompt, detail, url, linear_id, team)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, system, project, track, phase, status, prompt, detail, url, linear_id, team)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       'linear/' + issue.identifier,
       'design-ai',
-      project,
+      brand,
+      track,
       'research',
       'waiting',
       'Run design research on ' + issue.identifier + '?',
