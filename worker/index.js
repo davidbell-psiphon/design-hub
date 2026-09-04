@@ -301,5 +301,32 @@ async function route(request, env) {
       return json({ id, ...body }, 201);
     }
 
+    // POST /api/trigger-design-ai
+    if (url.pathname === '/api/trigger-design-ai' && request.method === 'POST') {
+          const { scope, mode, dry_run } = await request.json();
+        
+          const res = await fetch(
+                  'https://api.github.com/repos/davidbell-psiphon/design-ai/actions/workflows/design-ai.yml/dispatches',
+              {
+                        method: 'POST',
+                        headers: {
+                                    'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+                                    'Accept': 'application/vnd.github+json',
+                                    'User-Agent': 'design-hub',
+                                    'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                                    ref: 'main',
+                                    inputs: { scope, mode, dry_run: String(dry_run) },
+                        }),
+              }
+                );
+        
+          return new Response(
+                  JSON.stringify({ ok: res.status === 204, status: res.status }),
+              { headers: { ...corsHeaders(request), 'Content-Type': 'application/json' } }
+                );
+    }
+    
     return err('not found', 404);
 }
