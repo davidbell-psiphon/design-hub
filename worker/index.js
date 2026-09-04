@@ -116,7 +116,110 @@ export default {
       return err('Server error: ' + (e && e.message ? e.message : String(e)), 500);
     }
   },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(readLinear(env));
+  },
 };
+
+// ─── LINEAR READER ─────────────────────────────────
+// Queries Linear for issues labelled "needs-design" assigned to / subscribed
+// by Dave Bell whose state TYPE is "unstarted" (Linear's type for Todo).
+// Writes one agent_sessions row per new issue with status = 'waiting'.
+// Idempotent: skips issues whose linear_id already has a row.
+const TEAM_PROJECT = {
+  'Conduit App': 'app',
+  'Ryve App': 'app',
+  'Websites': 'website',
+};
+
+async function readLinear(env) {
+  const query = `
+    query DesignReaderIssues {
+      issues(
+        first: 100
+        filter: {
+          labels: { name: { eq: "needs-design" } }
+          state: { type: { eq: "unstarted" } }
+        }
+      ) {
+        nodes {
+          id
+          identifier
+          title
+          description
+          url
+          assignee { name }
+          subscribers { nodes { name } }
+          team { name }
+        }
+      }
+    }`;
+
+  const res = await fetch('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: {
+      // Linear uses a raw API key with NO "Bearer" prefix.
+      'Authorization': env.LINEAR_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  if (!res.ok) {
+    return { error: 'Linear request failed', status: res.status };
+  }
+
+  const data = await res.json();
+  if (data.errors) {
+    return { error: 'Linear GraphQL error', detail: data.errors };
+  }
+
+  const nodes = (data.data && data.data.issues && data.data.issues.nodes) || [];
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const issue of nodes) {
+    // Dave Bell must be assignee OR subscriber.
+    const assignee = issue.assignee && issue.assignee.name;
+    const subs = (issue.subscribers && issue.subscribers.nodes ? issue.subscribers.nodes : []).map(s => s.name);
+    const isDave = assignee === 'Dave Bell' || subs.includes('Dave Bell');
+    if (!isDave) { skipped++; continue; }
+
+    // Map team -> project type; skip any team not in the map.
+    const teamName = issue.team && issue.team.name;
+    const project = TEAM_PROJECT[teamName];
+    if (!project) { skipped++; continue; }
+
+    // Idempotency: skip if we already have a row for this issue.
+    const existing = await env.DB.prepare(
+      `SELECT id FROM agent_sessions WHERE linear_id = ?`
+    ).bind(issue.identifier).first();
+    if (existing) { skipped++; continue; }
+
+    const detailDesc = (issue.description || '').slice(0, 300);
+    const detail = issue.title + (detailDesc ? '\n\n' + detailDesc : '');
+
+    await env.DB.prepare(
+      `INSERT INTO agent_sessions
+         (id, system, project, phase, status, prompt, detail, url, linear_id, team)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      'linear/' + issue.identifier,
+      'design-ai',
+      project,
+      'research',
+      'waiting',
+      'Run design research on ' + issue.identifier + '?',
+      detail,
+      issue.url,
+      issue.identifier,
+      teamName
+    ).run();
+    inserted++;
+  }
+
+  return { inserted, skipped };
+}
 
 async function route(request, env) {
     const url = new URL(request.url);
@@ -328,5 +431,19 @@ async function route(request, env) {
                 );
     }
     
-    return err('not found', 404);
+      // POST /api/read-linear — run the Linear Reader on demand
+  if (method === 'POST' && path === '/api/read-linear') {
+    const result = await readLinear(env);
+    return json(result);
+  }
+
+  // GET /api/sessions — waiting agent_sessions rows, newest first
+  if (method === 'GET' && path === '/api/sessions') {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM agent_sessions WHERE status = 'waiting' ORDER BY created_at DESC`
+    ).all();
+    return json(results || []);
+  }
+
+  return err('not found', 404);
 }
