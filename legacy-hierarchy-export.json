@@ -1,0 +1,496 @@
+{
+  "_meta": {
+    "exported_at": "2026-09-04T23:02:21.866711+00:00",
+    "source": "design-hub D1 (database_id b785c9c7-15fb-4234-bf62-58f038b90775)",
+    "why": "Design Hub is becoming a pure agent board. These tables backed the chat/project organizing layer being removed from the UI. Every row is preserved here; the tables themselves are left in D1 untouched.",
+    "method": "Table-level dump: SELECT * FROM <table> via wrangler d1 execute design-hub --remote. Complete regardless of foreign-key validity.",
+    "orphan_check": {
+      "capabilities": 0,
+      "resources": 0,
+      "chats": 0,
+      "projects": 0
+    },
+    "notes": [
+      "`brands` is a v1 leftover from 2026-08-15 with its own colours, superseded by the `projects` rows in the 'brands' section. No Worker route reads it. Dumped here because it exists in D1 and holds the original brand colours.",
+      "Excluded: auth, sessions, rate_limits (credentials — deliberately not in the repo), agent_sessions (live board data being kept), _cf_KV (internal)."
+    ],
+    "counts": {
+      "sections": 3,
+      "projects": 9,
+      "capabilities": 25,
+      "resources": 3,
+      "chats": 12,
+      "brands": 6
+    },
+    "ddl": {
+      "brands": "CREATE TABLE brands (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  color TEXT NOT NULL,\n  sort_order INTEGER DEFAULT 0,\n  created_at TEXT DEFAULT (datetime('now'))\n)",
+      "sections": "CREATE TABLE sections (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  sort_order INTEGER DEFAULT 0\n)",
+      "projects": "CREATE TABLE projects (\n  id TEXT PRIMARY KEY,\n  section_id TEXT NOT NULL REFERENCES sections(id),\n  name TEXT NOT NULL,\n  color TEXT NOT NULL DEFAULT '#888780',\n  description TEXT,\n  sort_order INTEGER DEFAULT 0,\n  created_at TEXT DEFAULT (datetime('now'))\n)",
+      "capabilities": "CREATE TABLE capabilities (\n  id TEXT PRIMARY KEY,\n  project_id TEXT NOT NULL REFERENCES projects(id),\n  label TEXT NOT NULL,\n  sort_order INTEGER DEFAULT 0\n)",
+      "resources": "CREATE TABLE resources (\n  id TEXT PRIMARY KEY,\n  project_id TEXT NOT NULL REFERENCES projects(id),\n  label TEXT NOT NULL,\n  url TEXT NOT NULL,\n  type TEXT NOT NULL CHECK(type IN ('github','cloudflare','figma','linear','claude','chatgpt','gemini','other')),\n  sort_order INTEGER DEFAULT 0\n)",
+      "chats": "CREATE TABLE chats (\n  id TEXT PRIMARY KEY,\n  project_id TEXT NOT NULL REFERENCES projects(id),\n  title TEXT NOT NULL,\n  notes TEXT,\n  type TEXT NOT NULL CHECK(type IN ('design','research','writing','agent')),\n  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','waiting','done')),\n  url TEXT,\n  created_at TEXT DEFAULT (datetime('now')),\n  updated_at TEXT DEFAULT (datetime('now'))\n)"
+    }
+  },
+  "sections": [
+    {
+      "id": "design-projects",
+      "name": "Design projects",
+      "sort_order": 1
+    },
+    {
+      "id": "brands",
+      "name": "Brands",
+      "sort_order": 2
+    },
+    {
+      "id": "cross-brand",
+      "name": "Cross-brand",
+      "sort_order": 3
+    }
+  ],
+  "projects": [
+    {
+      "id": "design-ai",
+      "section_id": "design-projects",
+      "name": "Design AI",
+      "color": "#7F77DD",
+      "description": "AI infrastructure and session management for all design work",
+      "sort_order": 1,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "design-hub",
+      "section_id": "design-projects",
+      "name": "Design Hub",
+      "color": "#378ADD",
+      "description": "Central dashboard for organizing projects, chats, and resources",
+      "sort_order": 2,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "design-portal",
+      "section_id": "design-projects",
+      "name": "Design Portal",
+      "color": "#1D9E75",
+      "description": "Research and resource site for design best practices",
+      "sort_order": 3,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "design-magazine",
+      "section_id": "design-projects",
+      "name": "Design Magazine",
+      "color": "#D4537E",
+      "description": "Publication and content platform for design insights",
+      "sort_order": 4,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "conduit",
+      "section_id": "brands",
+      "name": "Conduit",
+      "color": "#7E67A4",
+      "description": "VPN and network connectivity product",
+      "sort_order": 1,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "ryve",
+      "section_id": "brands",
+      "name": "Ryve",
+      "color": "#206CCC",
+      "description": "Fitness and wellness mobile app",
+      "sort_order": 2,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "psiphon",
+      "section_id": "brands",
+      "name": "Psiphon VPN",
+      "color": "#D54028",
+      "description": "Open source censorship circumvention tool",
+      "sort_order": 3,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "forge",
+      "section_id": "brands",
+      "name": "Forge",
+      "color": "#BE5135",
+      "description": "Developer tooling and infrastructure",
+      "sort_order": 4,
+      "created_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "q3-goals",
+      "section_id": "cross-brand",
+      "name": "Q3 Goals",
+      "color": "#7F77DD",
+      "description": "Quarterly goals spanning all brands",
+      "sort_order": 1,
+      "created_at": "2026-09-02 05:32:40"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "cap-ai-1",
+      "project_id": "design-ai",
+      "label": "Organizes all AI sessions by brand and project",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-ai-2",
+      "project_id": "design-ai",
+      "label": "Generates weekly schedule from Linear tasks",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-ai-3",
+      "project_id": "design-ai",
+      "label": "Monitors always-on background agents",
+      "sort_order": 3
+    },
+    {
+      "id": "cap-hub-1",
+      "project_id": "design-hub",
+      "label": "Central command dashboard for second screen",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-hub-2",
+      "project_id": "design-hub",
+      "label": "Links every AI chat to its project and brand",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-hub-3",
+      "project_id": "design-hub",
+      "label": "Tracks status of all active work sessions",
+      "sort_order": 3
+    },
+    {
+      "id": "cap-portal-1",
+      "project_id": "design-portal",
+      "label": "Researches and gathers design news automatically",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-portal-2",
+      "project_id": "design-portal",
+      "label": "Maintains a library of design resources and best practices",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-portal-3",
+      "project_id": "design-portal",
+      "label": "Self-improving site — agent codes and deploys updates",
+      "sort_order": 3
+    },
+    {
+      "id": "cap-mag-1",
+      "project_id": "design-magazine",
+      "label": "Publishes design articles and case studies",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-mag-2",
+      "project_id": "design-magazine",
+      "label": "Curates industry trends and insights",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-conduit-1",
+      "project_id": "conduit",
+      "label": "Creates website content and landing pages",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-conduit-2",
+      "project_id": "conduit",
+      "label": "Designs UI for download and hosted product pages",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-conduit-3",
+      "project_id": "conduit",
+      "label": "Researches platform-specific UX patterns",
+      "sort_order": 3
+    },
+    {
+      "id": "cap-ryve-1",
+      "project_id": "ryve",
+      "label": "Creates UX designs for mobile app flows",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-ryve-2",
+      "project_id": "ryve",
+      "label": "Produces App Store assets and launch materials",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-ryve-3",
+      "project_id": "ryve",
+      "label": "Reviews and documents SDK and release changes",
+      "sort_order": 3
+    },
+    {
+      "id": "cap-psi-1",
+      "project_id": "psiphon",
+      "label": "Designs brand system and identity materials",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-psi-2",
+      "project_id": "psiphon",
+      "label": "Researches regional messaging and ICP strategy",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-psi-3",
+      "project_id": "psiphon",
+      "label": "Builds and redesigns the public-facing website",
+      "sort_order": 3
+    },
+    {
+      "id": "cap-forge-1",
+      "project_id": "forge",
+      "label": "Redesigns homepage and core marketing pages",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-forge-2",
+      "project_id": "forge",
+      "label": "Creates competitive research and design briefs",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-q3-1",
+      "project_id": "q3-goals",
+      "label": "Tracks quarterly goals across all brands",
+      "sort_order": 1
+    },
+    {
+      "id": "cap-q3-2",
+      "project_id": "q3-goals",
+      "label": "Balances goal progress against sprint tasks",
+      "sort_order": 2
+    },
+    {
+      "id": "cap-q3-3",
+      "project_id": "q3-goals",
+      "label": "Surfaces at-risk goals in daily brief",
+      "sort_order": 3
+    }
+  ],
+  "resources": [
+    {
+      "id": "res-hub-1",
+      "project_id": "design-hub",
+      "label": "design-hub",
+      "url": "https://design-hub-7y2.pages.dev",
+      "type": "cloudflare",
+      "sort_order": 1
+    },
+    {
+      "id": "res-hub-2",
+      "project_id": "design-hub",
+      "label": "This chat",
+      "url": "https://claude.ai",
+      "type": "claude",
+      "sort_order": 2
+    },
+    {
+      "id": "res-portal-1",
+      "project_id": "design-portal",
+      "label": "Design Portal",
+      "url": "https://design-portal-2t2.pages.dev/",
+      "type": "cloudflare",
+      "sort_order": 1
+    }
+  ],
+  "chats": [
+    {
+      "id": "c-hub-1",
+      "project_id": "design-hub",
+      "title": "Session board UI",
+      "notes": "Brand → project → chat hierarchy, status toggles, resource links",
+      "type": "design",
+      "status": "active",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c-hub-2",
+      "project_id": "design-hub",
+      "title": "Architecture planning",
+      "notes": "Cloudflare D1 schema, Worker API endpoints, data model design",
+      "type": "agent",
+      "status": "done",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c-ai-1",
+      "project_id": "design-ai",
+      "title": "DAD system design",
+      "notes": "Multiplexer concept, three-layer architecture, UX flows",
+      "type": "design",
+      "status": "active",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c-ai-2",
+      "project_id": "design-ai",
+      "title": "Schedule intelligence",
+      "notes": "Linear API connection, weekly plan generation, daily brief",
+      "type": "research",
+      "status": "waiting",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c1",
+      "project_id": "conduit",
+      "title": "Download page — platform detection",
+      "notes": "Layout and device frame designs for 4 platform states",
+      "type": "design",
+      "status": "active",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c2",
+      "project_id": "conduit",
+      "title": "Hosted Conduit graphic",
+      "notes": "Concept brief — flagged waiting since Aug 4",
+      "type": "design",
+      "status": "waiting",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c6",
+      "project_id": "ryve",
+      "title": "App Store launch video",
+      "notes": "Storyboard MAR-760, scene direction MAR-761",
+      "type": "design",
+      "status": "active",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c8",
+      "project_id": "ryve",
+      "title": "Expo SDK upgrade review",
+      "notes": "SDK changelog audit, Linear issues MAR-764",
+      "type": "research",
+      "status": "active",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c11",
+      "project_id": "psiphon",
+      "title": "Brand booklet wireframe",
+      "notes": "20-spread layout structure, 12 chapter outline",
+      "type": "design",
+      "status": "waiting",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c12",
+      "project_id": "psiphon",
+      "title": "Website redesign",
+      "notes": "ICP definitions WEB-13, UVP options WEB-16",
+      "type": "research",
+      "status": "done",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c14",
+      "project_id": "forge",
+      "title": "Homepage redesign",
+      "notes": "Full redesign brief and Figma AI prompt complete",
+      "type": "writing",
+      "status": "done",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    },
+    {
+      "id": "c15",
+      "project_id": "q3-goals",
+      "title": "Social AI pipeline",
+      "notes": "108-template Figma system, agent architecture",
+      "type": "agent",
+      "status": "active",
+      "url": null,
+      "created_at": "2026-09-02 05:32:40",
+      "updated_at": "2026-09-02 05:32:40"
+    }
+  ],
+  "brands": [
+    {
+      "id": "conduit",
+      "name": "Conduit",
+      "color": "#378ADD",
+      "sort_order": 1,
+      "created_at": "2026-08-15 18:50:17"
+    },
+    {
+      "id": "ryve",
+      "name": "Ryve",
+      "color": "#D4537E",
+      "sort_order": 2,
+      "created_at": "2026-08-15 18:50:17"
+    },
+    {
+      "id": "psiphon",
+      "name": "Psiphon VPN",
+      "color": "#1D9E75",
+      "sort_order": 3,
+      "created_at": "2026-08-15 18:50:17"
+    },
+    {
+      "id": "forge",
+      "name": "Forge",
+      "color": "#BA7517",
+      "sort_order": 4,
+      "created_at": "2026-08-15 18:50:17"
+    },
+    {
+      "id": "goals",
+      "name": "Q3 Goals",
+      "color": "#7F77DD",
+      "sort_order": 5,
+      "created_at": "2026-08-15 18:50:17"
+    },
+    {
+      "id": "portal",
+      "name": "Design Portal",
+      "color": "#888780",
+      "sort_order": 6,
+      "created_at": "2026-08-15 18:50:17"
+    }
+  ],
+  "_orphans": {
+    "capabilities": [],
+    "resources": [],
+    "chats": [],
+    "projects": []
+  }
+}
