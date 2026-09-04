@@ -533,5 +533,40 @@ async function respondAgent(id, inputEl) {
 
 loadSidebar().then(refreshAgentBadge);
 </script>
+<div>
+  <select id="scope">
+    <option value="all">All teams</option>
+    <option value="Conduit App">Conduit App</option>
+    <option value="Ryve App">Ryve App</option>
+    <option value="Websites">Websites</option>
+  </select>
+  <select id="mode">
+    <option value="qa">QA</option>
+    <option value="research">Research</option>
+    <option value="copy">Copy</option>
+  </select>
+  <label><input type="checkbox" id="dry" checked> Dry run</label>
+  <button id="run">Run Design AI</button>
+  <span id="status"></span>
+</div>
+
+<script>
+document.getElementById('run').onclick = async () => {
+  const s = document.getElementById('status');
+  s.textContent = 'Starting…';
+  const res = await fetch('https://design-hub-worker.d-bell.workers.dev/api/trigger-design-ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: document.getElementById('scope').value,
+      mode: document.getElementById('mode').value,
+      dry_run: document.getElementById('dry').checked,
+    }),
+  });
+  const data = await res.json();
+  s.textContent = data.ok ? 'Started — check Actions in ~2 min' : 'Failed: ' + data.status;
+};
+</script>
+
 </body>
 </html>
