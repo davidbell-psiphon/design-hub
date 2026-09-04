@@ -149,6 +149,37 @@
   .agent-link { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 4px 9px; border: 1px solid var(--border-strong); border-radius: 6px; flex-shrink: 0; }
   .agent-link:hover { color: var(--text); }
   .agent-group-label { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); margin: 4px 0 8px; }
+
+  /* SIDE PANEL — persistent, all in-flight work across every brand */
+  .side-panel { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: 12px 0; }
+  .side-panel::-webkit-scrollbar { width: 3px; }
+  .side-panel::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+  .sp-title { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); padding: 0 12px 8px; }
+  .sp-group-label { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); padding: 10px 12px 4px; }
+  .sp-item { display: flex; align-items: center; gap: 7px; padding: 5px 12px; cursor: pointer; border: none; background: none; width: 100%; text-align: left; font-family: var(--font); }
+  .sp-item:hover { background: var(--surface-2); }
+  .sp-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .sp-text { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sp-empty { padding: 8px 12px; font-size: 11px; color: var(--text-dim); font-style: italic; }
+
+  /* SESSION BUCKETS — In flight / Queued / Backlog per brand */
+  .buckets { display: flex; flex-direction: column; gap: 18px; margin-bottom: 18px; }
+  .bucket { display: flex; flex-direction: column; gap: 8px; }
+  .bucket-label { font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); }
+  .session-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); border-left-width: 3px; border-left-style: solid; }
+  .session-card.needs-decision { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
+  .session-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
+  .session-id { font-size: 11px; font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-muted); }
+  .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
+  .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
+  .stage-pill.needs-decision { background: rgba(239,159,39,.18); color: #f0b84a; }
+  .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+  .session-detail { padding: 0 12px 8px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+  .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .session-links { display: flex; gap: 6px; margin-left: auto; }
+  .no-research-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+  .reassign-select { font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 4px; font-family: var(--font); }
+  .empty-bucket { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 0; }
 </style>
 </head>
 <body>
@@ -173,6 +204,7 @@
     </div>
     <div class="main-body" id="main-body"><div class="empty">Select a project</div></div>
   </div>
+  <div class="side-panel" id="side-panel"></div>
 </div>
 
 <!-- CHAT MODAL -->
@@ -269,17 +301,22 @@ function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+const BRAND_IDS = new Set();
+let brandsById = {};
+
 async function loadSidebar() {
   sidebarData = await api('/sidebar');
+  BRAND_IDS.clear();
+  brandsById = {};
+  const brandsSection = sidebarData.find(s => s.id === 'brands');
+  if (brandsSection) {
+    for (const p of brandsSection.projects) {
+      BRAND_IDS.add(p.id);
+      brandsById[p.id] = p;
+    }
+  }
   let total = 0;
-  let html = `<div class="sb-section">
-      <div class="sb-label">Systems</div>
-      <button class="sb-item" id="sb-agents" onclick="showAgents()">
-        <div class="sb-dot" style="background:#a89ff5"></div>
-        <span class="sb-name">Agent sessions</span>
-        <span class="sb-badge" id="agent-badge" style="display:none"></span>
-      </button>
-    </div>`;
+  let html = '';
   for (const section of sidebarData) {
     html += `<div class="sb-section"><div class="sb-label">${esc(section.name)}</div>`;
     for (const p of section.projects) {
@@ -307,10 +344,16 @@ async function selectProject(id, name, color) {
     el.classList.toggle('active', el.getAttribute('onclick').includes(`'${id}'`));
   });
   const p = await api(`/projects/${id}`);
-  renderProject(p);
+  let sessions = [];
+  if (BRAND_IDS.has(id)) {
+    try { sessions = (await api('/agent/sessions')).filter(r => r.project === id); }
+    catch { sessions = []; }
+  }
+  renderProject(p, sessions);
 }
 
-function renderProject(p) {
+function renderProject(p, sessions) {
+  const bucketsHtml = BRAND_IDS.has(p.id) ? renderBuckets(sessions || []) : '';
   const caps = p.capabilities || [];
   const resources = p.resources || [];
   const chats = p.chats || [];
@@ -344,6 +387,7 @@ function renderProject(p) {
     : '<div style="padding:12px 16px;font-size:12px;color:var(--text-dim);font-style:italic">No chats yet — add one above</div>';
 
   document.getElementById('main-body').innerHTML = `
+    ${bucketsHtml}
     <div class="hub-card">
       <div class="hub-header">
         <div class="hub-color-bar" style="background:${p.color}"></div>
@@ -362,6 +406,16 @@ function renderProject(p) {
         ${chatsHtml}
       </div>
     </div>`;
+}
+
+async function refreshCurrentProject() {
+  const p = await api(`/projects/${activeProjectId}`);
+  let sessions = [];
+  if (BRAND_IDS.has(activeProjectId)) {
+    try { sessions = (await api('/agent/sessions')).filter(r => r.project === activeProjectId); }
+    catch { sessions = []; }
+  }
+  renderProject(p, sessions);
 }
 
 async function cycleStatus(id, current, el) {
@@ -405,8 +459,7 @@ async function submitChat() {
   }});
   closeModals();
   toast('Chat added');
-  const p = await api(`/projects/${activeProjectId}`);
-  renderProject(p);
+  refreshCurrentProject();
   loadSidebar();
 }
 
@@ -421,8 +474,7 @@ async function submitResource() {
   }});
   closeModals();
   toast('Resource added');
-  const p = await api(`/projects/${activeProjectId}`);
-  renderProject(p);
+  refreshCurrentProject();
 }
 
 async function submitCapability() {
@@ -431,8 +483,7 @@ async function submitCapability() {
   await api('/capabilities', { method: 'POST', body: { project_id: activeProjectId, label }});
   closeModals();
   toast('Note added');
-  const p = await api(`/projects/${activeProjectId}`);
-  renderProject(p);
+  refreshCurrentProject();
 }
 
 document.querySelectorAll('.modal-bg').forEach(m => m.addEventListener('click', e => { if (e.target === m) closeModals(); }));
@@ -440,6 +491,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(
 
 
 // ── AGENT SESSIONS ────────────────────────────────
+// Generic across systems — the Hub only knows sessions, states, projects,
+// prompts. It never interprets what "design-ai:go" or "QA" mean.
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -453,72 +506,119 @@ function timeAgo(ts) {
   return Math.floor(hrs / 24) + 'd';
 }
 
-async function refreshAgentBadge() {
-  try {
-    const rows = await api('/agent/sessions');
-    const waiting = rows.filter(r => r.status === 'waiting').length;
-    const badge = document.getElementById('agent-badge');
-    if (badge) {
-      badge.style.display = waiting ? 'flex' : 'none';
-      badge.textContent = waiting;
-    }
-    return rows;
-  } catch { return []; }
+// Which of the three per-brand buckets a session belongs in.
+function bucketOf(r) {
+  if (r.triggered_at) return 'inflight';
+  if (r.linear_state === 'backlog') return 'backlog';
+  return 'queued'; // unstarted (Todo), or no Linear state at all
 }
 
-async function showAgents() {
-  activeProjectId = null;
-  document.getElementById('main-header').style.display = 'flex';
-  document.getElementById('header-dot').style.background = '#a89ff5';
-  document.getElementById('header-title').textContent = 'Agent sessions';
-  document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
-  const btn = document.getElementById('sb-agents');
-  if (btn) btn.classList.add('active');
-  document.getElementById('main-body').innerHTML = '<div class="empty">Loading…</div>';
+// Research / Design / QA / Waiting on me
+function stageLabel(r) {
+  if (r.status === 'waiting') return 'Waiting on me';
+  if (!r.phase) return '—';
+  if (r.phase.toLowerCase() === 'qa') return 'QA';
+  return r.phase.charAt(0).toUpperCase() + r.phase.slice(1);
+}
 
-  let rows = [];
-  try { rows = await api('/agent/sessions'); }
-  catch { document.getElementById('main-body').innerHTML = '<div class="empty">Could not load agent sessions.</div>'; return; }
+function linearUrl(r) {
+  return r.url || null;
+}
 
-  if (!rows.length) {
-    document.getElementById('main-body').innerHTML =
-      '<div class="empty">No agent sessions yet.<br><span style="font-size:12px">They appear here once a system posts to /api/agent/session</span></div>';
-    return;
+function sessionCard(r) {
+  const needsDecision = r.status === 'waiting';
+  const bucket = bucketOf(r);
+  const color = (brandsById[r.project] || {}).color || '#888780';
+  const safeId = esc(r.id);
+  const idLabel = esc(r.linear_id || r.id);
+
+  const linksHtml = `<div class="session-links">
+    ${linearUrl(r) ? `<a class="agent-link" href="${esc(linearUrl(r))}" target="_blank" rel="noopener">Linear ↗</a>` : ''}
+    ${r.figma_url ? `<a class="agent-link" href="${esc(r.figma_url)}" target="_blank" rel="noopener">Figma ↗</a>` : ''}
+  </div>`;
+
+  const reassignHtml = `<select class="reassign-select" onchange="reassignSession('${safeId}', this.value)">
+    <option value="">Move to…</option>
+    ${Object.values(brandsById).filter(b => b.id !== r.project).map(b =>
+      `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}
+  </select>`;
+
+  let actionsHtml;
+  if (bucket !== 'inflight') {
+    // Not yet triggered — the only job of this card is the trigger button.
+    actionsHtml = `
+      <label class="no-research-toggle">
+        <input type="checkbox" id="nr-${btoa(safeId).replace(/=/g,'')}"> no-research
+      </label>
+      <button class="btn btn-primary" onclick="triggerSession('${safeId}', 'go', this)">Trigger</button>
+      ${reassignHtml}
+      ${linksHtml}`;
+  } else if (needsDecision && r.prompt) {
+    // In flight and waiting on a human decision — free-text reply, plus
+    // the QA button for "my Figma work is done".
+    actionsHtml = `
+      <input class="agent-reply" id="reply-${btoa(safeId).replace(/=/g,'')}" placeholder="Your decision…"
+        onkeydown="if(event.key==='Enter')respondAgent('${safeId}', this)">
+      <button class="btn btn-primary" onclick="respondAgent('${safeId}', this.previousElementSibling)">Send</button>
+      <button class="btn" onclick="triggerSession('${safeId}', 'qa', this)">Run QA</button>
+      ${reassignHtml}
+      ${linksHtml}`;
+  } else {
+    actionsHtml = `${reassignHtml}${linksHtml}`;
   }
 
-  const waiting = rows.filter(r => r.status === 'waiting');
-  const other = rows.filter(r => r.status !== 'waiting');
-  let html = '';
-  if (waiting.length) html += '<div class="agent-group-label">Needs your decision</div>' + waiting.map(agentCard).join('');
-  if (other.length) html += '<div class="agent-group-label" style="margin-top:14px">Everything else</div>' + other.map(agentCard).join('');
-  document.getElementById('main-body').innerHTML = html;
-  refreshAgentBadge();
+  return `<div class="session-card ${needsDecision ? 'needs-decision' : ''}" style="border-left-color:${color}">
+    <div class="session-top">
+      <span class="session-id">${idLabel}</span>
+      <span class="session-title">${esc(r.title || r.detail || '')}</span>
+      <span class="stage-pill ${needsDecision ? 'needs-decision' : ''}">${esc(stageLabel(r))}</span>
+      ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
+    </div>
+    ${r.prompt ? `<div class="session-detail">${esc(r.prompt)}</div>` : (r.detail ? `<div class="session-detail">${esc(r.detail)}</div>` : '')}
+    ${r.response ? `<div class="session-detail">Answered <b>${esc(r.response)}</b> · ${timeAgo(r.responded_at)} ago</div>` : ''}
+    <div class="session-actions">${actionsHtml}</div>
+  </div>`;
 }
 
-function agentCard(r) {
-  const isWaiting = r.status === 'waiting';
-  const safeId = esc(r.id);
-  const statusPill = { active:'s-active', waiting:'s-waiting', done:'s-done', error:'s-waiting' }[r.status] || 's-done';
-  const statusText = { active:'Running', waiting:'Waiting', done:'Done', error:'Error' }[r.status] || r.status;
+function renderBuckets(sessions) {
+  const inFlight = sessions.filter(r => bucketOf(r) === 'inflight');
+  const queued   = sessions.filter(r => bucketOf(r) === 'queued');
+  const backlog  = sessions.filter(r => bucketOf(r) === 'backlog');
 
-  return `<div class="agent-card ${isWaiting ? 'waiting' : ''}">
-    <div class="agent-top">
-      <span class="agent-syspill">${esc(r.system)}</span>
-      <span class="agent-id">${safeId}</span>
-      <span class="status-btn ${statusPill}" style="cursor:default">${statusText}</span>
-      <span class="agent-time">${timeAgo(r.updated_at)}</span>
-    </div>
-    ${r.prompt ? `<div class="agent-prompt">${esc(r.prompt)}</div>` : ''}
-    ${r.detail ? `<div class="agent-detail">${esc(r.detail)}</div>` : ''}
-    ${isWaiting ? `
-      <div class="agent-actions">
-        <input class="agent-reply" id="reply-${btoa(r.id).replace(/=/g,'')}" placeholder="Your decision…"
-          onkeydown="if(event.key==='Enter')respondAgent('${safeId}', this)">
-        <button class="btn btn-primary" onclick="respondAgent('${safeId}', this.previousElementSibling)">Send</button>
-        ${r.url ? `<a class="agent-link" href="${esc(r.url)}" target="_blank" rel="noopener">Open ↗</a>` : ''}
-      </div>` : ''}
-    ${r.response ? `<div class="agent-answered">Answered <b>${esc(r.response)}</b> · ${timeAgo(r.responded_at)} ago</div>` : ''}
+  const section = (label, rows) => `
+    <div class="bucket">
+      <div class="bucket-label">${label}</div>
+      ${rows.length ? rows.map(sessionCard).join('') : '<div class="empty-bucket">Nothing here</div>'}
+    </div>`;
+
+  return `<div class="buckets">
+    ${section('In flight', inFlight)}
+    ${section('Queued', queued)}
+    ${section('Backlog', backlog)}
   </div>`;
+}
+
+async function triggerSession(id, action, btn) {
+  const nrBox = document.getElementById(`nr-${btoa(id).replace(/=/g,'')}`);
+  const noResearch = !!(nrBox && nrBox.checked);
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/trigger`, { method: 'POST', body: { action, noResearch } });
+    toast(action === 'go' ? 'Triggered' : 'QA requested');
+    refreshCurrentProject();
+    loadSidePanel();
+  } catch { toast('Trigger failed'); if (btn) { btn.disabled = false; btn.textContent = action === 'go' ? 'Trigger' : 'Run QA'; } }
+}
+
+async function reassignSession(id, project) {
+  if (!project) return;
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/reassign`, { method: 'PATCH', body: { project } });
+    toast('Moved to ' + (brandsById[project] || {}).name);
+    refreshCurrentProject();
+    loadSidePanel();
+    loadSidebar();
+  } catch { toast('Could not move'); }
 }
 
 async function respondAgent(id, inputEl) {
@@ -527,45 +627,45 @@ async function respondAgent(id, inputEl) {
   try {
     await api(`/agent/session/${encodeURIComponent(id)}/respond`, { method:'PATCH', body:{ response: value } });
     toast('Response sent');
-    showAgents();
+    refreshCurrentProject();
+    loadSidePanel();
   } catch { toast('Could not send response'); }
 }
 
-loadSidebar().then(refreshAgentBadge);
-</script>
-<div>
-  <select id="scope">
-    <option value="all">All teams</option>
-    <option value="Conduit App">Conduit App</option>
-    <option value="Ryve App">Ryve App</option>
-    <option value="Websites">Websites</option>
-  </select>
-  <select id="mode">
-    <option value="qa">QA</option>
-    <option value="research">Research</option>
-    <option value="copy">Copy</option>
-  </select>
-  <label><input type="checkbox" id="dry" checked> Dry run</label>
-  <button id="run">Run Design AI</button>
-  <span id="status"></span>
-</div>
+// ── SIDE PANEL — persistent, all in-flight work across every brand ──
 
-<script>
-document.getElementById('run').onclick = async () => {
-  const s = document.getElementById('status');
-  s.textContent = 'Starting…';
-  const res = await fetch('https://design-hub-worker.d-bell.workers.dev/api/trigger-design-ai', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      scope: document.getElementById('scope').value,
-      mode: document.getElementById('mode').value,
-      dry_run: document.getElementById('dry').checked,
-    }),
-  });
-  const data = await res.json();
-  s.textContent = data.ok ? 'Started — check Actions in ~2 min' : 'Failed: ' + data.status;
-};
+async function loadSidePanel() {
+  let rows = [];
+  try { rows = await api('/agent/sessions'); } catch { rows = []; }
+  const inFlight = rows.filter(r => r.triggered_at && ['active','waiting','error'].includes(r.status));
+
+  const item = r => {
+    const color = (brandsById[r.project] || {}).color || '#888780';
+    return `<button class="sp-item" onclick="jumpToBrand('${esc(r.project)}')">
+      <span class="sp-dot" style="background:${color}"></span>
+      <span class="sp-text">${esc(r.linear_id || r.id)} — ${esc(stageLabel(r))}</span>
+    </button>`;
+  };
+
+  const app = inFlight.filter(r => r.track === 'app');
+  const web = inFlight.filter(r => r.track !== 'app');
+
+  document.getElementById('side-panel').innerHTML = `
+    <div class="sp-title">In flight</div>
+    <div class="sp-group-label">App</div>
+    ${app.length ? app.map(item).join('') : '<div class="sp-empty">Nothing running</div>'}
+    <div class="sp-group-label">Website</div>
+    ${web.length ? web.map(item).join('') : '<div class="sp-empty">Nothing running</div>'}
+  `;
+}
+
+function jumpToBrand(id) {
+  const b = brandsById[id];
+  if (!b) return;
+  selectProject(id, b.name, b.color);
+}
+
+loadSidebar().then(loadSidePanel);
 </script>
 
 </body>

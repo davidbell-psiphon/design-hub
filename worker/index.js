@@ -179,6 +179,7 @@ async function readLinear(env) {
           project { name }
           labels { nodes { name } }
           team { name }
+          state { type }
         }
       }
     }`;
@@ -221,13 +222,14 @@ async function readLinear(env) {
     ).bind(issue.identifier).first();
     if (existing) { skipped++; continue; }
 
-    const detailDesc = (issue.description || '').slice(0, 300);
-    const detail = issue.title + (detailDesc ? '\n\n' + detailDesc : '');
+    const detail = (issue.description || '').slice(0, 300) || null;
+    const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
 
     await env.DB.prepare(
       `INSERT INTO agent_sessions
-         (id, system, project, track, phase, status, prompt, detail, url, linear_id, team)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, system, project, track, phase, status, prompt, detail, url,
+          linear_id, team, linear_uuid, linear_state, title)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       'linear/' + issue.identifier,
       'design-ai',
@@ -239,12 +241,48 @@ async function readLinear(env) {
       detail,
       issue.url,
       issue.identifier,
-      teamName
+      teamName,
+      issue.id,
+      linearState || null,
+      issue.title
     ).run();
     inserted++;
   }
 
   return { inserted, skipped };
+}
+
+// ─── LINEAR LABEL TRIGGER ──────────────────────────
+// The Hub's entire "start work" mechanism: apply a label to the Linear
+// issue. The agent on the other end watches for that label; the Hub never
+// starts work itself.
+async function linearGraphQL(env, query, variables) {
+  const res = await fetch('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: {
+      'Authorization': env.LINEAR_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.errors) return { error: data.errors || `HTTP ${res.status}` };
+  return { data: data.data };
+}
+
+async function getLabelId(env, name) {
+  const q = `query($name: String!) { issueLabels(filter: { name: { eq: $name } }) { nodes { id } } }`;
+  const r = await linearGraphQL(env, q, { name });
+  if (r.error) return null;
+  const nodes = r.data && r.data.issueLabels && r.data.issueLabels.nodes;
+  return nodes && nodes[0] ? nodes[0].id : null;
+}
+
+async function addLabelToIssue(env, issueId, labelId) {
+  const m = `mutation($issueId: String!, $labelId: String!) {
+    issueAddLabel(id: $issueId, labelId: $labelId) { success }
+  }`;
+  return linearGraphQL(env, m, { issueId, labelId });
 }
 
 async function route(request, env) {
@@ -268,30 +306,77 @@ async function route(request, env) {
       if (!b.session_id || !b.system) return err('session_id and system required');
       const status = b.status || 'active';
       if (!['active','waiting','done','error'].includes(status)) return err('invalid status');
+      // Accepts both the original field names (project/phase/url) and the
+      // integration-surface names (brand/stage/figma_url) — same columns.
       await env.DB.prepare(
-        `INSERT INTO agent_sessions (id, system, project, phase, status, prompt, detail, url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO agent_sessions (id, system, project, track, phase, status, prompt, detail, url, figma_url, title)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           system=excluded.system, project=excluded.project, phase=excluded.phase,
-           status=excluded.status, prompt=excluded.prompt, detail=excluded.detail,
-           url=excluded.url, updated_at=datetime('now')`
+           system=excluded.system, project=excluded.project, track=excluded.track,
+           phase=excluded.phase, status=excluded.status, prompt=excluded.prompt,
+           detail=excluded.detail, url=excluded.url, figma_url=excluded.figma_url,
+           title=excluded.title, updated_at=datetime('now')`
       ).bind(
-        b.session_id, b.system, b.project || null, b.phase || null,
-        status, b.prompt || null, b.detail || null, b.url || null
+        b.session_id, b.system, b.project || b.brand || null, b.track || null,
+        b.phase || b.stage || null, status, b.prompt || null, b.detail || null,
+        b.url || null, b.figma_url || null, b.title || null
       ).run();
       return json({ ok: true, session_id: b.session_id, status });
     }
 
     // GET /api/agent/session/:id — agent polls for the human's response
-    if (method === 'GET' && path.startsWith('/api/agent/session/')) {
+    if (method === 'GET' && path.startsWith('/api/agent/session/') && !path.includes('/trigger') && !path.includes('/reassign') && !path.includes('/respond')) {
       const id = decodeURIComponent(path.slice('/api/agent/session/'.length));
       if (!id) return err('session_id required');
-      const row = await env.DB.prepare(
-        `SELECT id, system, project, phase, status, prompt, response, responded_at, updated_at
-         FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
+      const row = await env.DB.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(id).first();
       if (!row) return err('not found', 404);
       return json(row);
+    }
+
+    // POST /api/agent/session/:id/trigger — human presses a card button.
+    // Applies a Linear label; that label is the entire trigger mechanism.
+    if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
+      const id = decodeURIComponent(path.split('/')[4]);
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      if (!['go', 'qa'].includes(b.action)) return err('action must be "go" or "qa"');
+      const row = await env.DB.prepare(`SELECT linear_uuid FROM agent_sessions WHERE id = ?`).bind(id).first();
+      if (!row) return err('not found', 404);
+      if (!row.linear_uuid) return err('session has no linked Linear issue');
+
+      const labelNames = b.action === 'go'
+        ? ['design-ai:go', ...(b.noResearch ? ['no-research'] : [])]
+        : ['design-ai:qa'];
+
+      for (const name of labelNames) {
+        const labelId = await getLabelId(env, name);
+        if (!labelId) return err(`Linear label "${name}" not found`, 502);
+        const res = await addLabelToIssue(env, row.linear_uuid, labelId);
+        if (res.error) return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+      }
+
+      await env.DB.prepare(
+        `UPDATE agent_sessions
+         SET triggered_at = COALESCE(triggered_at, datetime('now')), updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(id).run();
+      return json({ ok: true, labels: labelNames });
+    }
+
+    // PATCH /api/agent/session/:id/reassign — manual brand/track correction
+    // for when the Linear Reader's auto-detected brand is wrong.
+    if (method === 'PATCH' && path.match(/^\/api\/agent\/session\/[^/]+\/reassign$/)) {
+      const id = decodeURIComponent(path.split('/')[4]);
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      const fields = []; const values = [];
+      if (b.project !== undefined) { fields.push('project = ?'); values.push(b.project); }
+      if (b.track !== undefined) { fields.push('track = ?'); values.push(b.track); }
+      if (!fields.length) return err('project or track required');
+      fields.push("updated_at = datetime('now')");
+      values.push(id);
+      await env.DB.prepare(`UPDATE agent_sessions SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
+      return json({ ok: true });
     }
 
     // GET /api/agent/sessions — dashboard list, newest first
@@ -430,34 +515,7 @@ async function route(request, env) {
       return json({ id, ...body }, 201);
     }
 
-    // POST /api/trigger-design-ai
-    if (url.pathname === '/api/trigger-design-ai' && request.method === 'POST') {
-          const { scope, mode, dry_run } = await request.json();
-        
-          const res = await fetch(
-                  'https://api.github.com/repos/davidbell-psiphon/design-ai/actions/workflows/design-ai.yml/dispatches',
-              {
-                        method: 'POST',
-                        headers: {
-                                    'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
-                                    'Accept': 'application/vnd.github+json',
-                                    'User-Agent': 'design-hub',
-                                    'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                                    ref: 'main',
-                                    inputs: { scope, mode, dry_run: String(dry_run) },
-                        }),
-              }
-                );
-        
-          return new Response(
-                  JSON.stringify({ ok: res.status === 204, status: res.status }),
-              { headers: { ...corsHeaders(request), 'Content-Type': 'application/json' } }
-                );
-    }
-    
-      // POST /api/read-linear — run the Linear Reader on demand
+    // POST /api/read-linear — run the Linear Reader on demand
   if (method === 'POST' && path === '/api/read-linear') {
     const result = await readLinear(env);
     return json(result);
