@@ -122,9 +122,48 @@ The `system` field on a session is what keeps this generic: a social-media agent
 posts the same shape with `"system": "social-ai"` and the Hub groups it without
 knowing anything about social media.
 
-**Known gap:** only `POST /api/agent/session` checks a secret. The trigger,
-reassign and respond routes are unauthenticated — anyone with the Worker URL can
-fire a Linear label. Worth closing.
+## How requests reach the API
+
+The board never calls the Worker directly. It calls `/api/*` on its own origin,
+and a Pages Function ([`functions/api/[[path]].js`](./functions/api/%5B%5Bpath%5D%5D.js))
+forwards to the Worker.
+
+```
+browser ──/api/*──> Pages (Access) ──> Pages Function ──> Worker
+```
+
+That exists because of Cloudflare Access. A cross-origin call from the board to
+`workers.dev` cannot be authenticated by Access from a browser: the
+`CF-Authorization` cookie is set per hostname, the browser never sends cookies
+on a CORS preflight so Access blocks the `OPTIONS`, and cross-origin the cookie
+is a third-party cookie that Safari drops. Same-origin has none of those
+problems.
+
+The Function forwards the caller's `Cf-Access-Jwt-Assertion` header so the
+Worker verifies the human itself rather than trusting the proxy. It does not
+forward browser cookies, and never sends `X-Agent-Secret`.
+
+## Authentication
+
+| Caller | How it authenticates |
+|---|---|
+| The board (browser) | Access session, JWT forwarded by the Pages Function |
+| The design-ai agent | `X-Agent-Secret`, plus an Access service token once Access is on |
+| The Wednesday/Friday cron | Neither — scheduled runs never traverse the HTTP edge |
+
+The Worker verifies the Access JWT itself: signature against
+`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`, then `aud`, `iss`
+and `exp`. Written against WebCrypto rather than `jose` because this repo has
+no package.json and no build step.
+
+**Enforcement is off until `ACCESS_AUD` and `ACCESS_TEAM` are set** as Worker
+secrets. Unset, every route behaves as it always has — which is how this could
+ship before the dashboard configuration existed. Setting both turns the gate on
+for every route except `POST /api/agent/session`, which checks its own secret.
+See DEPLOY.md for the remaining dashboard steps.
+
+Until then the previously-noted gap stands: trigger, reassign and respond are
+reachable by anyone with the Worker URL.
 
 ---
 
@@ -132,6 +171,7 @@ fire a Linear label. Worth closing.
 
 ```
 frontend/index.html            the board — one file, no build step
+functions/api/[[path]].js      Pages Function: same-origin /api/* -> Worker
 worker/index.js                the API and the Linear reader
 schema.sql                     original v2 schema (includes the removed layer)
 agent-schema.sql               agent_sessions

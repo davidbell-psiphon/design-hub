@@ -64,12 +64,69 @@ mutation an id from the wrong team.
 
 ---
 
+## Zero Trust Access
+
+The code side is done and deployed; what remains is dashboard work. The board
+already calls `/api/*` on its own origin through a Pages Function, so there is
+no cross-origin call left for Access to break.
+
+**Order matters.** Do these in sequence, testing between each.
+
+1. **Access application for the board.** Zero Trust → Access → Applications →
+   Add an application → Self-hosted → domain `design-hub-7y2.pages.dev`. Use the
+   same identity rule as the Design Portal, but a separate application: its own
+   AUD, its own session, its own audit log. Copy the **AUD tag** from the
+   application's Overview tab.
+2. **Preview deployments.** Workers & Pages → design-hub → Settings → General →
+   **Enable access policy**. This is a *separate* switch: protecting the
+   production hostname leaves `<hash>.design-hub-7y2.pages.dev` public, and
+   every deploy makes one.
+3. **Service token for the agent.** Zero Trust → Access → Service Auth →
+   Service Tokens → Create. The secret is shown once. Add a second policy on the
+   Hub application with action **Service Auth** selecting that token — with any
+   other action Access will prompt for an IdP login and the agent will receive
+   an HTML page instead of JSON.
+4. **Turn on Worker enforcement:**
+   ```bash
+   npx wrangler secret put ACCESS_AUD    # AUD tag from step 1
+   npx wrangler secret put ACCESS_TEAM   # team name, without .cloudflareaccess.com
+   ```
+   Until both are set the Worker runs open. Setting them closes every route
+   except `POST /api/agent/session`, which authenticates with `X-Agent-Secret`.
+5. **Protect the Worker itself.** Workers & Pages → design-hub-worker → Access →
+   Protect this Worker behind Access. Then give the proxy a service token so it
+   can still get through:
+   ```bash
+   npx wrangler pages secret put CF_ACCESS_CLIENT_ID --project-name=design-hub
+   npx wrangler pages secret put CF_ACCESS_CLIENT_SECRET --project-name=design-hub
+   ```
+   The Function returns a clear "Blocked by Access" JSON error if these are
+   missing, rather than letting the board fail on an HTML parse error.
+
+**What breaks if you skip a step:** the agent stops writing at its next run
+while the cron reader keeps filling the board (different code path, no HTTP
+edge), which reads like an agent bug and is not one. Create the service token
+in the same sitting as step 5.
+
+Do not test in a private window — Access's own docs warn that `CF-Authorization`
+gets dropped as a third-party cookie and you will chase a phantom. A bad policy
+cannot lock you out permanently: `dash.cloudflare.com` is not behind your
+Access policy.
+
 ## Checking a deploy
 
 ```bash
-curl https://design-hub-worker.d-bell.workers.dev/api/brands
-curl https://design-hub-worker.d-bell.workers.dev/api/agent/sessions
+curl https://design-hub-7y2.pages.dev/api/brands          # through the proxy
+curl https://design-hub-7y2.pages.dev/api/agent/sessions
 curl -X POST https://design-hub-worker.d-bell.workers.dev/api/read-linear
+```
+
+Once Access is on, these need service-token headers:
+
+```bash
+curl https://design-hub-7y2.pages.dev/api/brands \
+  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
 ```
 
 `/api/brands` should return the four brands with their colours. The reader

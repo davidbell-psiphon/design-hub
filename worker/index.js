@@ -224,6 +224,104 @@ async function addLabelToIssue(env, issueId, labelId) {
   return linearGraphQL(env, m, { issueId, labelId });
 }
 
+// ─── ACCESS IDENTITY ──────────────────────────────────
+// Verifies the JWT Cloudflare Access injects as Cf-Access-Jwt-Assertion, which
+// the Pages proxy forwards on. Hand-rolled against WebCrypto rather than
+// pulling in `jose`: this repo has no package.json and no build step, and a
+// dependency here would mean an npm install on every deploy.
+//
+// Enforcement is off until ACCESS_AUD and ACCESS_TEAM are set as secrets, so
+// this ships without breaking anything; setting them is what turns it on.
+
+let _keys = null;
+let _keysAt = 0;
+
+async function accessKeys(env) {
+  const now = Date.now();
+  if (_keys && now - _keysAt < 3600_000) return _keys;
+  const res = await fetch(`https://${env.ACCESS_TEAM}.cloudflareaccess.com/cdn-cgi/access/certs`);
+  if (!res.ok) return null;
+  const body = await res.json();
+  _keys = body.keys || null;
+  _keysAt = now;
+  return _keys;
+}
+
+function b64url(str) {
+  const pad = str.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(pad + '='.repeat((4 - pad.length % 4) % 4));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function b64urlJson(str) {
+  return JSON.parse(new TextDecoder().decode(b64url(str)));
+}
+
+// Returns the token payload, or null. Null means "not a valid human request",
+// never "probably fine".
+async function accessIdentity(request, env) {
+  const token = request.headers.get('Cf-Access-Jwt-Assertion') ||
+    (request.headers.get('Cookie') || '').match(/CF_Authorization=([^;]+)/)?.[1];
+  if (!token) return null;
+
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+
+  let header, payload;
+  try {
+    header = b64urlJson(parts[0]);
+    payload = b64urlJson(parts[1]);
+  } catch { return null; }
+  if (header.alg !== 'RS256') return null;
+
+  const keys = await accessKeys(env);
+  const jwk = keys && keys.find(k => k.kid === header.kid);
+  if (!jwk) return null;
+
+  let ok = false;
+  try {
+    const key = await crypto.subtle.importKey(
+      'jwk', jwk,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false, ['verify']
+    );
+    ok = await crypto.subtle.verify(
+      'RSASSA-PKCS1-v1_5', key, b64url(parts[2]),
+      new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+    );
+  } catch { return null; }
+  if (!ok) return null;
+
+  // Signature is good; the claims still have to be ours and current.
+  const now = Math.floor(Date.now() / 1000);
+  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!aud.includes(env.ACCESS_AUD)) return null;
+  if (payload.iss !== `https://${env.ACCESS_TEAM}.cloudflareaccess.com`) return null;
+  if (!payload.exp || payload.exp < now) return null;
+  if (payload.nbf && payload.nbf > now + 60) return null;
+
+  return payload;
+}
+
+// Gate for everything the board calls. Returns an error Response to send, or
+// null to continue.
+async function requireHuman(request, env) {
+  // Not configured yet — run open, exactly as before Access existed.
+  if (!env.ACCESS_AUD || !env.ACCESS_TEAM) return null;
+
+  if (await accessIdentity(request, env)) return null;
+
+  // The agent reaches these routes with the shared secret rather than a
+  // browser session; a service token on the Access app covers the hop before
+  // this one.
+  const secret = request.headers.get('X-Agent-Secret');
+  if (env.AGENT_SECRET && secret && secret === env.AGENT_SECRET) return null;
+
+  return err('Forbidden — no valid Access identity', 403);
+}
+
 async function route(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -231,6 +329,14 @@ async function route(request, env) {
 
     if (method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
+    }
+
+    // POST /api/agent/session checks X-Agent-Secret itself; everything else
+    // needs an Access identity once Access is configured. This is what closes
+    // the trigger, reassign and respond routes.
+    if (!(method === 'POST' && path === '/api/agent/session')) {
+      const denied = await requireHuman(request, env);
+      if (denied) return denied;
     }
 
     // ─── AGENT SESSION API ─────────────────────────────

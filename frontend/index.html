@@ -193,7 +193,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const API = 'https://design-hub-worker.d-bell.workers.dev/api';
+// Same-origin. A Pages Function at /api/* proxies to the Worker — see
+// functions/api/[[path]].js. Calling the Worker directly would be a
+// cross-origin request, which Access cannot authenticate from a browser.
+const API = '/api';
 
 // Every brand gets a section on the board whether or not it has work today —
 // an empty CONDUIT is information, not clutter.
