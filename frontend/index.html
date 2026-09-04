@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- deploy test 2 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -18,6 +17,7 @@
     --text-dim: #444442;
     --radius: 8px;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -28,11 +28,12 @@
   .topbar-title { font-size: 13px; font-weight: 600; color: var(--text); }
   .topbar-sep { width: 1px; height: 16px; background: var(--border-strong); }
   .topbar-sub { font-size: 12px; color: var(--text-muted); }
+  .topbar-actions { margin-left: auto; display: flex; gap: 8px; }
 
   /* LAYOUT */
   .layout { display: flex; flex: 1; overflow: hidden; }
 
-  /* SIDEBAR */
+  /* SIDEBAR — jump-to only. Brand buckets live on the board itself. */
   .sidebar { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; overflow-y: auto; }
   .sidebar::-webkit-scrollbar { width: 3px; }
   .sidebar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
@@ -44,111 +45,52 @@
   .sb-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .sb-name { flex: 1; }
   .sb-badge { font-size: 10px; font-weight: 600; min-width: 16px; height: 15px; border-radius: 8px; background: var(--surface-3); color: var(--text-muted); display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+  .sb-badge.waiting { background: rgba(239,159,39,.2); color: #f0b84a; }
 
-  /* MAIN */
+  /* BOARD */
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-  .main-header { padding: 14px 18px 13px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-  .main-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-  .main-title { font-size: 16px; font-weight: 600; color: var(--text); letter-spacing: -.02em; }
-  .main-actions { margin-left: auto; display: flex; gap: 8px; }
+  .board { flex: 1; overflow-y: auto; padding: 18px 20px 60px; display: flex; flex-direction: column; gap: 30px; scroll-behavior: smooth; }
+  .board::-webkit-scrollbar { width: 3px; }
+  .board::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
   .btn { font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-strong); background: none; color: var(--text-muted); cursor: pointer; font-family: var(--font); transition: background .1s, color .1s; }
   .btn:hover { background: var(--surface-2); color: var(--text); }
+  .btn:disabled { opacity: .5; cursor: default; }
   .btn-primary { background: var(--surface-2); color: var(--text); }
-  .main-body { flex: 1; overflow-y: auto; padding: 16px 18px 40px; display: flex; flex-direction: column; gap: 16px; }
-  .main-body::-webkit-scrollbar { width: 3px; }
-  .main-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
 
-  /* PROJECT HUB CARD */
-  .hub-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  /* BRAND SECTION — the primary structure of the board */
+  .brand-section { display: flex; flex-direction: column; gap: 14px; scroll-margin-top: 12px; }
+  .brand-header { display: flex; align-items: center; gap: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--border); }
+  .brand-bar { width: 4px; height: 20px; border-radius: 2px; background: var(--brand); flex-shrink: 0; }
+  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text); }
+  .brand-meta { margin-left: auto; font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
+  .brand-waiting { color: #f0b84a; font-weight: 600; }
 
-  .hub-header { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 10px; }
-  .hub-color-bar { width: 3px; height: 36px; border-radius: 2px; flex-shrink: 0; margin-top: 2px; }
-  .hub-header-text { flex: 1; }
-  .hub-name { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 3px; letter-spacing: -.01em; }
-  .hub-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+  /* BUCKETS — In flight / Queued / Backlog, in that order, within each brand */
+  .buckets { display: flex; flex-direction: column; gap: 16px; }
+  .bucket { display: flex; flex-direction: column; gap: 8px; }
+  .bucket-label { font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); }
 
-  /* CAPABILITIES */
-  .hub-capabilities { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
-  .cap-row { display: flex; align-items: center; gap: 7px; }
-  .cap-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
-  .cap-label { font-size: 12px; color: var(--text-muted); }
-  .cap-add { font-size: 11px; color: var(--text-dim); background: none; border: none; cursor: pointer; font-family: var(--font); padding: 2px 0; text-align: left; }
-  .cap-add:hover { color: var(--text-muted); }
-
-  /* RESOURCES */
-  .hub-resources { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .res-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 100px; border: .5px solid var(--border-strong); background: var(--surface-2); color: var(--text-muted); cursor: pointer; text-decoration: none; transition: border-color .1s, color .1s; }
-  .res-chip:hover { color: var(--text); border-color: rgba(255,255,255,.22); }
-  .res-icon { font-size: 11px; }
-  .res-type { font-size: 10px; opacity: .55; margin-left: 1px; }
-  .res-add { font-size: 11px; color: var(--text-dim); background: none; border: none; cursor: pointer; font-family: var(--font); padding: 3px 6px; }
-  .res-add:hover { color: var(--text-muted); }
-
-  /* CHATS */
-  .hub-chats { display: flex; flex-direction: column; }
-  .chats-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px 6px; }
-  .chats-label { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); }
-  .chats-add { font-size: 11px; color: var(--text-dim); background: none; border: none; cursor: pointer; font-family: var(--font); }
-  .chats-add:hover { color: var(--text-muted); }
-
-  .chat-row { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-top: .5px solid var(--border); }
-  .chat-row:hover { background: var(--surface-2); }
-  .type-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 100px; flex-shrink: 0; white-space: nowrap; }
-  .t-design   { background: rgba(55,138,221,.15);  color: #6ab0f5; }
-  .t-research { background: rgba(29,158,117,.15);  color: #3dd4a0; }
-  .t-writing  { background: rgba(239,159,39,.15);  color: #f0b84a; }
-  .t-agent    { background: rgba(127,119,221,.15); color: #a89ff5; }
-
-  .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .chat-title { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .chat-notes { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic; }
-
-  .status-btn { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; flex-shrink: 0; cursor: pointer; border: .5px solid transparent; font-family: var(--font); white-space: nowrap; }
-  .s-active  { background: rgba(55,138,221,.18); color: #6ab0f5; border-color: rgba(55,138,221,.3); }
-  .s-waiting { background: rgba(239,159,39,.18);  color: #f0b84a; border-color: rgba(239,159,39,.3); }
-  .s-done    { background: rgba(255,255,255,.05); color: var(--text-muted); border-color: var(--border); }
-
-  .chat-link { font-size: 13px; color: var(--text-dim); text-decoration: none; flex-shrink: 0; padding: 2px 4px; border-radius: 4px; }
-  .chat-link:hover { color: var(--text); background: var(--surface-3); }
-  .chat-link-none { opacity: .2; pointer-events: none; }
-
-  /* EMPTY */
-  .empty { text-align: center; padding: 48px 24px; color: var(--text-dim); font-size: 13px; }
-
-  /* MODAL */
-  .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 100; align-items: center; justify-content: center; }
-  .modal-bg.open { display: flex; }
-  .modal { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px; width: 440px; max-width: 92vw; display: flex; flex-direction: column; gap: 14px; }
-  .modal-title { font-size: 15px; font-weight: 600; color: var(--text); }
-  .modal-field { display: flex; flex-direction: column; gap: 5px; }
-  .modal-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
-  .modal-input { background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; padding: 8px 11px; font-size: 13px; color: var(--text); font-family: var(--font); outline: none; width: 100%; }
-  .modal-input:focus { border-color: rgba(255,255,255,.22); }
-  .modal-input::placeholder { color: var(--text-dim); }
-  select.modal-input option { background: #222226; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
-
-  /* TOAST */
-  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 16px; font-size: 13px; color: var(--text); z-index: 200; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
-  .toast.show { opacity: 1; transform: translateY(0); }
-
-  /* AGENT SESSIONS */
-  .agent-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
-  .agent-card.waiting { border-color: rgba(239,159,39,.35); }
-  .agent-top { display: flex; align-items: center; gap: 9px; padding: 11px 14px 9px; }
-  .agent-syspill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: rgba(127,119,221,.15); color: #a89ff5; flex-shrink: 0; }
-  .agent-id { font-size: 12px; color: var(--text-muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .agent-time { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
-  .agent-prompt { padding: 0 14px 10px; font-size: 14px; color: var(--text); line-height: 1.45; }
-  .agent-detail { padding: 0 14px 11px; font-size: 12px; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; }
-  .agent-actions { display: flex; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--border); align-items: center; flex-wrap: wrap; }
+  /* SESSION CARD — the card itself carries the brand colour */
+  .session-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); border-left-width: 3px; border-left-style: solid; }
+  .session-card.needs-decision { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
+  .session-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
+  .session-id { font-size: 11px; font-family: var(--mono); color: var(--text-muted); }
+  .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
+  .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
+  .stage-pill.needs-decision { background: rgba(239,159,39,.18); color: #f0b84a; }
+  .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+  .session-detail { padding: 0 12px 8px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+  .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .session-links { display: flex; gap: 6px; margin-left: auto; }
+  .no-research-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+  .reassign-select { font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 4px; font-family: var(--font); }
+  .reassign-select option { background: #222226; }
+  .empty-bucket { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 2px 0; }
   .agent-reply { flex: 1; min-width: 180px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 10px; font-size: 13px; color: var(--text); font-family: var(--font); outline: none; }
   .agent-reply:focus { border-color: rgba(255,255,255,.25); }
-  .agent-answered { padding: 9px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
-  .agent-answered b { color: var(--text); font-weight: 500; }
   .agent-link { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 4px 9px; border: 1px solid var(--border-strong); border-radius: 6px; flex-shrink: 0; }
   .agent-link:hover { color: var(--text); }
-  .agent-group-label { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); margin: 4px 0 8px; }
 
   /* SIDE PANEL — persistent, all in-flight work across every brand */
   .side-panel { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: 12px 0; }
@@ -162,24 +104,10 @@
   .sp-text { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sp-empty { padding: 8px 12px; font-size: 11px; color: var(--text-dim); font-style: italic; }
 
-  /* SESSION BUCKETS — In flight / Queued / Backlog per brand */
-  .buckets { display: flex; flex-direction: column; gap: 18px; margin-bottom: 18px; }
-  .bucket { display: flex; flex-direction: column; gap: 8px; }
-  .bucket-label { font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); }
-  .session-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); border-left-width: 3px; border-left-style: solid; }
-  .session-card.needs-decision { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
-  .session-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
-  .session-id { font-size: 11px; font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-muted); }
-  .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
-  .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
-  .stage-pill.needs-decision { background: rgba(239,159,39,.18); color: #f0b84a; }
-  .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
-  .session-detail { padding: 0 12px 8px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
-  .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
-  .session-links { display: flex; gap: 6px; margin-left: auto; }
-  .no-research-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-  .reassign-select { font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 4px; font-family: var(--font); }
-  .empty-bucket { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 0; }
+  /* EMPTY / TOAST */
+  .empty { text-align: center; padding: 48px 24px; color: var(--text-dim); font-size: 13px; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 16px; font-size: 13px; color: var(--text); z-index: 200; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateY(0); }
 </style>
 </head>
 <body>
@@ -188,97 +116,29 @@
   <div class="topbar-title">Design Hub</div>
   <div class="topbar-sep"></div>
   <div class="topbar-sub" id="topbar-sub">Loading…</div>
+  <div class="topbar-actions">
+    <button class="btn" id="btn-refresh" onclick="loadBoard()">Refresh</button>
+  </div>
 </div>
 
 <div class="layout">
   <div class="sidebar" id="sidebar"></div>
   <div class="main">
-    <div class="main-header" id="main-header" style="display:none">
-      <div class="main-dot" id="header-dot"></div>
-      <div class="main-title" id="header-title"></div>
-      <div class="main-actions">
-        <button class="btn btn-primary" id="btn-add-chat" onclick="openChatModal()">+ chat</button>
-        <button class="btn" onclick="openResourceModal()">+ resource</button>
-        <button class="btn" onclick="openCapabilityModal()">+ note</button>
-      </div>
-    </div>
-    <div class="main-body" id="main-body"><div class="empty">Select a project</div></div>
+    <div class="board" id="board"><div class="empty">Loading…</div></div>
   </div>
   <div class="side-panel" id="side-panel"></div>
-</div>
-
-<!-- CHAT MODAL -->
-<div class="modal-bg" id="modal-chat">
-  <div class="modal">
-    <div class="modal-title">Add chat session</div>
-    <div class="modal-field"><div class="modal-label">Title</div><input class="modal-input" id="c-title" placeholder="e.g. Download page copy"></div>
-    <div class="modal-field"><div class="modal-label">What this chat does</div><input class="modal-input" id="c-notes" placeholder="e.g. Creates website copy for the platform detection page"></div>
-    <div class="modal-field"><div class="modal-label">Type</div>
-      <select class="modal-input" id="c-type">
-        <option value="design">Design</option>
-        <option value="research">Research</option>
-        <option value="writing">Writing</option>
-        <option value="agent">Agent</option>
-      </select>
-    </div>
-    <div class="modal-field"><div class="modal-label">Chat URL (paste once)</div><input class="modal-input" id="c-url" placeholder="https://claude.ai/chat/… or chatgpt.com/…"></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModals()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitChat()">Add chat</button>
-    </div>
-  </div>
-</div>
-
-<!-- RESOURCE MODAL -->
-<div class="modal-bg" id="modal-resource">
-  <div class="modal">
-    <div class="modal-title">Add resource link</div>
-    <div class="modal-field"><div class="modal-label">Label</div><input class="modal-input" id="r-label" placeholder="e.g. design-hub repo"></div>
-    <div class="modal-field"><div class="modal-label">URL</div><input class="modal-input" id="r-url" placeholder="https://…"></div>
-    <div class="modal-field"><div class="modal-label">Type</div>
-      <select class="modal-input" id="r-type">
-        <option value="github">GitHub</option>
-        <option value="cloudflare">Cloudflare</option>
-        <option value="figma">Figma</option>
-        <option value="linear">Linear</option>
-        <option value="claude">Claude chat</option>
-        <option value="chatgpt">ChatGPT chat</option>
-        <option value="gemini">Gemini chat</option>
-        <option value="other">Other</option>
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModals()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitResource()">Add resource</button>
-    </div>
-  </div>
-</div>
-
-<!-- CAPABILITY MODAL -->
-<div class="modal-bg" id="modal-cap">
-  <div class="modal">
-    <div class="modal-title">Add purpose note</div>
-    <div class="modal-field"><div class="modal-label">What does this project do?</div><input class="modal-input" id="cap-label" placeholder="e.g. Creates UX designs for mobile app flows"></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModals()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitCapability()">Add note</button>
-    </div>
-  </div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const API = 'https://design-hub-worker.d-bell.workers.dev/api';
-let activeProjectId = null;
-let sidebarData = [];
 
-const statusCycle = { active: 'waiting', waiting: 'done', done: 'active' };
-const statusLabel = { active: 'Active', waiting: 'Waiting', done: 'Done' };
-const statusClass = { active: 's-active', waiting: 's-waiting', done: 's-done' };
-
-const resIcon = { github: '⌥', cloudflare: '☁', figma: '✦', linear: '◈', claude: '◆', chatgpt: '◉', gemini: '✧', other: '→' };
-const resLabel = { github: 'github', cloudflare: 'cloudflare', figma: 'figma', linear: 'linear', claude: 'claude', chatgpt: 'chatgpt', gemini: 'gemini', other: 'link' };
+// Every brand gets a section on the board whether or not it has work today —
+// an empty CONDUIT is information, not clutter.
+let brands = [];
+let brandsById = {};
+let sessions = [];
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -301,198 +161,13 @@ function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-const BRAND_IDS = new Set();
-let brandsById = {};
-
-async function loadSidebar() {
-  sidebarData = await api('/sidebar');
-  BRAND_IDS.clear();
-  brandsById = {};
-  const brandsSection = sidebarData.find(s => s.id === 'brands');
-  if (brandsSection) {
-    for (const p of brandsSection.projects) {
-      BRAND_IDS.add(p.id);
-      brandsById[p.id] = p;
-    }
-  }
-  let total = 0;
-  let html = '';
-  for (const section of sidebarData) {
-    html += `<div class="sb-section"><div class="sb-label">${esc(section.name)}</div>`;
-    for (const p of section.projects) {
-      total += p.active_count || 0;
-      const active = activeProjectId === p.id ? 'active' : '';
-      html += `<button class="sb-item ${active}" onclick="selectProject('${p.id}','${esc(p.name)}','${esc(p.color)}')">
-        <div class="sb-dot" style="background:${p.color}"></div>
-        <span class="sb-name">${esc(p.name)}</span>
-        ${p.active_count > 0 ? `<span class="sb-badge">${p.active_count}</span>` : ''}
-      </button>`;
-    }
-    html += '</div>';
-  }
-  document.getElementById('sidebar').innerHTML = html;
-  document.getElementById('topbar-sub').textContent = total ? `${total} active` : 'Session board';
+// Element ids are derived from session ids, which contain '/' and '-'.
+// btoa would choke on any non-Latin1 character, so hash to hex instead.
+function key(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(16);
 }
-
-async function selectProject(id, name, color) {
-  activeProjectId = id;
-  document.getElementById('main-header').style.display = 'flex';
-  document.getElementById('header-dot').style.background = color;
-  document.getElementById('header-title').textContent = name;
-  document.getElementById('main-body').innerHTML = '<div class="empty" style="padding:32px;color:var(--text-dim)">Loading…</div>';
-  document.querySelectorAll('.sb-item').forEach(el => {
-    el.classList.toggle('active', el.getAttribute('onclick').includes(`'${id}'`));
-  });
-  const p = await api(`/projects/${id}`);
-  let sessions = [];
-  if (BRAND_IDS.has(id)) {
-    try { sessions = (await api('/agent/sessions')).filter(r => r.project === id); }
-    catch { sessions = []; }
-  }
-  renderProject(p, sessions);
-}
-
-function renderProject(p, sessions) {
-  const bucketsHtml = BRAND_IDS.has(p.id) ? renderBuckets(sessions || []) : '';
-  const caps = p.capabilities || [];
-  const resources = p.resources || [];
-  const chats = p.chats || [];
-
-  const capsHtml = caps.map(c => `
-    <div class="cap-row">
-      <div class="cap-dot"></div>
-      <span class="cap-label">${esc(c.label)}</span>
-    </div>`).join('') + `<button class="cap-add" onclick="openCapabilityModal()">+ add note</button>`;
-
-  const resHtml = resources.map(r => `
-    <a class="res-chip" href="${esc(r.url)}" target="_blank" rel="noopener">
-      <span class="res-icon">${resIcon[r.type] || '→'}</span>
-      ${esc(r.label)}
-      <span class="res-type">${resLabel[r.type] || 'link'}</span>
-    </a>`).join('') + `<button class="res-add" onclick="openResourceModal()">+ add</button>`;
-
-  const chatsHtml = chats.length ? chats.map(c => `
-    <div class="chat-row">
-      <span class="type-pill t-${c.type}">${c.type}</span>
-      <div class="chat-info">
-        <div class="chat-title" title="${esc(c.title)}">${esc(c.title)}</div>
-        ${c.notes ? `<div class="chat-notes">${esc(c.notes)}</div>` : ''}
-      </div>
-      <button class="status-btn ${statusClass[c.status]}"
-        onclick="cycleStatus('${c.id}','${c.status}',this)">${statusLabel[c.status]}</button>
-      ${c.url
-        ? `<a class="chat-link" href="${esc(c.url)}" target="_blank" rel="noopener" title="Open chat">↗</a>`
-        : `<span class="chat-link chat-link-none">↗</span>`}
-    </div>`).join('')
-    : '<div style="padding:12px 16px;font-size:12px;color:var(--text-dim);font-style:italic">No chats yet — add one above</div>';
-
-  document.getElementById('main-body').innerHTML = `
-    ${bucketsHtml}
-    <div class="hub-card">
-      <div class="hub-header">
-        <div class="hub-color-bar" style="background:${p.color}"></div>
-        <div class="hub-header-text">
-          <div class="hub-name">${esc(p.name)}</div>
-          ${p.description ? `<div class="hub-desc">${esc(p.description)}</div>` : ''}
-        </div>
-      </div>
-      <div class="hub-capabilities">${capsHtml}</div>
-      <div class="hub-resources">${resHtml}</div>
-      <div class="hub-chats">
-        <div class="chats-header">
-          <span class="chats-label">AI chats</span>
-          <button class="chats-add" onclick="openChatModal()">+ add chat</button>
-        </div>
-        ${chatsHtml}
-      </div>
-    </div>`;
-}
-
-async function refreshCurrentProject() {
-  const p = await api(`/projects/${activeProjectId}`);
-  let sessions = [];
-  if (BRAND_IDS.has(activeProjectId)) {
-    try { sessions = (await api('/agent/sessions')).filter(r => r.project === activeProjectId); }
-    catch { sessions = []; }
-  }
-  renderProject(p, sessions);
-}
-
-async function cycleStatus(id, current, el) {
-  const next = statusCycle[current];
-  el.className = `status-btn ${statusClass[next]}`;
-  el.textContent = statusLabel[next];
-  el.onclick = () => cycleStatus(id, next, el);
-  await api(`/chats/${id}`, { method: 'PATCH', body: { status: next } });
-  toast(`Marked ${statusLabel[next].toLowerCase()}`);
-  loadSidebar();
-}
-
-function openChatModal() {
-  ['c-title','c-notes','c-url'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('modal-chat').classList.add('open');
-  setTimeout(() => document.getElementById('c-title').focus(), 50);
-}
-function openResourceModal() {
-  ['r-label','r-url'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('modal-resource').classList.add('open');
-  setTimeout(() => document.getElementById('r-label').focus(), 50);
-}
-function openCapabilityModal() {
-  document.getElementById('cap-label').value = '';
-  document.getElementById('modal-cap').classList.add('open');
-  setTimeout(() => document.getElementById('cap-label').focus(), 50);
-}
-function closeModals() {
-  document.querySelectorAll('.modal-bg').forEach(m => m.classList.remove('open'));
-}
-
-async function submitChat() {
-  const title = document.getElementById('c-title').value.trim();
-  if (!title) { document.getElementById('c-title').focus(); return; }
-  await api('/chats', { method: 'POST', body: {
-    project_id: activeProjectId,
-    title,
-    notes: document.getElementById('c-notes').value.trim() || null,
-    type: document.getElementById('c-type').value,
-    url: document.getElementById('c-url').value.trim() || null,
-  }});
-  closeModals();
-  toast('Chat added');
-  refreshCurrentProject();
-  loadSidebar();
-}
-
-async function submitResource() {
-  const label = document.getElementById('r-label').value.trim();
-  const url = document.getElementById('r-url').value.trim();
-  if (!label || !url) return;
-  await api('/resources', { method: 'POST', body: {
-    project_id: activeProjectId,
-    label, url,
-    type: document.getElementById('r-type').value,
-  }});
-  closeModals();
-  toast('Resource added');
-  refreshCurrentProject();
-}
-
-async function submitCapability() {
-  const label = document.getElementById('cap-label').value.trim();
-  if (!label) return;
-  await api('/capabilities', { method: 'POST', body: { project_id: activeProjectId, label }});
-  closeModals();
-  toast('Note added');
-  refreshCurrentProject();
-}
-
-document.querySelectorAll('.modal-bg').forEach(m => m.addEventListener('click', e => { if (e.target === m) closeModals(); }));
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(); });
-
-
-// ── AGENT SESSIONS ────────────────────────────────
-// Generic across systems — the Hub only knows sessions, states, projects,
-// prompts. It never interprets what "design-ai:go" or "QA" mean.
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -505,6 +180,8 @@ function timeAgo(ts) {
   if (hrs < 24) return hrs + 'h';
   return Math.floor(hrs / 24) + 'd';
 }
+
+// ── BUCKETING ──────────────────────────────────────
 
 // Which of the three per-brand buckets a session belongs in.
 function bucketOf(r) {
@@ -521,25 +198,27 @@ function stageLabel(r) {
   return r.phase.charAt(0).toUpperCase() + r.phase.slice(1);
 }
 
-function linearUrl(r) {
-  return r.url || null;
+function needsDecision(r) {
+  return r.status === 'waiting' && !!r.triggered_at;
 }
 
+// ── CARD ───────────────────────────────────────────
+
 function sessionCard(r) {
-  const needsDecision = r.status === 'waiting';
+  const decision = needsDecision(r);
   const bucket = bucketOf(r);
   const color = (brandsById[r.project] || {}).color || '#888780';
-  const safeId = esc(r.id);
-  const idLabel = esc(r.linear_id || r.id);
+  const id = r.id;
+  const k = key(id);
 
   const linksHtml = `<div class="session-links">
-    ${linearUrl(r) ? `<a class="agent-link" href="${esc(linearUrl(r))}" target="_blank" rel="noopener">Linear ↗</a>` : ''}
+    ${r.url ? `<a class="agent-link" href="${esc(r.url)}" target="_blank" rel="noopener">Linear ↗</a>` : ''}
     ${r.figma_url ? `<a class="agent-link" href="${esc(r.figma_url)}" target="_blank" rel="noopener">Figma ↗</a>` : ''}
   </div>`;
 
-  const reassignHtml = `<select class="reassign-select" onchange="reassignSession('${safeId}', this.value)">
+  const reassignHtml = `<select class="reassign-select" onchange="reassignSession('${esc(id)}', this.value)">
     <option value="">Move to…</option>
-    ${Object.values(brandsById).filter(b => b.id !== r.project).map(b =>
+    ${brands.filter(b => b.id !== r.project).map(b =>
       `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}
   </select>`;
 
@@ -548,108 +227,147 @@ function sessionCard(r) {
     // Not yet triggered — the only job of this card is the trigger button.
     actionsHtml = `
       <label class="no-research-toggle">
-        <input type="checkbox" id="nr-${btoa(safeId).replace(/=/g,'')}"> no-research
+        <input type="checkbox" id="nr-${k}"> no-research
       </label>
-      <button class="btn btn-primary" onclick="triggerSession('${safeId}', 'go', this)">Trigger</button>
+      <button class="btn btn-primary" onclick="triggerSession('${esc(id)}', 'go', this)">Trigger</button>
       ${reassignHtml}
       ${linksHtml}`;
-  } else if (needsDecision && r.prompt) {
-    // In flight and waiting on a human decision — free-text reply, plus
-    // the QA button for "my Figma work is done".
+  } else if (decision) {
+    // In flight and waiting on me — free-text reply, plus the QA button for
+    // "my Figma work is done, run QA".
     actionsHtml = `
-      <input class="agent-reply" id="reply-${btoa(safeId).replace(/=/g,'')}" placeholder="Your decision…"
-        onkeydown="if(event.key==='Enter')respondAgent('${safeId}', this)">
-      <button class="btn btn-primary" onclick="respondAgent('${safeId}', this.previousElementSibling)">Send</button>
-      <button class="btn" onclick="triggerSession('${safeId}', 'qa', this)">Run QA</button>
+      <input class="agent-reply" id="reply-${k}" placeholder="Your decision…"
+        onkeydown="if(event.key==='Enter')respondAgent('${esc(id)}', this)">
+      <button class="btn btn-primary" onclick="respondAgent('${esc(id)}', document.getElementById('reply-${k}'))">Send</button>
+      <button class="btn" onclick="triggerSession('${esc(id)}', 'qa', this)">Run QA</button>
       ${reassignHtml}
       ${linksHtml}`;
   } else {
     actionsHtml = `${reassignHtml}${linksHtml}`;
   }
 
-  return `<div class="session-card ${needsDecision ? 'needs-decision' : ''}" style="border-left-color:${color}">
+  return `<div class="session-card ${decision ? 'needs-decision' : ''}" style="border-left-color:${color}">
     <div class="session-top">
-      <span class="session-id">${idLabel}</span>
+      <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || r.detail || '')}</span>
-      <span class="stage-pill ${needsDecision ? 'needs-decision' : ''}">${esc(stageLabel(r))}</span>
+      <span class="stage-pill ${decision ? 'needs-decision' : ''}">${esc(stageLabel(r))}</span>
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
+      ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
-    ${r.prompt ? `<div class="session-detail">${esc(r.prompt)}</div>` : (r.detail ? `<div class="session-detail">${esc(r.detail)}</div>` : '')}
+    ${r.prompt ? `<div class="session-detail">${esc(r.prompt)}</div>`
+              : (r.detail ? `<div class="session-detail">${esc(r.detail)}</div>` : '')}
     ${r.response ? `<div class="session-detail">Answered <b>${esc(r.response)}</b> · ${timeAgo(r.responded_at)} ago</div>` : ''}
     <div class="session-actions">${actionsHtml}</div>
   </div>`;
 }
 
-function renderBuckets(sessions) {
-  const inFlight = sessions.filter(r => bucketOf(r) === 'inflight');
-  const queued   = sessions.filter(r => bucketOf(r) === 'queued');
-  const backlog  = sessions.filter(r => bucketOf(r) === 'backlog');
+// ── BOARD ──────────────────────────────────────────
 
-  const section = (label, rows) => `
+function bucketsFor(rows) {
+  const section = (label, list) => `
     <div class="bucket">
       <div class="bucket-label">${label}</div>
-      ${rows.length ? rows.map(sessionCard).join('') : '<div class="empty-bucket">Nothing here</div>'}
+      ${list.length ? list.map(sessionCard).join('') : '<div class="empty-bucket">Nothing here</div>'}
     </div>`;
-
   return `<div class="buckets">
-    ${section('In flight', inFlight)}
-    ${section('Queued', queued)}
-    ${section('Backlog', backlog)}
+    ${section('In flight', rows.filter(r => bucketOf(r) === 'inflight'))}
+    ${section('Queued',    rows.filter(r => bucketOf(r) === 'queued'))}
+    ${section('Backlog',   rows.filter(r => bucketOf(r) === 'backlog'))}
   </div>`;
 }
 
-async function triggerSession(id, action, btn) {
-  const nrBox = document.getElementById(`nr-${btoa(id).replace(/=/g,'')}`);
-  const noResearch = !!(nrBox && nrBox.checked);
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
-  try {
-    await api(`/agent/session/${encodeURIComponent(id)}/trigger`, { method: 'POST', body: { action, noResearch } });
-    toast(action === 'go' ? 'Triggered' : 'QA requested');
-    refreshCurrentProject();
-    loadSidePanel();
-  } catch { toast('Trigger failed'); if (btn) { btn.disabled = false; btn.textContent = action === 'go' ? 'Trigger' : 'Run QA'; } }
+function brandSection(brand, rows) {
+  const waiting = rows.filter(needsDecision).length;
+  return `<section class="brand-section" id="brand-${esc(brand.id)}" style="--brand:${esc(brand.color)}">
+    <div class="brand-header">
+      <div class="brand-bar"></div>
+      <div class="brand-name">${esc(brand.name)}</div>
+      <div class="brand-meta">
+        ${waiting ? `<span class="brand-waiting">${waiting} waiting on me</span>` : ''}
+        <span>${rows.length} open</span>
+      </div>
+    </div>
+    ${bucketsFor(rows)}
+  </section>`;
 }
 
-async function reassignSession(id, project) {
-  if (!project) return;
+async function loadBoard() {
+  const btn = document.getElementById('btn-refresh');
+  if (btn) btn.disabled = true;
   try {
-    await api(`/agent/session/${encodeURIComponent(id)}/reassign`, { method: 'PATCH', body: { project } });
-    toast('Moved to ' + (brandsById[project] || {}).name);
-    refreshCurrentProject();
-    loadSidePanel();
-    loadSidebar();
-  } catch { toast('Could not move'); }
+    const [sidebar, rows] = await Promise.all([api('/sidebar'), api('/agent/sessions')]);
+    const brandsSection = sidebar.find(s => s.id === 'brands');
+    brands = (brandsSection ? brandsSection.projects : []).map(p =>
+      ({ id: p.id, name: p.name, color: p.color, active_count: p.active_count }));
+    brandsById = Object.fromEntries(brands.map(b => [b.id, b]));
+    sessions = rows;
+
+    // Anything the reader could not place lands in its own section rather than
+    // vanishing off the board — the reassign select is how it gets home.
+    const unplaced = sessions.filter(r => !brandsById[r.project]);
+
+    document.getElementById('board').innerHTML =
+      brands.map(b => brandSection(b, sessions.filter(r => r.project === b.id))).join('') +
+      (unplaced.length
+        ? brandSection({ id: '_unassigned', name: 'Unassigned', color: '#888780' }, unplaced)
+        : '');
+
+    renderSidebar(unplaced.length);
+    renderSidePanel();
+
+    const waiting = sessions.filter(needsDecision).length;
+    document.getElementById('topbar-sub').textContent =
+      waiting ? `${waiting} waiting on you · ${sessions.length} open`
+              : `${sessions.length} open`;
+  } catch (e) {
+    document.getElementById('board').innerHTML =
+      `<div class="empty">Could not load the board.<br>${esc(String(e.message || e))}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
-async function respondAgent(id, inputEl) {
-  const value = (inputEl.value || '').trim();
-  if (!value) { inputEl.focus(); return; }
-  try {
-    await api(`/agent/session/${encodeURIComponent(id)}/respond`, { method:'PATCH', body:{ response: value } });
-    toast('Response sent');
-    refreshCurrentProject();
-    loadSidePanel();
-  } catch { toast('Could not send response'); }
+function renderSidebar(unplacedCount) {
+  // active_count still comes from the old chat rows — see step 4.
+  const item = b => {
+    const rows = b.id === '_unassigned'
+      ? sessions.filter(r => !brandsById[r.project])
+      : sessions.filter(r => r.project === b.id);
+    const waiting = rows.filter(needsDecision).length;
+    const badge = waiting
+      ? `<span class="sb-badge waiting">${waiting}</span>`
+      : (b.active_count ? `<span class="sb-badge">${b.active_count}</span>` : '');
+    return `<button class="sb-item" onclick="jumpToBrand('${esc(b.id)}')">
+      <div class="sb-dot" style="background:${esc(b.color)}"></div>
+      <span class="sb-name">${esc(b.name)}</span>
+      ${badge}
+    </button>`;
+  };
+  const extra = unplacedCount
+    ? item({ id: '_unassigned', name: 'Unassigned', color: '#888780' })
+    : '';
+  document.getElementById('sidebar').innerHTML =
+    `<div class="sb-section"><div class="sb-label">Brands</div>${brands.map(item).join('')}${extra}</div>`;
 }
 
-// ── SIDE PANEL — persistent, all in-flight work across every brand ──
+function jumpToBrand(id) {
+  const el = document.getElementById('brand-' + id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
-async function loadSidePanel() {
-  let rows = [];
-  try { rows = await api('/agent/sessions'); } catch { rows = []; }
-  const inFlight = rows.filter(r => r.triggered_at && ['active','waiting','error'].includes(r.status));
+// ── SIDE PANEL — all in-flight work across every brand, App / Website ──
 
+function renderSidePanel() {
+  const inFlight = sessions.filter(r => r.triggered_at && ['active','waiting','error'].includes(r.status));
   const item = r => {
     const color = (brandsById[r.project] || {}).color || '#888780';
-    return `<button class="sp-item" onclick="jumpToBrand('${esc(r.project)}')">
+    return `<button class="sp-item" onclick="jumpToBrand('${esc(brandsById[r.project] ? r.project : '_unassigned')}')">
       <span class="sp-dot" style="background:${color}"></span>
       <span class="sp-text">${esc(r.linear_id || r.id)} — ${esc(stageLabel(r))}</span>
     </button>`;
   };
-
   const app = inFlight.filter(r => r.track === 'app');
   const web = inFlight.filter(r => r.track !== 'app');
-
   document.getElementById('side-panel').innerHTML = `
     <div class="sp-title">In flight</div>
     <div class="sp-group-label">App</div>
@@ -659,13 +377,49 @@ async function loadSidePanel() {
   `;
 }
 
-function jumpToBrand(id) {
-  const b = brandsById[id];
-  if (!b) return;
-  selectProject(id, b.name, b.color);
+// ── ACTIONS ────────────────────────────────────────
+
+async function triggerSession(id, action, btn) {
+  const nrBox = document.getElementById('nr-' + key(id));
+  const noResearch = !!(nrBox && nrBox.checked);
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/trigger`, {
+      method: 'POST', body: { action, noResearch },
+    });
+    toast(action === 'go' ? (noResearch ? 'Triggered — no research' : 'Triggered') : 'QA requested');
+    await loadBoard();
+  } catch (e) {
+    toast('Trigger failed — ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
 }
 
-loadSidebar().then(loadSidePanel);
+async function reassignSession(id, project) {
+  if (!project) return;
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/reassign`, {
+      method: 'PATCH', body: { project },
+    });
+    toast('Moved to ' + ((brandsById[project] || {}).name || project));
+    await loadBoard();
+  } catch { toast('Could not move'); }
+}
+
+async function respondAgent(id, inputEl) {
+  const value = (inputEl && inputEl.value || '').trim();
+  if (!value) return;
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/respond`, {
+      method: 'PATCH', body: { response: value },
+    });
+    toast('Answer sent');
+    await loadBoard();
+  } catch { toast('Could not send response'); }
+}
+
+loadBoard();
 </script>
 
 </body>
