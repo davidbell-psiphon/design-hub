@@ -369,10 +369,8 @@ async function loadBoard() {
   const btn = document.getElementById('btn-refresh');
   if (btn) btn.disabled = true;
   try {
-    const [sidebar, rows] = await Promise.all([api('/sidebar'), api('/agent/sessions')]);
-    const brandsSection = sidebar.find(s => s.id === 'brands');
-    brands = (brandsSection ? brandsSection.projects : []).map(p =>
-      ({ id: p.id, name: p.name, color: p.color }));
+    const [brandRows, rows] = await Promise.all([api('/brands'), api('/agent/sessions')]);
+    brands = brandRows.map(b => ({ id: b.id, name: b.name, color: b.color }));
     brandsById = Object.fromEntries(brands.map(b => [b.id, b]));
     sessions = rows;
     renderBoard();

@@ -1,94 +1,89 @@
-# DAD-AI — Deploy to Cloudflare
+# Design Hub — deploy
 
-Four steps. Takes about 10 minutes.
+Two pieces: a Worker (API + scheduled Linear reader) and a Pages site (the
+board). See [README.md](./README.md) for what the app actually does.
 
-## 1. Create the D1 database
+| Piece | Command | Lives at |
+|---|---|---|
+| Worker | `npx wrangler deploy` | https://design-hub-worker.d-bell.workers.dev |
+| Board | `npx wrangler pages deploy frontend --project-name=design-hub` | https://design-hub-7y2.pages.dev |
 
-In your terminal, inside this folder:
-
-```bash
-npx wrangler d1 create dad-ai
-```
-
-Wrangler will print something like:
-```
-database_id = "abc123-def456-..."
-```
-
-Copy that ID and paste it into `wrangler.toml`, replacing `REPLACE_WITH_YOUR_D1_ID`.
-
-## 2. Run the database schema
-
-```bash
-npx wrangler d1 execute dad-ai --file=./schema.sql
-```
-
-This creates your tables and seeds your brands + starter projects.
-
-## 3. Deploy the Worker
-
-```bash
-npx wrangler deploy
-```
-
-This deploys your API Worker. It will give you a URL like:
-`https://dad-ai-worker.YOUR-SUBDOMAIN.workers.dev`
-
-## 4. Deploy the Frontend to Pages
-
-In your Cloudflare dashboard:
-- Go to Pages → Create a project → Upload assets
-- Upload the `frontend/` folder
-- Set the project name to `dad-ai`
-
-Or via CLI if you have Pages wrangler set up:
-```bash
-npx wrangler pages deploy frontend --project-name=dad-ai
-```
-
-## 5. Connect frontend to your Worker
-
-Open `frontend/index.html` and find this line near the top of the script:
-
-```js
-const API = '/api';
-```
-
-Change it to your Worker URL:
-
-```js
-const API = 'https://dad-ai-worker.YOUR-SUBDOMAIN.workers.dev/api';
-```
-
-Then redeploy the frontend.
+The board is a single static `frontend/index.html` — no build step. It calls the
+Worker by absolute URL (the `API` constant at the top of its `<script>`), so the
+two deploy independently.
 
 ---
 
-## That's it
+## Secrets
 
-Your dashboard will be live at:
-`https://dad-ai.pages.dev`
+```bash
+npx wrangler secret put LINEAR_API_KEY   # raw Linear key, no "Bearer" prefix
+npx wrangler secret put AGENT_SECRET     # shared with the design-ai agent
+```
 
-Accessible from home, work, phone — anywhere.
+`LINEAR_API_KEY` is required — the reader and every trigger call go through it.
+`AGENT_SECRET` guards `POST /api/agent/session`, the route the agent writes to.
 
-## Adding your existing chats
+## Database
 
-For each Claude chat you want to track:
-1. Open the dashboard
-2. Click the right brand in the sidebar
-3. Hit "+ chat" on the project it belongs to
-4. Paste the `claude.ai/chat/...` URL
-5. Done — it's filed
+D1, `design-hub` (`b785c9c7-15fb-4234-bf62-58f038b90775`), bound as `DB` in
+`wrangler.toml`. The schema arrived in pieces; apply any not yet applied:
+
+```bash
+npx wrangler d1 execute design-hub --remote --file=./agent-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./reader-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./track-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece4-schema.sql
+```
+
+All four are already applied to the live database. They are additive
+(`ALTER TABLE` / `CREATE INDEX IF NOT EXISTS`), so re-running one fails on the
+duplicate column rather than destroying anything.
+
+**Do not run `schema.sql` against the live database.** It opens with
+`DROP TABLE` and recreates the old hierarchy with seed data. It is kept for
+history, not for deploys.
+
+## Schedule
+
+`wrangler.toml` sets `crons = ["0 13 * * 3,5"]` — Wednesday and Friday, 13:00
+UTC, which is 8am Toronto during EDT. It shifts to 9am when EST starts; change
+the hour to `0 14` if that matters. `npx wrangler deploy` applies cron changes.
+
+## Linear labels
+
+The trigger applies labels by name, taking the first match, so each must exist
+exactly once at **workspace level** — a team-scoped duplicate would hand the
+mutation an id from the wrong team.
+
+| Label | Id |
+|---|---|
+| `design-ai:go` | `fb951ac2-96c5-4006-af3b-c20392cd115e` |
+| `design-ai:qa` | `a6b89043-5824-4ad5-83b8-4192878d9e82` |
+| `no-research` | `d058267a-a646-4069-850c-1e146de837a7` |
 
 ---
 
-## File reference
+## Checking a deploy
 
+```bash
+curl https://design-hub-worker.d-bell.workers.dev/api/brands
+curl https://design-hub-worker.d-bell.workers.dev/api/agent/sessions
+curl -X POST https://design-hub-worker.d-bell.workers.dev/api/read-linear
 ```
-dad-ai/
-├── frontend/index.html   ← the dashboard UI
-├── worker/index.js       ← the API (runs on Cloudflare Workers)
-├── schema.sql            ← database setup + seed data
-├── wrangler.toml         ← deployment config
-└── DEPLOY.md             ← this file
-```
+
+`/api/brands` should return the four brands with their colours. The reader
+returns `{inserted, updated, skipped}`.
+
+A Worker deploy takes a few seconds to propagate — if a just-added route still
+404s, call it again before debugging it.
+
+## Gotchas
+
+- `wrangler pages deploy` warns that `wrangler.toml` has no
+  `pages_build_output_dir` and ignores the config file. Harmless: Pages only
+  needs the directory argument.
+- `wrangler login` binds its OAuth callback to `localhost:8976` no matter what
+  `--callback-port` says. If the port is busy, free it rather than moving it.
+- Stale OAuth scopes show up as `7403 account not authorized` on D1 commands
+  while `wrangler deploy` still works. `npx wrangler login` again to fix.

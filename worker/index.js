@@ -26,86 +26,7 @@ function json(data, status = 200, extra = {}) {
   });
 }
 function err(msg, status = 400) { return json({ error: msg }, status); }
-function uid() { return crypto.randomUUID().replace(/-/g,'') + crypto.randomUUID().replace(/-/g,''); }
 
-async function hashPassword(password, salt) {
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 310000, hash: 'SHA-256' },
-    keyMaterial, 256
-  );
-  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function generateSalt() {
-  const arr = new Uint8Array(32);
-  crypto.getRandomValues(arr);
-  return Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function generateToken() {
-  const arr = new Uint8Array(32);
-  crypto.getRandomValues(arr);
-  return Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return result === 0;
-}
-
-function getSessionCookie(request) {
-  const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(/session=([a-f0-9]+)/);
-  return match ? match[1] : null;
-}
-
-async function validateSession(env, request) {
-  const token = getSessionCookie(request);
-  if (!token) return false;
-  const session = await env.DB.prepare(
-    `SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')`
-  ).bind(token).first();
-  return !!session;
-}
-
-function sessionCookieHeader(token, clear = false) {
-  if (clear) return 'session=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0';
-  return `session=${token}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=86400`;
-}
-
-async function checkRateLimit(env, ip) {
-  const key = `ratelimit:${ip}`;
-  const row = await env.DB.prepare(`SELECT attempts, locked_until FROM rate_limits WHERE key = ?`).bind(key).first();
-  if (row && row.locked_until) {
-    const lockedUntil = new Date(row.locked_until + 'Z');
-    if (lockedUntil > new Date()) {
-      const mins = Math.ceil((lockedUntil - new Date()) / 60000);
-      return { blocked: true, message: `Too many attempts. Try again in ${mins} minute${mins > 1 ? 's' : ''}.` };
-    }
-  }
-  return { blocked: false };
-}
-
-async function recordFailedAttempt(env, ip) {
-  const key = `ratelimit:${ip}`;
-  const row = await env.DB.prepare(`SELECT attempts FROM rate_limits WHERE key = ?`).bind(key).first();
-  const attempts = (row ? row.attempts : 0) + 1;
-  const lockedUntil = attempts >= 5
-    ? new Date(Date.now() + 15 * 60 * 1000).toISOString().replace('T',' ').split('.')[0]
-    : null;
-  await env.DB.prepare(
-    `INSERT INTO rate_limits (key, attempts, locked_until) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET attempts = ?, locked_until = ?`
-  ).bind(key, attempts, lockedUntil, attempts, lockedUntil).run();
-}
-
-async function clearRateLimit(env, ip) {
-  await env.DB.prepare(`DELETE FROM rate_limits WHERE key = ?`).bind(`ratelimit:${ip}`).run();
-}
 
 export default {
   async fetch(request, env) {
@@ -434,103 +355,19 @@ async function route(request, env) {
       return json({ ok: true });
     }
 
-    // GET /api/sidebar
-    if (method === 'GET' && path === '/api/sidebar') {
-      const sections = await env.DB.prepare(`SELECT * FROM sections ORDER BY sort_order`).all();
-      const result = [];
-      for (const section of sections.results) {
-        const projects = await env.DB.prepare(
-          `SELECT p.*, (SELECT COUNT(*) FROM chats c WHERE c.project_id = p.id AND c.status != 'done') as active_count
-           FROM projects p WHERE p.section_id = ? ORDER BY p.sort_order`
-        ).bind(section.id).all();
-        result.push({ ...section, projects: projects.results });
-      }
-      return json(result);
-    }
 
-    // GET /api/projects/:id
-    if (method === 'GET' && path.match(/^\/api\/projects\/[\w-]+$/)) {
-      const projectId = path.split('/')[3];
-      const project = await env.DB.prepare(`SELECT * FROM projects WHERE id = ?`).bind(projectId).first();
-      if (!project) return err('not found', 404);
-      const capabilities = await env.DB.prepare(`SELECT * FROM capabilities WHERE project_id = ? ORDER BY sort_order`).bind(projectId).all();
-      const resources = await env.DB.prepare(`SELECT * FROM resources WHERE project_id = ? ORDER BY sort_order`).bind(projectId).all();
-      const chats = await env.DB.prepare(`SELECT * FROM chats WHERE project_id = ? ORDER BY created_at DESC`).bind(projectId).all();
-      return json({ ...project, capabilities: capabilities.results, resources: resources.results, chats: chats.results });
-    }
 
-    // POST /api/capabilities
-    if (method === 'POST' && path === '/api/capabilities') {
-      const body = await request.json();
-      if (!body.project_id || !body.label) return err('project_id and label required');
-      const id = uid();
-      await env.DB.prepare(`INSERT INTO capabilities (id, project_id, label) VALUES (?, ?, ?)`).bind(id, body.project_id, body.label).run();
-      return json({ id, ...body }, 201);
-    }
 
-    // DELETE /api/capabilities/:id
-    if (method === 'DELETE' && path.match(/^\/api\/capabilities\/[\w-]+$/)) {
-      await env.DB.prepare(`DELETE FROM capabilities WHERE id = ?`).bind(path.split('/')[3]).run();
-      return json({ ok: true });
-    }
-
-    // POST /api/resources
-    if (method === 'POST' && path === '/api/resources') {
-      const body = await request.json();
-      if (!body.project_id || !body.label || !body.url || !body.type) return err('project_id, label, url, type required');
-      const id = uid();
-      await env.DB.prepare(`INSERT INTO resources (id, project_id, label, url, type) VALUES (?, ?, ?, ?, ?)`).bind(id, body.project_id, body.label, body.url, body.type).run();
-      return json({ id, ...body }, 201);
-    }
-
-    // DELETE /api/resources/:id
-    if (method === 'DELETE' && path.match(/^\/api\/resources\/[\w-]+$/)) {
-      await env.DB.prepare(`DELETE FROM resources WHERE id = ?`).bind(path.split('/')[3]).run();
-      return json({ ok: true });
-    }
-
-    // POST /api/chats
-    if (method === 'POST' && path === '/api/chats') {
-      const body = await request.json();
-      if (!body.project_id || !body.title || !body.type) return err('project_id, title, type required');
-      const id = uid();
-      await env.DB.prepare(
-        `INSERT INTO chats (id, project_id, title, notes, type, status, url) VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, body.project_id, body.title, body.notes||null, body.type, body.status||'active', body.url||null).run();
-      return json({ id, ...body }, 201);
-    }
-
-    // PATCH /api/chats/:id
-    if (method === 'PATCH' && path.match(/^\/api\/chats\/[\w-]+$/)) {
-      const id = path.split('/')[3];
-      const body = await request.json();
-      const fields = []; const values = [];
-      if (body.status !== undefined) { fields.push('status = ?'); values.push(body.status); }
-      if (body.title  !== undefined) { fields.push('title = ?');  values.push(body.title); }
-      if (body.notes  !== undefined) { fields.push('notes = ?');  values.push(body.notes); }
-      if (body.url    !== undefined) { fields.push('url = ?');    values.push(body.url); }
-      if (!fields.length) return err('nothing to update');
-      fields.push("updated_at = datetime('now')");
-      values.push(id);
-      await env.DB.prepare(`UPDATE chats SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
-      return json({ ok: true });
-    }
-
-    // DELETE /api/chats/:id
-    if (method === 'DELETE' && path.match(/^\/api\/chats\/[\w-]+$/)) {
-      await env.DB.prepare(`DELETE FROM chats WHERE id = ?`).bind(path.split('/')[3]).run();
-      return json({ ok: true });
-    }
-
-    // POST /api/projects
-    if (method === 'POST' && path === '/api/projects') {
-      const body = await request.json();
-      if (!body.section_id || !body.name) return err('section_id and name required');
-      const id = body.name.toLowerCase().replace(/\s+/g,'-') + '-' + uid().slice(0,4);
-      await env.DB.prepare(
-        `INSERT INTO projects (id, section_id, name, color, description) VALUES (?, ?, ?, ?, ?)`
-      ).bind(id, body.section_id, body.name, body.color||'#888780', body.description||null).run();
-      return json({ id, ...body }, 201);
+    // GET /api/brands — the board's only structural read.
+    // Brand identity still lives in `projects` rows under the 'brands'
+    // section: that is where the current brand colours are, and keeping them
+    // in D1 means a colour change is an UPDATE, not a deploy. The rest of
+    // that table's UI is gone; these three columns are all the board reads.
+    if (method === 'GET' && path === '/api/brands') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, name, color FROM projects WHERE section_id = 'brands' ORDER BY sort_order`
+      ).all();
+      return json(results || []);
     }
 
     // POST /api/read-linear — run the Linear Reader on demand
