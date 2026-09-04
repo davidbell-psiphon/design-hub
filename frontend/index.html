@@ -27,8 +27,20 @@
   .topbar { height: 44px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; background: var(--surface); }
   .topbar-title { font-size: 13px; font-weight: 600; color: var(--text); }
   .topbar-sep { width: 1px; height: 16px; background: var(--border-strong); }
-  .topbar-sub { font-size: 12px; color: var(--text-muted); }
-  .topbar-actions { margin-left: auto; display: flex; gap: 8px; }
+  .topbar-sub { font-size: 12px; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+  /* HAMBURGER — the sidebar is a drawer on narrow screens */
+  .hamburger { display: none; width: 44px; height: 44px; margin-left: -12px; align-items: center; justify-content: center; background: none; border: none; cursor: pointer; color: var(--text-muted); flex-shrink: 0; }
+  .hamburger:hover { color: var(--text); }
+  .hamburger span { display: block; width: 17px; height: 1.5px; background: currentColor; border-radius: 1px; box-shadow: 0 -5px 0 currentColor, 0 5px 0 currentColor; }
+  .scrim { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 40; }
+  .scrim.open { display: block; }
+
+  /* FILTER CHIP — the way back to All brands */
+  .filter-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; padding: 3px 6px 3px 9px; border-radius: 100px; background: var(--surface-3); color: var(--text); border: 1px solid var(--border-strong); cursor: pointer; font-family: var(--font); white-space: nowrap; }
+  .filter-chip:hover { border-color: rgba(255,255,255,.28); }
+  .filter-chip .x { font-size: 13px; line-height: 1; opacity: .6; }
 
   /* LAYOUT */
   .layout { display: flex; flex: 1; overflow: hidden; }
@@ -108,18 +120,67 @@
   .empty { text-align: center; padding: 48px 24px; color: var(--text-dim); font-size: 13px; }
   .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 16px; font-size: 13px; color: var(--text); z-index: 200; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* ── MOBILE ──────────────────────────────────────────────────────────
+     Below 900px the page scrolls as one document instead of three
+     independently-scrolling columns: sidebar becomes a drawer, the side
+     panel moves below the board, and every control clears 44px. */
+  @media (max-width: 900px) {
+    /* Let the document itself scroll rather than a pane inside a fixed-height
+       body — iOS Safari handles sticky and momentum scrolling far better. */
+    html, body { height: auto; min-height: 100%; overflow: visible; }
+    .topbar { position: sticky; top: 0; z-index: 30; }
+    .hamburger { display: flex; }
+    .layout { flex-direction: column; overflow: visible; }
+    .main { overflow: visible; }
+    .board { overflow: visible; padding: 14px 12px 32px; gap: 26px; }
+
+    .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 264px; z-index: 50;
+               transform: translateX(-100%); transition: transform .18s ease;
+               border-right: 1px solid var(--border-strong); }
+    .sidebar.open { transform: none; }
+    .sb-item { min-height: 44px; font-size: 15px; }
+    .sb-badge { min-width: 20px; height: 20px; font-size: 11px; }
+
+    /* Below the board, not beside it — "what is running" is worth a scroll,
+       and a 220px rail on a phone is not. */
+    .side-panel { width: auto; overflow: visible; border-left: none;
+                  border-top: 1px solid var(--border); padding: 14px 0 28px; }
+
+    /* Tap targets — 44px minimum on everything you press. */
+    .session-top, .session-detail, .session-actions { padding-left: 14px; padding-right: 14px; }
+    .session-actions { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+    .btn { min-height: 44px; padding: 0 16px; }
+    .no-research-toggle { min-height: 44px; padding: 0 8px 0 4px; font-size: 13px; }
+    .no-research-toggle input { width: 20px; height: 20px; }
+    .reassign-select { min-height: 44px; padding: 0 8px; font-size: 13px; }
+    .agent-link { min-height: 44px; display: inline-flex; align-items: center; }
+    .agent-reply { min-height: 44px; width: 100%; flex-basis: 100%; }
+    .session-links { margin-left: 0; }
+    .sp-item { min-height: 40px; }
+  }
+
+  @media (max-width: 600px) {
+    .brand-name { font-size: 14px; }
+    .session-title { font-size: 14px; line-height: 1.35; }
+    .topbar { padding: 0 12px; }
+  }
 </style>
 </head>
 <body>
 
 <div class="topbar">
+  <button class="hamburger" id="hamburger" onclick="toggleMenu()" aria-label="Brands"><span></span></button>
   <div class="topbar-title">Design Hub</div>
   <div class="topbar-sep"></div>
   <div class="topbar-sub" id="topbar-sub">Loading…</div>
   <div class="topbar-actions">
+    <button class="filter-chip" id="filter-chip" style="display:none" onclick="setFilter(null)"></button>
     <button class="btn" id="btn-refresh" onclick="loadBoard()">Refresh</button>
   </div>
 </div>
+
+<div class="scrim" id="scrim" onclick="closeMenu()"></div>
 
 <div class="layout">
   <div class="sidebar" id="sidebar"></div>
@@ -139,6 +200,11 @@ const API = 'https://design-hub-worker.d-bell.workers.dev/api';
 let brands = [];
 let brandsById = {};
 let sessions = [];
+
+// null = All brands. Deliberately not persisted: the board opens showing
+// everything, every time. Filtering is something you opt into for a moment,
+// not a state you get stuck in.
+let filterBrand = null;
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -291,6 +357,14 @@ function brandSection(brand, rows) {
   </section>`;
 }
 
+const UNASSIGNED = { id: '_unassigned', name: 'Unassigned', color: '#888780' };
+
+function rowsFor(brandId) {
+  return brandId === UNASSIGNED.id
+    ? sessions.filter(r => !brandsById[r.project])
+    : sessions.filter(r => r.project === brandId);
+}
+
 async function loadBoard() {
   const btn = document.getElementById('btn-refresh');
   if (btn) btn.disabled = true;
@@ -298,27 +372,10 @@ async function loadBoard() {
     const [sidebar, rows] = await Promise.all([api('/sidebar'), api('/agent/sessions')]);
     const brandsSection = sidebar.find(s => s.id === 'brands');
     brands = (brandsSection ? brandsSection.projects : []).map(p =>
-      ({ id: p.id, name: p.name, color: p.color, active_count: p.active_count }));
+      ({ id: p.id, name: p.name, color: p.color }));
     brandsById = Object.fromEntries(brands.map(b => [b.id, b]));
     sessions = rows;
-
-    // Anything the reader could not place lands in its own section rather than
-    // vanishing off the board — the reassign select is how it gets home.
-    const unplaced = sessions.filter(r => !brandsById[r.project]);
-
-    document.getElementById('board').innerHTML =
-      brands.map(b => brandSection(b, sessions.filter(r => r.project === b.id))).join('') +
-      (unplaced.length
-        ? brandSection({ id: '_unassigned', name: 'Unassigned', color: '#888780' }, unplaced)
-        : '');
-
-    renderSidebar(unplaced.length);
-    renderSidePanel();
-
-    const waiting = sessions.filter(needsDecision).length;
-    document.getElementById('topbar-sub').textContent =
-      waiting ? `${waiting} waiting on you · ${sessions.length} open`
-              : `${sessions.length} open`;
+    renderBoard();
   } catch (e) {
     document.getElementById('board').innerHTML =
       `<div class="empty">Could not load the board.<br>${esc(String(e.message || e))}</div>`;
@@ -327,32 +384,87 @@ async function loadBoard() {
   }
 }
 
-function renderSidebar(unplacedCount) {
-  // active_count still comes from the old chat rows — see step 4.
-  const item = b => {
-    const rows = b.id === '_unassigned'
-      ? sessions.filter(r => !brandsById[r.project])
-      : sessions.filter(r => r.project === b.id);
-    const waiting = rows.filter(needsDecision).length;
-    const badge = waiting
-      ? `<span class="sb-badge waiting">${waiting}</span>`
-      : (b.active_count ? `<span class="sb-badge">${b.active_count}</span>` : '');
-    return `<button class="sb-item" onclick="jumpToBrand('${esc(b.id)}')">
-      <div class="sb-dot" style="background:${esc(b.color)}"></div>
-      <span class="sb-name">${esc(b.name)}</span>
-      ${badge}
-    </button>`;
-  };
-  const extra = unplacedCount
-    ? item({ id: '_unassigned', name: 'Unassigned', color: '#888780' })
-    : '';
-  document.getElementById('sidebar').innerHTML =
-    `<div class="sb-section"><div class="sb-label">Brands</div>${brands.map(item).join('')}${extra}</div>`;
+// Renders from what is already in memory — filtering never refetches.
+function renderBoard() {
+  // Anything the reader could not place gets its own section rather than
+  // vanishing off the board; the reassign select is how it gets home.
+  const unplaced = rowsFor(UNASSIGNED.id);
+  const shown = filterBrand
+    ? [...brands, UNASSIGNED].filter(b => b.id === filterBrand)
+    : [...brands, ...(unplaced.length ? [UNASSIGNED] : [])];
+
+  document.getElementById('board').innerHTML = shown.length
+    ? shown.map(b => brandSection(b, rowsFor(b.id))).join('')
+    : '<div class="empty">Nothing here.</div>';
+
+  renderSidebar(unplaced.length);
+  renderSidePanel();
+  renderTopbar();
 }
 
-function jumpToBrand(id) {
-  const el = document.getElementById('brand-' + id);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+function renderTopbar() {
+  const scope = filterBrand ? rowsFor(filterBrand) : sessions;
+  const waiting = scope.filter(needsDecision).length;
+  const short = window.matchMedia('(max-width: 600px)').matches;
+  document.getElementById('topbar-sub').textContent = waiting
+    ? `${waiting} waiting${short ? '' : ' on you'} · ${scope.length} open`
+    : `${scope.length} open`;
+
+  // The chip is the way back to All brands, and the only always-visible
+  // signal that you are looking at a subset.
+  const chip = document.getElementById('filter-chip');
+  const brand = filterBrand === UNASSIGNED.id ? UNASSIGNED : brandsById[filterBrand];
+  if (brand) {
+    chip.innerHTML = `${esc(brand.name)}<span class="x">×</span>`;
+    chip.style.display = 'inline-flex';
+    chip.title = 'Back to all brands';
+  } else {
+    chip.style.display = 'none';
+  }
+}
+
+function renderSidebar(unplacedCount) {
+  // The badge counts what needs me, not how much exists. Total open is already
+  // in every brand header on the board; repeating it here would be noise.
+  const item = b => {
+    const waiting = rowsFor(b.id).filter(needsDecision).length;
+    const active = filterBrand === b.id ? ' active' : '';
+    return `<button class="sb-item${active}" onclick="setFilter('${esc(b.id)}')">
+      <div class="sb-dot" style="background:${esc(b.color)}"></div>
+      <span class="sb-name">${esc(b.name)}</span>
+      ${waiting ? `<span class="sb-badge waiting">${waiting}</span>` : ''}
+    </button>`;
+  };
+  const allWaiting = sessions.filter(needsDecision).length;
+  const allItem = `<button class="sb-item${filterBrand ? '' : ' active'}" onclick="setFilter(null)">
+      <div class="sb-dot" style="background:var(--text-dim)"></div>
+      <span class="sb-name">All brands</span>
+      ${allWaiting ? `<span class="sb-badge waiting">${allWaiting}</span>` : ''}
+    </button>`;
+  const extra = unplacedCount ? item(UNASSIGNED) : '';
+  document.getElementById('sidebar').innerHTML =
+    `<div class="sb-section"><div class="sb-label">Brands</div>${allItem}${brands.map(item).join('')}${extra}</div>`;
+}
+
+// Tapping a brand narrows the board to it; the chip and "All brands" both undo
+// it. null restores the stacked everything-view the board opens with.
+function setFilter(id) {
+  filterBrand = id;
+  renderBoard();
+  closeMenu();
+  const board = document.getElementById('board');
+  if (board) board.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
+function toggleMenu() {
+  const open = document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('scrim').classList.toggle('open', open);
+}
+
+function closeMenu() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('scrim').classList.remove('open');
 }
 
 // ── SIDE PANEL — all in-flight work across every brand, App / Website ──
@@ -361,7 +473,7 @@ function renderSidePanel() {
   const inFlight = sessions.filter(r => r.triggered_at && ['active','waiting','error'].includes(r.status));
   const item = r => {
     const color = (brandsById[r.project] || {}).color || '#888780';
-    return `<button class="sp-item" onclick="jumpToBrand('${esc(brandsById[r.project] ? r.project : '_unassigned')}')">
+    return `<button class="sp-item" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')">
       <span class="sp-dot" style="background:${color}"></span>
       <span class="sp-text">${esc(r.linear_id || r.id)} — ${esc(stageLabel(r))}</span>
     </button>`;
@@ -389,7 +501,10 @@ async function triggerSession(id, action, btn) {
       method: 'POST', body: { action, noResearch },
     });
     toast(action === 'go' ? (noResearch ? 'Triggered — no research' : 'Triggered') : 'QA requested');
-    await loadBoard();
+    await window.addEventListener('resize', () => { if (sessions.length) renderTopbar(); });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+
+loadBoard();
   } catch (e) {
     toast('Trigger failed — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = original; }
