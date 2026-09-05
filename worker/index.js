@@ -1,3 +1,6 @@
+import { deriveBrand, deriveTrack } from '../lib/derive.mjs';
+import { accessIdentity } from '../lib/access.mjs';
+
 // Allowed origins - your Pages deployments
 const ALLOWED_ORIGINS = [
     'https://design-hub-7y2.pages.dev',
@@ -48,39 +51,6 @@ export default {
 // Writes one agent_sessions row per new issue with status = 'waiting'.
 // Idempotent: skips issues whose linear_id already has a row.
 //
-// Team names that map to exactly one brand go straight into TEAM_BRAND.
-// 'Websites' (and any other unmapped team) covers multiple brands, so its
-// brand is guessed from the issue's Linear project name, then labels, then
-// title — e.g. project "Conduit Website" -> brand "conduit". A guess of
-// null just means the card needs a manual brand assignment in the Hub.
-const TEAM_BRAND = {
-  'Conduit App': 'conduit',
-  'Ryve App': 'ryve',
-  'Psiphon App': 'psiphon',
-  'Forge': 'forge',
-};
-const TEAM_TRACK = {
-  'Conduit App': 'app',
-  'Ryve App': 'app',
-  'Psiphon App': 'app',
-  'Forge': 'website',
-  'Websites': 'website',
-};
-const BRAND_KEYWORDS = ['conduit', 'ryve', 'psiphon', 'forge'];
-
-function detectBrand(issue) {
-  const haystacks = [
-    issue.project && issue.project.name,
-    ...((issue.labels && issue.labels.nodes) || []).map(l => l.name),
-    issue.title,
-  ].filter(Boolean).map(s => s.toLowerCase());
-  for (const text of haystacks) {
-    const hit = BRAND_KEYWORDS.find(brand => text.includes(brand));
-    if (hit) return hit;
-  }
-  return null;
-}
-
 async function readLinear(env) {
   const query = `
     query DesignReaderIssues {
@@ -135,8 +105,8 @@ async function readLinear(env) {
     if (assignee !== 'Dave Bell') { skipped++; continue; }
 
     const teamName = issue.team && issue.team.name;
-    const track = TEAM_TRACK[teamName] || null;
-    const brand = TEAM_BRAND[teamName] || detectBrand(issue);
+    const track = deriveTrack(teamName);
+    const brand = deriveBrand(issue);
 
     const detail = (issue.description || '').slice(0, 300) || null;
     const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
@@ -225,85 +195,9 @@ async function addLabelToIssue(env, issueId, labelId) {
 }
 
 // ─── ACCESS IDENTITY ──────────────────────────────────
-// Verifies the JWT Cloudflare Access injects as Cf-Access-Jwt-Assertion, which
-// the Pages proxy forwards on. Hand-rolled against WebCrypto rather than
-// pulling in `jose`: this repo has no package.json and no build step, and a
-// dependency here would mean an npm install on every deploy.
-//
-// Enforcement is off until ACCESS_AUD and ACCESS_TEAM are set as secrets, so
-// this ships without breaking anything; setting them is what turns it on.
-
-let _keys = null;
-let _keysAt = 0;
-
-async function accessKeys(env) {
-  const now = Date.now();
-  if (_keys && now - _keysAt < 3600_000) return _keys;
-  const res = await fetch(`https://${env.ACCESS_TEAM}.cloudflareaccess.com/cdn-cgi/access/certs`);
-  if (!res.ok) return null;
-  const body = await res.json();
-  _keys = body.keys || null;
-  _keysAt = now;
-  return _keys;
-}
-
-function b64url(str) {
-  const pad = str.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(pad + '='.repeat((4 - pad.length % 4) % 4));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-function b64urlJson(str) {
-  return JSON.parse(new TextDecoder().decode(b64url(str)));
-}
-
-// Returns the token payload, or null. Null means "not a valid human request",
-// never "probably fine".
-async function accessIdentity(request, env) {
-  const token = request.headers.get('Cf-Access-Jwt-Assertion') ||
-    (request.headers.get('Cookie') || '').match(/CF_Authorization=([^;]+)/)?.[1];
-  if (!token) return null;
-
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-
-  let header, payload;
-  try {
-    header = b64urlJson(parts[0]);
-    payload = b64urlJson(parts[1]);
-  } catch { return null; }
-  if (header.alg !== 'RS256') return null;
-
-  const keys = await accessKeys(env);
-  const jwk = keys && keys.find(k => k.kid === header.kid);
-  if (!jwk) return null;
-
-  let ok = false;
-  try {
-    const key = await crypto.subtle.importKey(
-      'jwk', jwk,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false, ['verify']
-    );
-    ok = await crypto.subtle.verify(
-      'RSASSA-PKCS1-v1_5', key, b64url(parts[2]),
-      new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
-    );
-  } catch { return null; }
-  if (!ok) return null;
-
-  // Signature is good; the claims still have to be ours and current.
-  const now = Math.floor(Date.now() / 1000);
-  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!aud.includes(env.ACCESS_AUD)) return null;
-  if (payload.iss !== `https://${env.ACCESS_TEAM}.cloudflareaccess.com`) return null;
-  if (!payload.exp || payload.exp < now) return null;
-  if (payload.nbf && payload.nbf > now + 60) return null;
-
-  return payload;
-}
+// Verification lives in lib/access.mjs so it can be tested against tokens
+// signed in the test itself. Enforcement stays off until ACCESS_AUD and
+// ACCESS_TEAM are set as secrets.
 
 // Gate for everything the board calls. Returns an error Response to send, or
 // null to continue.

@@ -192,6 +192,8 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="board-logic.js"></script>
+
 <script>
 // Same-origin. A Pages Function at /api/* proxies to the Worker — see
 // functions/api/[[path]].js. Calling the Worker directly would be a
@@ -228,47 +230,6 @@ async function api(path, opts = {}) {
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// Element ids are derived from session ids, which contain '/' and '-'.
-// btoa would choke on any non-Latin1 character, so hash to hex instead.
-function key(id) {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(16);
-}
-
-function timeAgo(ts) {
-  if (!ts) return '';
-  const then = new Date(ts.replace(' ', 'T') + 'Z');
-  const mins = Math.floor((Date.now() - then) / 60000);
-  if (isNaN(mins)) return '';
-  if (mins < 1) return 'now';
-  if (mins < 60) return mins + 'm';
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return hrs + 'h';
-  return Math.floor(hrs / 24) + 'd';
-}
-
-// ── BUCKETING ──────────────────────────────────────
-
-// Which of the three per-brand buckets a session belongs in.
-function bucketOf(r) {
-  if (r.triggered_at) return 'inflight';
-  if (r.linear_state === 'backlog') return 'backlog';
-  return 'queued'; // unstarted (Todo), or no Linear state at all
-}
-
-// Research / Design / QA / Waiting on me
-function stageLabel(r) {
-  if (r.status === 'waiting') return 'Waiting on me';
-  if (!r.phase) return '—';
-  if (r.phase.toLowerCase() === 'qa') return 'QA';
-  return r.phase.charAt(0).toUpperCase() + r.phase.slice(1);
-}
-
-function needsDecision(r) {
-  return r.status === 'waiting' && !!r.triggered_at;
 }
 
 // ── CARD ───────────────────────────────────────────
@@ -359,8 +320,6 @@ function brandSection(brand, rows) {
     ${bucketsFor(rows)}
   </section>`;
 }
-
-const UNASSIGNED = { id: '_unassigned', name: 'Unassigned', color: '#888780' };
 
 function rowsFor(brandId) {
   return brandId === UNASSIGNED.id
