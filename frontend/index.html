@@ -116,6 +116,23 @@
   .sp-text { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sp-empty { padding: 8px 12px; font-size: 11px; color: var(--text-dim); font-style: italic; }
 
+  /* COLLAPSED SECTIONS — No design / Completed, at the foot of the board */
+  .drawer { border-top: 1px solid var(--border); padding-top: 14px; }
+  .drawer + .drawer { margin-top: -14px; }
+  .drawer summary { display: flex; align-items: center; gap: 8px; cursor: pointer;
+                    list-style: none; padding: 8px 0; font-size: 11px; font-weight: 600;
+                    letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim);
+                    min-height: 44px; }
+  .drawer summary::-webkit-details-marker { display: none; }
+  .drawer summary:hover { color: var(--text-muted); }
+  .drawer .chev { display: inline-block; transition: transform .15s; font-size: 9px; }
+  .drawer[open] .chev { transform: rotate(90deg); }
+  .drawer-count { background: var(--surface-3); color: var(--text-muted); border-radius: 8px;
+                  padding: 1px 7px; font-size: 10px; letter-spacing: 0; }
+  .drawer-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 10px; }
+  .drawer .session-card { opacity: .72; }
+  .drawer .session-card:hover { opacity: 1; }
+
   /* EMPTY / TOAST */
   .empty { text-align: center; padding: 48px 24px; color: var(--text-dim); font-size: 13px; }
   .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 16px; font-size: 13px; color: var(--text); z-index: 200; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
@@ -252,14 +269,25 @@ function sessionCard(r) {
       `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}
   </select>`;
 
+  const section = sectionOf(r);
+
   let actionsHtml;
-  if (bucket !== 'inflight') {
+  if (section === 'completed') {
+    // Closed in Linear. Nothing to do from here but look at it.
+    actionsHtml = linksHtml;
+  } else if (section === 'nodesign') {
+    // Un-dismissable from where it sits, per the brief.
+    actionsHtml = `
+      <button class="btn" onclick="undismissSession('${esc(id)}', this)">Undo — needs design</button>
+      ${linksHtml}`;
+  } else if (bucket !== 'inflight') {
     // Not yet triggered — the only job of this card is the trigger button.
     actionsHtml = `
       <label class="no-research-toggle">
         <input type="checkbox" id="nr-${k}"> no-research
       </label>
       <button class="btn btn-primary" onclick="triggerSession('${esc(id)}', 'go', this)">Trigger</button>
+      <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Applies the no-design label">No design</button>
       ${reassignHtml}
       ${linksHtml}`;
   } else if (decision) {
@@ -306,7 +334,10 @@ function bucketsFor(rows) {
   </div>`;
 }
 
-function brandSection(brand, rows) {
+function brandSection(brand, allRows) {
+  // Dismissed and completed rows live in the drawers, not in a brand bucket,
+  // and must not show up in this brand's count either.
+  const rows = allRows.filter(isOpen);
   const waiting = rows.filter(needsDecision).length;
   return `<section class="brand-section" id="brand-${esc(brand.id)}" style="--brand:${esc(brand.color)}">
     <div class="brand-header">
@@ -353,17 +384,37 @@ function renderBoard() {
     ? [...brands, UNASSIGNED].filter(b => b.id === filterBrand)
     : [...brands, ...(unplaced.length ? [UNASSIGNED] : [])];
 
-  document.getElementById('board').innerHTML = shown.length
+  const scoped = filterBrand ? rowsFor(filterBrand) : sessions;
+  const boardHtml = shown.length
     ? shown.map(b => brandSection(b, rowsFor(b.id))).join('')
     : '<div class="empty">Nothing here.</div>';
+
+  document.getElementById('board').innerHTML = boardHtml +
+    drawer('nodesign', 'No design', scoped.filter(r => sectionOf(r) === 'nodesign')) +
+    drawer('completed', 'Completed', scoped.filter(r => sectionOf(r) === 'completed'));
 
   renderSidebar(unplaced.length);
   renderSidePanel();
   renderTopbar();
 }
 
+// Collapsed by default on every load, like the brand filter: the board opens
+// showing the work, and the put-aside piles stay put aside until asked for.
+// <details> rather than a JS toggle — keyboard-accessible and free.
+function drawer(id, label, rows) {
+  if (!rows.length) return '';
+  return `<details class="drawer" id="drawer-${id}">
+    <summary>
+      <span class="chev">▶</span>
+      <span>${label}</span>
+      <span class="drawer-count">${rows.length}</span>
+    </summary>
+    <div class="drawer-body">${rows.map(sessionCard).join('')}</div>
+  </details>`;
+}
+
 function renderTopbar() {
-  const scope = filterBrand ? rowsFor(filterBrand) : sessions;
+  const scope = (filterBrand ? rowsFor(filterBrand) : sessions).filter(isOpen);
   const waiting = scope.filter(needsDecision).length;
   const short = window.matchMedia('(max-width: 600px)').matches;
   document.getElementById('topbar-sub').textContent = waiting
@@ -387,7 +438,7 @@ function renderSidebar(unplacedCount) {
   // The badge counts what needs me, not how much exists. Total open is already
   // in every brand header on the board; repeating it here would be noise.
   const item = b => {
-    const waiting = rowsFor(b.id).filter(needsDecision).length;
+    const waiting = rowsFor(b.id).filter(isOpen).filter(needsDecision).length;
     const active = filterBrand === b.id ? ' active' : '';
     return `<button class="sb-item${active}" onclick="setFilter('${esc(b.id)}')">
       <div class="sb-dot" style="background:${esc(b.color)}"></div>
@@ -430,7 +481,8 @@ function closeMenu() {
 // ── SIDE PANEL — all in-flight work across every brand, App / Website ──
 
 function renderSidePanel() {
-  const inFlight = sessions.filter(r => r.triggered_at && ['active','waiting','error'].includes(r.status));
+  const inFlight = sessions.filter(r =>
+    isOpen(r) && r.triggered_at && ['active','waiting','error'].includes(r.status));
   const item = r => {
     const color = (brandsById[r.project] || {}).color || '#888780';
     return `<button class="sp-item" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')">
@@ -468,6 +520,30 @@ loadBoard();
   } catch (e) {
     toast('Trigger failed — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
+async function dismissSession(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/dismiss`, { method: 'POST' });
+    toast('Moved to No design');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not dismiss — ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'No design'; }
+  }
+}
+
+async function undismissSession(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/dismiss`, { method: 'DELETE' });
+    toast('Back on the board');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not undo — ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Undo — needs design'; }
   }
 }
 

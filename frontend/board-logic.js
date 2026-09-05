@@ -8,6 +8,25 @@
 // Sessions the reader could not place in a brand.
 var UNASSIGNED = { id: '_unassigned', name: 'Unassigned', color: '#888780' };
 
+// Where a session belongs on the whole board: one of the collapsed sections
+// at the bottom, or the brand buckets above them.
+//
+// A row can qualify for more than one, so the order is fixed. Completed is
+// checked first because closed is the more final fact: an issue you dismissed
+// and then closed belongs under Completed, not No design.
+function sectionOf(r) {
+  if (r.linear_state === 'completed' || r.linear_state === 'canceled') return 'completed';
+  if (r.dismissed_at) return 'nodesign';
+  return 'board';
+}
+
+// True for the rows that make up the board proper — everything that is not
+// collapsed away. Counts use this, so dismissing a card drops it out of the
+// topbar total, its brand header and the waiting badges.
+function isOpen(r) {
+  return sectionOf(r) === 'board';
+}
+
 // Which of the three per-brand buckets a session belongs in.
 // linear_state is null on rows written before the Piece 4 columns existed;
 // those read as Queued rather than disappearing.
@@ -19,8 +38,9 @@ function bucketOf(r) {
 
 // Waiting AND triggered. The reader writes every new row as 'waiting', so
 // status alone would light up every untriggered card as a decision.
+// A dismissed or closed card needs nothing, whatever its status says.
 function needsDecision(r) {
-  return r.status === 'waiting' && !!r.triggered_at;
+  return r.status === 'waiting' && !!r.triggered_at && isOpen(r);
 }
 
 // Research / Design / QA / Waiting on me

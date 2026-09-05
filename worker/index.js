@@ -110,6 +110,9 @@ async function readLinear(env) {
 
     const detail = (issue.description || '').slice(0, 300) || null;
     const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
+    // An issue can arrive already labelled no-design, dismissed in Linear
+    // before the Hub ever saw it.
+    const dismissedAt = hasNoDesign(issue) ? nowStamp() : null;
 
     // Upsert rather than skip. Rows written before the Piece 4 columns existed
     // have no linear_uuid, and without it the trigger button has nothing to
@@ -127,8 +130,8 @@ async function readLinear(env) {
     await env.DB.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,
-          linear_id, team, linear_uuid, linear_state, title)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          linear_id, team, linear_uuid, linear_state, title, dismissed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          project      = COALESCE(agent_sessions.project, excluded.project),
          track        = COALESCE(agent_sessions.track, excluded.track),
@@ -138,6 +141,11 @@ async function readLinear(env) {
          linear_uuid  = excluded.linear_uuid,
          linear_state = excluded.linear_state,
          title        = excluded.title,
+         -- COALESCE, so a read can only ever ADD a dismissal, never clear one.
+         -- A dismissed card cannot be resurrected onto the board by the cron
+         -- if the label mutation has not propagated yet. Un-dismissing is the
+         -- Hub's Undo control, which removes the label first.
+         dismissed_at = COALESCE(agent_sessions.dismissed_at, excluded.dismissed_at),
          updated_at   = datetime('now')`
     ).bind(
       'linear/' + issue.identifier,
@@ -153,12 +161,69 @@ async function readLinear(env) {
       teamName,
       issue.id,
       linearState || null,
-      issue.title
+      issue.title,
+      dismissedAt
     ).run();
     if (existing) { updated++; } else { inserted++; }
   }
 
-  return { inserted, updated, skipped };
+  const reconciled = await reconcileTracked(env);
+  return { inserted, updated, skipped, reconciled };
+}
+
+// ─── RECONCILIATION PASS ───────────────────────────
+// The discovery query above asks only for backlog and unstarted issues. It
+// cannot ask for completed and canceled too: `first: 100` is a fixed budget,
+// and closed issues would eat it, silently starving the board of real work.
+//
+// So this second pass looks up only the issues already tracked, by their
+// Linear ids. Bounded by the number of rows we hold, update-only, never
+// inserts. That gives Completed the right meaning — work that passed through
+// this board and is now closed, not every issue ever finished — and it also
+// picks up labels applied directly in Linear.
+async function reconcileTracked(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, linear_uuid FROM agent_sessions WHERE linear_uuid IS NOT NULL`
+  ).all();
+  const rows = results || [];
+  if (!rows.length) return 0;
+
+  const byUuid = new Map(rows.map(r => [r.linear_uuid, r.id]));
+  const q = `query Reconcile($ids: [ID!]) {
+    issues(first: 250, filter: { id: { in: $ids } }) {
+      nodes { id state { type } labels { nodes { name } } }
+    }
+  }`;
+  const r = await linearGraphQL(env, q, { ids: [...byUuid.keys()] });
+  if (r.error) return 0;
+
+  const nodes = (r.data && r.data.issues && r.data.issues.nodes) || [];
+  let changed = 0;
+  for (const issue of nodes) {
+    const id = byUuid.get(issue.id);
+    if (!id) continue;
+    const state = issue.state && issue.state.type;
+    const dismissedAt = hasNoDesign(issue) ? nowStamp() : null;
+    await env.DB.prepare(
+      `UPDATE agent_sessions
+       SET linear_state = COALESCE(?, linear_state),
+           dismissed_at = COALESCE(dismissed_at, ?),
+           updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(state || null, dismissedAt, id).run();
+    changed++;
+  }
+  return changed;
+}
+
+// Does the issue carry the no-design label?
+function hasNoDesign(issue) {
+  const labels = (issue.labels && issue.labels.nodes) || [];
+  return labels.some(l => l.name === 'no-design');
+}
+
+function nowStamp() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
 // ─── LINEAR LABEL TRIGGER ──────────────────────────
@@ -216,6 +281,13 @@ async function requireHuman(request, env) {
   return err('Forbidden — no valid Access identity', 403);
 }
 
+async function removeLabelFromIssue(env, issueId, labelId) {
+  const m = `mutation($issueId: String!, $labelId: String!) {
+    issueRemoveLabel(id: $issueId, labelId: $labelId) { success }
+  }`;
+  return linearGraphQL(env, m, { issueId, labelId });
+}
+
 async function route(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -264,7 +336,7 @@ async function route(request, env) {
     }
 
     // GET /api/agent/session/:id — agent polls for the human's response
-    if (method === 'GET' && path.startsWith('/api/agent/session/') && !path.includes('/trigger') && !path.includes('/reassign') && !path.includes('/respond')) {
+    if (method === 'GET' && path.startsWith('/api/agent/session/') && !path.includes('/trigger') && !path.includes('/reassign') && !path.includes('/respond') && !path.includes('/dismiss')) {
       const id = decodeURIComponent(path.slice('/api/agent/session/'.length));
       if (!id) return err('session_id required');
       const row = await env.DB.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(id).first();
@@ -300,6 +372,48 @@ async function route(request, env) {
          WHERE id = ?`
       ).bind(id).run();
       return json({ ok: true, labels: labelNames });
+    }
+
+    // POST /api/agent/session/:id/dismiss — "this needs no design".
+    // Applies the no-design label, same mechanism as trigger, and records the
+    // dismissal locally so the card moves immediately rather than waiting for
+    // the next cron read.
+    //
+    // DELETE undoes it. Order matters: the label comes off in Linear first,
+    // and dismissed_at is only cleared if that succeeded. Clearing first would
+    // put a card back on the board still carrying the label, and the next
+    // reconciliation would dismiss it again — a card that flickers.
+    if (path.match(/^\/api\/agent\/session\/[^/]+\/dismiss$/) &&
+        (method === 'POST' || method === 'DELETE')) {
+      const id = decodeURIComponent(path.split('/')[4]);
+      const row = await env.DB.prepare(
+        `SELECT linear_uuid FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!row) return err('not found', 404);
+      if (!row.linear_uuid) return err('session has no linked Linear issue');
+
+      const labelId = await getLabelId(env, 'no-design');
+      if (!labelId) return err('Linear label "no-design" not found', 502);
+
+      if (method === 'POST') {
+        const res = await addLabelToIssue(env, row.linear_uuid, labelId);
+        if (res.error) return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+        await env.DB.prepare(
+          `UPDATE agent_sessions
+           SET dismissed_at = COALESCE(dismissed_at, datetime('now')),
+               updated_at = datetime('now')
+           WHERE id = ?`
+        ).bind(id).run();
+        return json({ ok: true, dismissed: true });
+      }
+
+      const res = await removeLabelFromIssue(env, row.linear_uuid, labelId);
+      if (res.error) return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+      await env.DB.prepare(
+        `UPDATE agent_sessions SET dismissed_at = NULL, updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(id).run();
+      return json({ ok: true, dismissed: false });
     }
 
     // PATCH /api/agent/session/:id/reassign — manual brand/track correction

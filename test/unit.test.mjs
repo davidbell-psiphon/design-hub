@@ -23,7 +23,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 // hands back the functions with no DOM stub at all.
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
-const { bucketOf, needsDecision, stageLabel, key, timeAgo } = board;
+const { bucketOf, sectionOf, isOpen, needsDecision, stageLabel, key, timeAgo } = board;
 
 // Shorthand for a Linear issue as the reader sees it.
 const issue = (team, extra = {}) => ({ team: team ? { name: team } : null, ...extra });
@@ -136,6 +136,43 @@ describe('bucketOf — In flight / Queued / Backlog', () => {
   });
 });
 
+describe('sectionOf — board vs the collapsed sections', () => {
+  test('an ordinary row belongs on the board', () => {
+    assert.equal(sectionOf({ linear_state: 'backlog' }), 'board');
+    assert.equal(sectionOf({ linear_state: 'unstarted', triggered_at: '2026-09-05 01:00:00' }), 'board');
+    assert.equal(sectionOf({}), 'board');
+  });
+
+  test('a dismissed row goes to No design', () => {
+    assert.equal(sectionOf({ dismissed_at: '2026-09-05 01:00:00', linear_state: 'backlog' }), 'nodesign');
+  });
+
+  test('completed and canceled both go to Completed', () => {
+    assert.equal(sectionOf({ linear_state: 'completed' }), 'completed');
+    assert.equal(sectionOf({ linear_state: 'canceled' }), 'completed');
+  });
+
+  test('closed beats dismissed — the more final fact wins', () => {
+    assert.equal(
+      sectionOf({ linear_state: 'completed', dismissed_at: '2026-09-05 01:00:00' }),
+      'completed');
+  });
+
+  test('dismissed beats in flight', () => {
+    // Dismissing something already triggered should still file it away.
+    assert.equal(
+      sectionOf({ dismissed_at: '2026-09-05 01:00:00', triggered_at: '2026-09-05 00:00:00' }),
+      'nodesign');
+  });
+
+  test('isOpen is true only for board rows', () => {
+    assert.equal(isOpen({ linear_state: 'backlog' }), true);
+    assert.equal(isOpen({ dismissed_at: '2026-09-05 01:00:00' }), false);
+    assert.equal(isOpen({ linear_state: 'completed' }), false);
+    assert.equal(isOpen({ linear_state: 'canceled' }), false);
+  });
+});
+
 describe('needsDecision — waiting AND triggered', () => {
   test('waiting and triggered counts', () => {
     assert.equal(needsDecision({ status: 'waiting', triggered_at: '2026-09-04 22:00:00' }), true);
@@ -153,6 +190,21 @@ describe('needsDecision — waiting AND triggered', () => {
 
   test('done never counts', () => {
     assert.equal(needsDecision({ status: 'done', triggered_at: '2026-09-04 22:00:00' }), false);
+  });
+
+  test('a dismissed row needs nothing, whatever its status says', () => {
+    // Otherwise dismissing a waiting card would leave an amber badge pointing
+    // at a brand with no visible card under it.
+    assert.equal(needsDecision({
+      status: 'waiting', triggered_at: '2026-09-04 22:00:00',
+      dismissed_at: '2026-09-05 01:00:00',
+    }), false);
+  });
+
+  test('a completed row needs nothing', () => {
+    assert.equal(needsDecision({
+      status: 'waiting', triggered_at: '2026-09-04 22:00:00', linear_state: 'completed',
+    }), false);
   });
 });
 

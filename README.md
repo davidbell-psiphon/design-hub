@@ -59,6 +59,19 @@ Brand colours:
 A session whose brand could not be derived lands in an **Unassigned** section
 rather than disappearing; the "Move to…" select on the card is how it gets home.
 
+Two collapsed sections sit at the foot of the board, each showing a count and
+expanding on one click. Both are collapsed on every load, and rows in either
+one leave the brand buckets, the brand counts, the topbar total, the waiting
+badges and the in-flight panel.
+
+| Section | What is in it |
+|---|---|
+| **No design** | Cards carrying the `no-design` label. Un-dismissable from there. |
+| **Completed** | Issues whose Linear state is completed or canceled |
+
+`no-research` cards stay on the main board: that label means "skip research, go
+straight to mockup", which is active work still heading for the human gate.
+
 The sidebar filters the board to one brand. "All brands" is the default on every
 load and the filter is never persisted — the Hub always opens showing
 everything. On narrow screens the sidebar is a hamburger drawer, the in-flight
@@ -77,6 +90,7 @@ tap instead of a trip into Linear.
 | `design-ai:go` | Start work — research, then design |
 | `design-ai:qa` | Human gate passed, run QA |
 | `no-research` | Skip research, mock up from the description only |
+| `no-design` | Not design work at all — collapses the card into No design |
 
 `no-research` is a toggle on the card, applied alongside `design-ai:go`. All
 three labels are workspace-level in Linear, so one name resolves to one id.
@@ -92,7 +106,25 @@ per issue.
 
 It refreshes only Linear-owned fields, so a re-read never resets an in-flight
 session or undoes a manual brand reassignment. Run it on demand with
-`POST /api/read-linear`.
+`POST /api/read-linear` (which now needs `X-Agent-Secret`, since Access is on).
+
+The reader runs **two passes**:
+
+1. **Discovery** — backlog and unstarted issues; inserts and updates.
+2. **Reconciliation** — the issues already tracked, looked up by their Linear
+   ids; update-only, never inserts. This is what fills in completed and
+   canceled states, and it picks up `no-design` labels applied directly in
+   Linear.
+
+The second pass exists because the discovery query has a fixed `first: 100`
+budget. Widening it to include closed issues would let them consume that
+budget and silently starve the board of real work.
+
+**A dismissal can never be undone by a cron run.** `dismissed_at` is written
+with `COALESCE(agent_sessions.dismissed_at, excluded.dismissed_at)`, so a read
+can only ever add a dismissal. The deliberate consequence: removing the
+`no-design` label in Linear does **not** put the card back — the Hub's Undo
+control is the only way, and it removes the label before clearing the column.
 
 ---
 
@@ -112,6 +144,8 @@ Used by the board:
 | `GET /api/brands` | Brand id, name, colour |
 | `GET /api/agent/sessions` | Every session, waiting first |
 | `POST /api/agent/session/:id/trigger` | Apply `design-ai:go` or `design-ai:qa` (`{"action","noResearch"}`) |
+| `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
+| `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
 | `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt |
 | `DELETE /api/agent/session/:id` | Drop a session |
@@ -209,6 +243,10 @@ non-Latin1 input, and Access JWT verification against tokens the test signs
 itself — valid, expired, wrong `aud`, wrong issuer, unknown key, `alg:none`,
 tampered payload, cookie fallback, unreachable certs endpoint.
 
+**`test/render.test.mjs`** runs the board's own JS against a stub DOM and
+fabricated rows, covering what pure functions cannot: that a dismissed or
+closed card actually leaves the brand buckets, the counts and the badges.
+
 **`test/smoke.test.mjs`** hits production and is read-only. Its one non-GET
 case sends a deliberately invalid `action`, which the Worker rejects before it
 reads the database and long before it calls Linear, against a session id that
@@ -236,6 +274,7 @@ agent-schema.sql               agent_sessions
 reader-schema.sql              linear_id, team
 track-schema.sql               track
 piece4-schema.sql              linear_uuid, linear_state, triggered_at, figma_url, title
+piece5-schema.sql              dismissed_at (no-design)
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL
 lib/derive.mjs                 brand + track derivation, shared and testable
 lib/access.mjs                 Access JWT verification
