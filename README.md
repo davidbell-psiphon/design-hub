@@ -148,7 +148,7 @@ forward browser cookies, and never sends `X-Agent-Secret`.
 | Caller | How it authenticates |
 |---|---|
 | The board (browser) | Access session, JWT forwarded by the Pages Function |
-| The design-ai agent | `X-Agent-Secret`, plus an Access service token once Access is on |
+| The design-ai agent | `X-Agent-Secret` (see below), plus an Access service token |
 | The Wednesday/Friday cron | Neither — scheduled runs never traverse the HTTP edge |
 
 The Worker verifies the Access JWT itself: signature against
@@ -162,8 +162,30 @@ ship before the dashboard configuration existed. Setting both turns the gate on
 for every route except `POST /api/agent/session`, which checks its own secret.
 See DEPLOY.md for the remaining dashboard steps.
 
-Until then the previously-noted gap stands: trigger, reassign and respond are
-reachable by anyone with the Worker URL.
+**Enforcement is live.** Both secrets are set, so an anonymous request to any
+board route returns `403 Forbidden — no valid Access identity`. The board reaches
+the API through the Pages proxy, which forwards the Access JWT.
+
+### When you wire the agent to write session state back
+
+Today the design-ai agent makes no HTTP call to the Hub at all — it reads Linear
+over MCP and reads the repo directly. That is why turning enforcement on broke
+nothing, and why `GET /api/agent/session/:id` returning 403 to an anonymous
+caller is harmless right now.
+
+When the agent does start posting state, it needs **`X-Agent-Secret`** on every
+call:
+
+```
+POST /api/agent/session      exempt from the Access gate, checks the secret itself
+GET  /api/agent/session/:id  goes through the gate — accepts a valid Access JWT
+                             OR X-Agent-Secret, so send the header here too
+```
+
+The poll route is the easy one to miss: it works today for a browser and will
+return 403 to the agent unless the header is sent. If the Worker is also put
+behind its own Access application, the agent additionally needs the service
+token headers (`CF-Access-Client-Id` / `CF-Access-Client-Secret`).
 
 ---
 

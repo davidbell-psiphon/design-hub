@@ -47,8 +47,13 @@ async function call(base, path, init = {}) {
 // The Location header is the reliable signal: with redirect:'manual' the body
 // is usually empty.
 function blockedByAccess(res) {
-  return (res.status === 301 || res.status === 302) &&
-    /cloudflareaccess\.com/.test(res.location + res.body);
+  // Access itself, in front of the hostname: a redirect to the login page.
+  if ((res.status === 301 || res.status === 302) &&
+      /cloudflareaccess\.com/.test(res.location + res.body)) return true;
+  // The Worker's own gate, once ACCESS_AUD and ACCESS_TEAM are set. Matched on
+  // the specific message rather than on 403 alone, so a genuine authorization
+  // failure somewhere else still fails the test instead of skipping it.
+  return res.status === 403 && /no valid Access identity/.test(res.body);
 }
 
 const NEED_TOKEN =
