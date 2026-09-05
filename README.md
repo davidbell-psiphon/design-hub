@@ -167,6 +167,42 @@ reachable by anyone with the Worker URL.
 
 ---
 
+## Tests
+
+```bash
+node --test                      # everything: unit + production smoke
+node --test test/unit.test.mjs   # unit only, no network
+```
+
+No dependencies and no install — `node:test` and `node:assert`, run from the
+repo root. (`node --test test/` fails on some Node versions; bare `node --test`
+auto-discovers.)
+
+**`test/unit.test.mjs`** covers the logic that has already broken something:
+brand derivation in both layers (`deriveBrand`'s team map and `detectBrand`'s
+keyword fallback, including `Websites` and `Marketing` falling through to
+Unassigned), track derivation, bucketing with a null `linear_state`, the
+waiting-AND-triggered predicate, the element-id hash on em dashes and
+non-Latin1 input, and Access JWT verification against tokens the test signs
+itself — valid, expired, wrong `aud`, wrong issuer, unknown key, `alg:none`,
+tampered payload, cookie fallback, unreachable certs endpoint.
+
+**`test/smoke.test.mjs`** hits production and is read-only. Its one non-GET
+case sends a deliberately invalid `action`, which the Worker rejects before it
+reads the database and long before it calls Linear, against a session id that
+does not exist. It also asserts that every reader-written row has
+`linear_uuid`, `linear_state` and `title` — the "dead rows" regression, where
+rows written before those columns existed left every Trigger button a no-op.
+
+Once Access is enforcing, the smoke tests need a service token:
+
+```bash
+CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=... node --test
+```
+
+Without one they skip the blocked cases with a message rather than failing, so
+a green run never hides an Access misconfiguration as a broken endpoint.
+
 ## Layout
 
 ```
@@ -179,6 +215,10 @@ reader-schema.sql              linear_id, team
 track-schema.sql               track
 piece4-schema.sql              linear_uuid, linear_state, triggered_at, figma_url, title
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL
+lib/derive.mjs                 brand + track derivation, shared and testable
+lib/access.mjs                 Access JWT verification
+frontend/board-logic.js        pure board logic (bucketing, staging, hashing)
+test/                          node:test suites — see Tests above
 DEPLOY.md                      how to deploy
 ```
 
