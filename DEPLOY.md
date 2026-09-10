@@ -36,12 +36,19 @@ npx wrangler d1 execute design-hub --remote --file=./track-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece4-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece5-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece6-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece7-schema.sql
 ```
 
 Every piece up to and including `piece5-schema.sql` is already applied to the
 live database. They are additive (`ALTER TABLE` / `CREATE INDEX IF NOT
 EXISTS`), so re-running one fails on the duplicate column rather than
 destroying anything.
+
+**`piece7-schema.sql` goes first, before `npx wrangler deploy`.** It adds
+`requested_stage`, `requested_at` and `labels`. The new Worker writes all three
+on every read and every trigger, and the board reads `labels` to decide which
+column a card is in — deploy against a database without them and the reader
+throws and the board renders every card under Backlog.
 
 **`piece6-schema.sql` goes first, before `npx wrangler deploy`.** It adds
 `agent_session_id`, which the new Worker reads on every session route — deploy
@@ -67,15 +74,30 @@ the hour to `0 14` if that matters. `npx wrangler deploy` applies cron changes.
 
 ## Linear labels
 
-The trigger applies labels by name, taking the first match, so each must exist
-exactly once at **workspace level** — a team-scoped duplicate would hand the
-mutation an id from the wrong team.
+Labels are applied by name, taking the first match, so each must exist exactly
+once at **workspace level** — a team-scoped duplicate would hand the mutation an
+id from the wrong team.
+
+Three of them are written by `POST /api/agent/stage-done` when a stage
+completes, and must exist before the first run reports back:
+
+| Label | Written when |
+|---|---|
+| `AI-research done` | the research agent finishes |
+| `AI-design done` | the design agent finishes |
+| `AI-QA done` | QA finishes |
+
+Two are Dave's own, and already exist:
 
 | Label | Id |
 |---|---|
-| `design-ai:go` | `fb951ac2-96c5-4006-af3b-c20392cd115e` |
-| `design-ai:qa` | `a6b89043-5824-4ad5-83b8-4192878d9e82` |
 | `no-research` | `d058267a-a646-4069-850c-1e146de837a7` |
+| `no-design` | applied by the dismiss route |
+
+`design-ai:go` (`fb951ac2-96c5-4006-af3b-c20392cd115e`) and `design-ai:qa`
+(`a6b89043-5824-4ad5-83b8-4192878d9e82`) are retired. Nothing writes or reads
+them any more; strip them off the issues that carry them and archive both once
+the runner has stopped polling for `design-ai:go`.
 
 ---
 

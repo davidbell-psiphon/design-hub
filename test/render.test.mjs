@@ -21,19 +21,21 @@ const row = (o) => ({
   project: o.project || 'conduit', track: 'app', phase: 'research',
   status: o.status || 'waiting', title: o.title || o.linear_id,
   linear_state: o.linear_state === undefined ? 'backlog' : o.linear_state,
-  triggered_at: o.triggered_at || null, dismissed_at: o.dismissed_at || null,
+  labels: JSON.stringify(o.labels || []),
+  requested_stage: o.requested_stage || null,
+  dismissed_at: o.dismissed_at || null,
   linear_uuid: 'uuid-' + o.linear_id, url: 'https://linear.app/x',
 });
 
 const sessions = [
   row({ linear_id: 'CON-116' }),
   row({ linear_id: 'CON-118' }),
-  row({ linear_id: 'CON-120', triggered_at: '2026-09-05 01:00:00' }),
+  row({ linear_id: 'CON-120', requested_stage: 'research' }),
   row({ linear_id: 'CON-124', dismissed_at: '2026-09-05 02:00:00' }),
-  row({ linear_id: 'CON-125', dismissed_at: '2026-09-05 02:00:00', triggered_at: '2026-09-05 01:00:00' }),
+  row({ linear_id: 'CON-125', dismissed_at: '2026-09-05 02:00:00', requested_stage: 'research' }),
   row({ linear_id: 'WEB-271', linear_state: 'completed' }),
   row({ linear_id: 'WEB-272', linear_state: 'canceled', dismissed_at: '2026-09-05 02:00:00' }),
-  row({ linear_id: 'RYV-187', project: 'ryve' }),
+  row({ linear_id: 'RYV-187', project: 'ryve', labels: ['AI-research done'] }),
 ];
 
 function stubEl() {
@@ -110,7 +112,7 @@ describe('drawer rows leave the board proper', () => {
   });
 
   test('the topbar counts open rows only', () => {
-    assert.equal(topbar, '1 waiting on you · 4 open');
+    assert.equal(topbar, '1 running · 4 open');
   });
 
   test('the brand header counts open rows only', () => {
@@ -118,69 +120,79 @@ describe('drawer rows leave the board proper', () => {
     assert.match(drawers.above, /brand-name">Conduit<[\s\S]{0,400}?<span>3 open<\/span>/);
   });
 
-  test('a dismissed waiting row does not leave an amber badge behind', () => {
-    // CON-120 is the only genuine decision; CON-125 is waiting but dismissed.
+  test('a dismissed running row does not leave a badge behind', () => {
+    // CON-120 is the only run in flight; CON-125 is queued but dismissed.
     assert.equal((sidebar.match(/class="sb-badge waiting/g) || []).length, 2); // All brands + Conduit
     assert.match(sidebar, /sb-badge waiting">1</);
   });
 });
 
-describe('the card keeps the agent prose collapsed', () => {
-  // What the board was drowning in: an agent session carrying a paragraph of
-  // prompt and a paragraph of detail on every card.
+describe('the card shows no agent prose', () => {
+  // What the board used to drown in: an agent session carrying a paragraph of
+  // prompt and a paragraph of detail on every card. Dave reads the research as
+  // a comment on the Linear issue; the Hub shows none of it.
   const PROMPT = 'Two directions for the wallet header.\n\n' + 'A keeps the balance card. '.repeat(12);
   const DETAIL = 'Research notes.\n\n' + 'The current header stacks three rows. '.repeat(14);
   const wordy = () => sessionCard({
     ...row({ linear_id: 'RYV-84', project: 'ryve', title: 'Wallet header',
-             triggered_at: '2026-09-09 09:00:00' }),
+             labels: ['AI-research done'] }),
     phase: 'research', status: 'waiting', prompt: PROMPT, detail: DETAIL,
+    response: 'Direction B', responded_at: '2026-09-09 10:00:00',
   });
 
-  // The card outside the disclosure. Inside it, the peek line is visible too —
-  // that is the two-line clamp — but the paragraphs behind it are not.
-  const shown = html => html.slice(0, html.indexOf('<details')) +
-                        html.slice(html.indexOf('</details>'));
-
-  test('no prose is rendered outside the disclosure', () => {
+  test('none of the prompt, detail or answer reaches the card', () => {
     const html = wordy();
-    assert.equal(shown(html).includes('Research notes.'), false, 'detail is on the card');
-    assert.equal(shown(html).includes('A keeps the balance card.'), false,
-                 'the body of the prompt is on the card');
+    assert.equal(html.includes('Research notes.'), false, 'detail is on the card');
+    assert.equal(html.includes('A keeps the balance card.'), false, 'the prompt is on the card');
+    assert.equal(html.includes('Direction B'), false, 'the answer is on the card');
   });
 
-  test('the card still shows the issue, the gate, the status and the controls', () => {
-    const html = shown(wordy());
+  test('no disclosure and no reply box are rendered at all', () => {
+    const html = wordy();
+    assert.equal(html.includes('<details'), false, 'the prose disclosure came back');
+    assert.equal(html.includes('agent-reply'), false, 'the reply box came back');
+    assert.equal(html.includes('respondAgent'), false, 'the reply handler came back');
+  });
+
+  test('the card shows the issue, the stage and the one action', () => {
+    const html = wordy();
     assert.ok(html.includes('>RYV-84<'), 'no issue id');
     assert.ok(html.includes('>Wallet header<'), 'no issue title');
-    assert.match(html, /class="stage-pill[^"]*">Research</);
-    assert.match(html, /class="status-pill[^"]*">Waiting on you</);
-    assert.ok(html.includes('respondAgent'), 'no action controls');
+    assert.match(html, /class="stage-pill">Researched</);
+    assert.match(html, /triggerSession\('[^']+', 'design'/);
+    assert.ok(html.includes('Run Design'), 'no stage button');
+  });
+});
+
+describe('the four stage columns', () => {
+  const heading = (name) => new RegExp('bucket-label">' + name + '<');
+
+  test('all four render, in order', () => {
+    const order = ['Backlog', 'Researched', 'AI-designed', 'QA&#39;d'];
+    const labels = [...drawers.above.matchAll(/bucket-label">([^<]+)</g)].map(m => m[1]);
+    // One set per brand section; every set is the same four in the same order.
+    assert.ok(labels.length >= 4, 'no buckets rendered');
+    assert.deepEqual(labels.slice(0, 4), ['Backlog', 'Researched', 'AI-designed', "QA'd"]);
   });
 
-  test('the full text is behind the disclosure, whole and untruncated', () => {
-    const html = wordy();
-    const details = html.slice(html.indexOf('<details'), html.indexOf('</details>'));
-    assert.ok(details.includes('notes-peek'), 'no clamped peek line');
-    assert.ok(details.includes(PROMPT.trim().slice(-40)), 'the prompt is cut short');
-    assert.ok(details.includes(DETAIL.trim().slice(-40)), 'the detail is cut short');
+  test('a card sits in the column its labels say', () => {
+    // RYV-187 carries AI-research done, so it belongs under Researched.
+    const ryve = drawers.above.slice(drawers.above.indexOf('brand-name">Ryve<'));
+    const researched = ryve.slice(ryve.indexOf('bucket-label">Researched<'));
+    assert.ok(researched.includes('>RYV-187<'), 'RYV-187 is not under Researched');
   });
 
-  test('the disclosure is closed on every render', () => {
-    assert.equal(/<details class="session-notes"[^>]*\bopen\b/.test(wordy()), false);
+  test('every open card offers exactly one stage button', () => {
+    const open = drawers.above;
+    const buttons = (open.match(/btn btn-primary/g) || []).length;
+    assert.equal(buttons, 4, 'expected one primary button per open card');
   });
 
-  test('a card with nothing to say renders no disclosure at all', () => {
-    const html = sessionCard(row({ linear_id: 'CON-116' }));
-    assert.equal(html.includes('<details'), false);
-  });
-
-  test('the answer the human gave is kept with the question', () => {
-    const html = sessionCard({
-      ...row({ linear_id: 'RYV-84', status: 'active', triggered_at: '2026-09-09 09:00:00' }),
-      prompt: PROMPT, response: 'Direction B', responded_at: '2026-09-09 10:00:00',
-    });
-    assert.ok(html.slice(html.indexOf('<details')).includes('Direction B'));
-    assert.equal(shown(html).includes('Direction B'), false);
+  test('a card with a run in flight shows a disabled Working button', () => {
+    const html = sessionCard(row({ linear_id: 'CON-120', requested_stage: 'research' }));
+    assert.match(html, /btn btn-primary" disabled>Working/);
+    assert.equal(html.includes("triggerSession('linear/CON-120'"), false,
+                 'a running card must not be clickable');
   });
 });
 
@@ -196,7 +208,7 @@ describe('controls per section', () => {
     assert.equal(drawers.completed.includes('dismissSession'), false);
   });
 
-  test('untriggered board cards offer the No design control', () => {
+  test('board cards offer the No design control', () => {
     assert.ok(drawers.above.includes('dismissSession'));
   });
 });

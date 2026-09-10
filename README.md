@@ -35,28 +35,41 @@ repo. The Hub links out to both and owns neither.
 ## The board
 
 One scrolling surface. Every brand, stacked, always — that is the point. Within
-each brand, three buckets in this order:
+each brand, four columns, in the order work moves through them:
 
-| Bucket | What is in it |
-|---|---|
-| **In flight** | Triggered; an agent is working, or it is waiting on a decision |
-| **Queued** | In Linear Todo, not yet triggered |
-| **Backlog** | Candidates |
+| Column | What is in it | The card's button |
+|---|---|---|
+| **Backlog** | Nothing has been run yet | **Run Research** |
+| **Researched** | The research agent has finished | **Run Design** |
+| **AI-designed** | The design agent has finished | **Run QA** |
+| **QA'd** | Checked | — |
+
+**Which column a card is in comes from what the agent finished, never from when
+you clicked.** It is read from the Linear labels the system writes at the end of
+each stage — see [The trigger](#the-trigger). That was the old board's central
+mistake: it bucketed on `triggered_at`, which is set the instant you press a
+button, so a card that finished two days ago looked identical to one requested
+ten seconds ago.
 
 Each card carries its brand colour on the card itself, and shows the Linear ID
-and title, the gate or phase and the status as two short badges, the track (app
-or website), links out to Linear and Figma, and — the most important signal —
-whether it needs a decision.
+and title, the stage, the track (app or website), links out to Linear and Figma,
+and exactly one button — the next stage to run. **Every open card short of the
+last stage has one.** A card that renders no action at all was the old board's
+other failure: actions were picked by a chain of conditions on `status`, and a
+row whose status matched no branch fell through to nothing.
+
+While a run is in flight the same button is disabled and reads "Working…", and
+a small amber pill says so. Those are the only two pills a card shows — running,
+and errored. Everything quiet shows just its stage.
+
+**The card shows no agent prose.** No prompt, no detail, no answer. The agent's
+research is a comment on the Linear issue and is read there; the Hub is a
+launcher and a status board, not a place to have a conversation. Pressing the
+next stage's button *is* how you say "proceed" — there is no typed reply.
 
 **One Linear issue is one card.** Whatever the agent is doing to it shows as
 state on that card; a new phase never adds a row. See
 [One card per issue](#one-card-per-issue).
-
-Everything the agent wrote in prose — the prompt, the detail behind it, the
-answer that was given — sits behind one disclosure on the card, showing two
-clamped lines with a **More** control. Cards were rendering whole paragraphs
-inline, which is what made the board unreadable; nothing is truncated, it is
-one click away.
 
 Brand colours:
 
@@ -72,7 +85,7 @@ rather than disappearing; the "Move to…" select on the card is how it gets hom
 
 Two collapsed sections sit at the foot of the board, each showing a count and
 expanding on one click. Both are collapsed on every load, and rows in either
-one leave the brand buckets, the brand counts, the topbar total, the waiting
+one leave the brand buckets, the brand counts, the topbar total, the running
 badges and the in-flight panel.
 
 | Section | What is in it |
@@ -81,7 +94,8 @@ badges and the in-flight panel.
 | **Completed** | Issues whose Linear state is completed or canceled |
 
 `no-research` cards stay on the main board: that label means "skip research, go
-straight to mockup", which is active work still heading for the human gate.
+straight to mockup", and a Backlog card carrying it offers **Run Design**
+instead of Run Research.
 
 The sidebar filters the board to one brand. "All brands" is the default on every
 load and the filter is never persisted — the Hub always opens showing
@@ -92,19 +106,45 @@ panel moves below the board, and every control is a 44px tap target.
 
 ## The trigger
 
-Pressing **Trigger** applies the Linear label `design-ai:go` to that issue. That
-is the whole mechanism — the agent watches for the label. The Hub makes it one
-tap instead of a trip into Linear.
+Pressing a stage button writes a request into the Hub's own database —
+`requested_stage` on that row — and applies no Linear label at all. The runner
+asks the Hub what has been requested (`GET /api/agent/queue`), does the work,
+and reports back (`POST /api/agent/stage-done`). The Hub then writes the record
+label and clears the queue entry.
+
+This used to work the other way round: the button applied a `design-ai:go`
+label and the runner polled Linear looking for it. Linear was the message bus
+between the button and the agent, which is why board state was scattered across
+two systems and why control labels kept appearing in Dave's own workflow.
+
+### The labels
+
+Two kinds, and the difference is the whole point.
+
+**Written by the system, read by the board.** These are the record of what has
+been done. Dave never applies one and nothing triggers off them:
+
+| Label | Written when |
+|---|---|
+| `AI-research done` | the research agent finishes |
+| `AI-design done` | the design agent finishes |
+| `AI-QA done` | QA finishes |
+
+Keeping the stage in Linear rather than in a Hub-only column means the board
+cannot drift out of sync with the issue, and rebuilds itself correctly from a
+single read if the database is ever lost.
+
+**Applied by Dave, read by the board.** These are decisions only he can make:
 
 | Label | Meaning |
 |---|---|
-| `design-ai:go` | Start work — research, then design |
-| `design-ai:qa` | Human gate passed, run QA |
-| `no-research` | Skip research, mock up from the description only |
+| `no-research` | Skip research — a Backlog card offers Run Design instead |
 | `no-design` | Not design work at all — collapses the card into No design |
 
-`no-research` is a toggle on the card, applied alongside `design-ai:go`. All
-three labels are workspace-level in Linear, so one name resolves to one id.
+All of them are workspace-level in Linear, so one name resolves to one id.
+
+`design-ai:go` and `design-ai:qa` are retired. Nothing writes them and nothing
+reads them.
 
 ---
 
@@ -112,8 +152,11 @@ three labels are workspace-level in Linear, so one name resolves to one id.
 
 Runs Wednesday and Friday at 8am Toronto (`0 13 * * 3,5`), because design issues
 get created Tuesdays and Thursdays. It pulls every Linear issue assigned to Dave
-Bell, across all teams, in Backlog or Todo, and upserts one `agent_sessions` row
-per issue.
+Bell, in Backlog or Todo, on a **design team** — Conduit App, Ryve App, Psiphon
+App, Forge or Websites — and upserts one `agent_sessions` row per issue. The
+team filter is what keeps Marketing and campaign work, which the Design AI puts
+explicitly out of scope, off a design board. It is a team filter and not a label
+one: gathering is still not triggering.
 
 It refreshes only Linear-owned fields, so a re-read never resets an in-flight
 session or undoes a manual brand reassignment. Run it on demand with
@@ -195,7 +238,9 @@ Used by the board:
 |---|---|
 | `GET /api/brands` | Brand id, name, colour |
 | `GET /api/agent/sessions` | Every session, waiting first |
-| `POST /api/agent/session/:id/trigger` | Apply `design-ai:go` or `design-ai:qa` (`{"action","noResearch"}`) |
+| `POST /api/agent/session/:id/trigger` | Queue a stage for the runner (`{"stage":"research"\|"design"\|"qa"}`) |
+| `GET /api/agent/queue` | What the runner reads — every row with a stage requested |
+| `POST /api/agent/stage-done` | The runner reports a finished stage (`{"linear_id","stage"}`) |
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
@@ -340,11 +385,12 @@ track-schema.sql               track
 piece4-schema.sql              linear_uuid, linear_state, triggered_at, figma_url, title
 piece5-schema.sql              dismissed_at (no-design)
 piece6-schema.sql              agent_session_id + the duplicate-row merge
+piece7-schema.sql              requested_stage / requested_at (the queue) + labels
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL
 lib/derive.mjs                 brand + track derivation, shared and testable
 lib/access.mjs                 Access JWT verification
 lib/session-id.mjs             the Linear key inside an agent session id
-frontend/board-logic.js        pure board logic (bucketing, staging, hashing)
+frontend/board-logic.js        pure board logic (stages, the card's action, hashing)
 test/                          node:test suites — see Tests above
 DEPLOY.md                      how to deploy
 ```

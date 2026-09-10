@@ -24,8 +24,12 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 // hands back the functions with no DOM stub at all.
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
-const { bucketOf, sectionOf, isOpen, needsDecision, stageLabel, phaseLabel,
-        statusLabel, notesOf, key, timeAgo } = board;
+const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
+        sectionOf, isOpen, key, timeAgo } = board;
+
+// A row as the reader writes it. `labels` is the JSON array the board reads to
+// decide a card's column.
+const rowWith = (...names) => ({ labels: JSON.stringify(names) });
 
 // Shorthand for a Linear issue as the reader sees it.
 const issue = (team, extra = {}) => ({ team: team ? { name: team } : null, ...extra });
@@ -117,24 +121,119 @@ describe('deriveBrand — team map first, keywords second', () => {
   });
 });
 
-describe('bucketOf — In flight / Queued / Backlog', () => {
-  test('backlog state goes to Backlog', () => {
-    assert.equal(bucketOf({ linear_state: 'backlog' }), 'backlog');
+describe('stageOf — which column a card is in', () => {
+  test('no labels means Backlog', () => {
+    assert.equal(stageOf(rowWith()), 'backlog');
+    assert.equal(stageOf({}), 'backlog');
+    assert.equal(stageOf({ labels: null }), 'backlog');
   });
 
-  test('unstarted (Todo) goes to Queued', () => {
-    assert.equal(bucketOf({ linear_state: 'unstarted' }), 'queued');
+  test('each done-label moves the card on', () => {
+    assert.equal(stageOf(rowWith('AI-research done')), 'researched');
+    assert.equal(stageOf(rowWith('AI-design done')), 'designed');
+    assert.equal(stageOf(rowWith('AI-QA done')), 'qa');
   });
 
-  test('null linear_state goes to Queued, not nowhere', () => {
-    // The state the 8 pre-Piece-4 rows were in. They must still render.
-    assert.equal(bucketOf({ linear_state: null }), 'queued');
-    assert.equal(bucketOf({}), 'queued');
+  test('the most advanced label wins', () => {
+    // An issue that has been all the way through carries all three.
+    assert.equal(
+      stageOf(rowWith('AI-research done', 'AI-design done', 'AI-QA done')), 'qa');
+    assert.equal(stageOf(rowWith('AI-research done', 'AI-design done')), 'designed');
   });
 
-  test('triggered_at wins over any Linear state', () => {
-    assert.equal(bucketOf({ triggered_at: '2026-09-04 22:00:00', linear_state: 'backlog' }), 'inflight');
-    assert.equal(bucketOf({ triggered_at: '2026-09-04 22:00:00', linear_state: null }), 'inflight');
+  test("Dave's own labels do not move a card between columns", () => {
+    assert.equal(stageOf(rowWith('no-research')), 'backlog');
+    assert.equal(stageOf(rowWith('Design', 'no-design')), 'backlog');
+  });
+
+  test('malformed labels render as Backlog rather than throwing', () => {
+    // One bad row must not take the whole board down with it.
+    assert.equal(stageOf({ labels: 'not json' }), 'backlog');
+    assert.equal(stageOf({ labels: '{"a":1}' }), 'backlog');
+  });
+
+  test('an already-parsed array works too', () => {
+    assert.equal(stageOf({ labels: ['AI-design done'] }), 'designed');
+  });
+
+  test('stageName is what the column heading says', () => {
+    assert.equal(stageName('backlog'), 'Backlog');
+    assert.equal(stageName('researched'), 'Researched');
+    assert.equal(stageName('designed'), 'AI-designed');
+    assert.equal(stageName('qa'), "QA'd");
+  });
+
+  test('hasLabel', () => {
+    assert.equal(hasLabel(rowWith('no-research'), 'no-research'), true);
+    assert.equal(hasLabel(rowWith('no-research'), 'no-design'), false);
+    assert.equal(hasLabel({}, 'no-research'), false);
+  });
+});
+
+describe('actionFor — the one button a card offers', () => {
+  // Field by field, not deepEqual: these objects are built inside the vm
+  // context, so they are structurally right but never reference-equal.
+  const act = (r) => { const a = actionFor(r); return a && a.stage + '/' + a.label; };
+
+  test('backlog offers Research', () => {
+    assert.equal(act(rowWith()), 'research/Run Research');
+  });
+
+  test('no-research skips it straight to Design', () => {
+    // Dave applies this label in Linear himself: "this one needs no research".
+    assert.equal(act(rowWith('no-research')), 'design/Run Design');
+  });
+
+  test('researched offers Design', () => {
+    assert.equal(act(rowWith('AI-research done')), 'design/Run Design');
+  });
+
+  test('designed offers QA', () => {
+    assert.equal(act(rowWith('AI-design done')), 'qa/Run QA');
+  });
+
+  test('the final stage offers nothing', () => {
+    assert.equal(actionFor(rowWith('AI-QA done')), null);
+  });
+
+  test('every stage short of the last offers a button — no card renders empty', () => {
+    // This is the bug the four-column board replaced: a card whose status did
+    // not match any branch fell through and rendered with no actions at all.
+    for (const r of [rowWith(), rowWith('no-research'), rowWith('AI-research done'),
+                     rowWith('AI-design done')]) {
+      assert.ok(actionFor(r), 'expected an action for ' + r.labels);
+    }
+  });
+});
+
+describe('isWorking and statusPill', () => {
+  test('a queued request is working', () => {
+    assert.equal(isWorking({ requested_stage: 'research' }), true);
+  });
+
+  test('nothing queued is not working', () => {
+    assert.equal(isWorking({ requested_stage: null }), false);
+    assert.equal(isWorking({}), false);
+  });
+
+  test('the pill shows a run in progress', () => {
+    assert.equal(statusPill({ requested_stage: 'design' }).kind, 'working');
+  });
+
+  test('the pill shows an error', () => {
+    assert.equal(statusPill({ status: 'error' }).kind, 'error');
+  });
+
+  test('a quiet card gets no pill at all', () => {
+    // The stage is already on the card; repeating "Waiting" on every row was
+    // noise, and untriggered rows are all written 'waiting' by the reader.
+    assert.equal(statusPill({ status: 'waiting' }), null);
+    assert.equal(statusPill({ status: 'done' }), null);
+    assert.equal(statusPill({}), null);
+  });
+
+  test('working outranks a stale error', () => {
+    assert.equal(statusPill({ status: 'error', requested_stage: 'qa' }).kind, 'working');
   });
 });
 
@@ -172,129 +271,6 @@ describe('sectionOf — board vs the collapsed sections', () => {
     assert.equal(isOpen({ dismissed_at: '2026-09-05 01:00:00' }), false);
     assert.equal(isOpen({ linear_state: 'completed' }), false);
     assert.equal(isOpen({ linear_state: 'canceled' }), false);
-  });
-});
-
-describe('needsDecision — waiting AND triggered', () => {
-  test('waiting and triggered counts', () => {
-    assert.equal(needsDecision({ status: 'waiting', triggered_at: '2026-09-04 22:00:00' }), true);
-  });
-
-  test('waiting but never triggered does NOT count', () => {
-    // The bug: the reader writes every new row as 'waiting', so status alone
-    // lit up all 8 untriggered cards as decisions waiting on a human.
-    assert.equal(needsDecision({ status: 'waiting', triggered_at: null }), false);
-  });
-
-  test('triggered but not waiting does not count', () => {
-    assert.equal(needsDecision({ status: 'active', triggered_at: '2026-09-04 22:00:00' }), false);
-  });
-
-  test('done never counts', () => {
-    assert.equal(needsDecision({ status: 'done', triggered_at: '2026-09-04 22:00:00' }), false);
-  });
-
-  test('a dismissed row needs nothing, whatever its status says', () => {
-    // Otherwise dismissing a waiting card would leave an amber badge pointing
-    // at a brand with no visible card under it.
-    assert.equal(needsDecision({
-      status: 'waiting', triggered_at: '2026-09-04 22:00:00',
-      dismissed_at: '2026-09-05 01:00:00',
-    }), false);
-  });
-
-  test('a completed row needs nothing', () => {
-    assert.equal(needsDecision({
-      status: 'waiting', triggered_at: '2026-09-04 22:00:00', linear_state: 'completed',
-    }), false);
-  });
-});
-
-describe('stageLabel', () => {
-  test('waiting outranks the phase', () => {
-    assert.equal(stageLabel({ status: 'waiting', phase: 'design' }), 'Waiting on me');
-  });
-
-  test('qa is upper-cased as a unit', () => {
-    assert.equal(stageLabel({ status: 'active', phase: 'qa' }), 'QA');
-  });
-
-  test('other phases are capitalised', () => {
-    assert.equal(stageLabel({ status: 'active', phase: 'research' }), 'Research');
-  });
-
-  test('no phase renders an em dash', () => {
-    assert.equal(stageLabel({ status: 'active', phase: null }), '—');
-  });
-});
-
-describe('phaseLabel — the card badge for the gate or phase', () => {
-  test('the phase shows through, whatever the status is', () => {
-    // stageLabel hides the phase behind "Waiting on me"; the card needs both,
-    // so this one never overrides it.
-    assert.equal(phaseLabel({ status: 'waiting', phase: 'design' }), 'Design');
-  });
-
-  test('qa is upper-cased as a unit', () => {
-    assert.equal(phaseLabel({ status: 'active', phase: 'qa' }), 'QA');
-  });
-
-  test('an unfamiliar phase is shown as written — the Hub does not judge it', () => {
-    assert.equal(phaseLabel({ phase: 'copy-review' }), 'Copy-review');
-  });
-
-  test('no phase renders an em dash', () => {
-    assert.equal(phaseLabel({ status: 'active', phase: null }), '—');
-    assert.equal(phaseLabel({ phase: '   ' }), '—');
-  });
-});
-
-describe('statusLabel — the card badge for the status', () => {
-  test('a genuine decision says so', () => {
-    assert.equal(statusLabel({ status: 'waiting', triggered_at: '2026-09-09 09:00:00' }),
-                 'Waiting on you');
-  });
-
-  test('waiting but never triggered is not a decision, so it reads plainly', () => {
-    // Every row the reader writes is 'waiting'. Claiming each one waits on the
-    // human is exactly the noise the badge is there to avoid.
-    assert.equal(statusLabel({ status: 'waiting', triggered_at: null }), 'Waiting');
-  });
-
-  test('the other statuses are capitalised', () => {
-    assert.equal(statusLabel({ status: 'active' }), 'Active');
-    assert.equal(statusLabel({ status: 'done' }), 'Done');
-    assert.equal(statusLabel({ status: 'error' }), 'Error');
-  });
-
-  test('a missing status renders an em dash', () => {
-    assert.equal(statusLabel({}), '—');
-  });
-});
-
-describe('notesOf — what the card collapses', () => {
-  test('prompt first, then detail, then the answer', () => {
-    const notes = notesOf({ prompt: 'Which direction?', detail: 'Long context.',
-                            response: 'B', responded_at: null });
-    // Joined rather than deep-compared: these arrays come out of the vm
-    // context, so they are structurally right but not reference-equal.
-    assert.equal(notes.map(n => n.label).join(','), 'Prompt,Detail,Answered');
-    assert.equal(notes[0].text, 'Which direction?');
-    assert.equal(notes[1].text, 'Long context.');
-  });
-
-  test('nothing to say means no disclosure', () => {
-    assert.equal(notesOf({ title: 'CON-116' }).length, 0);
-  });
-
-  test('a detail identical to the prompt is not repeated', () => {
-    const notes = notesOf({ prompt: 'Same text', detail: 'Same text' });
-    assert.equal(notes.length, 1);
-  });
-
-  test('the text is handed over whole — clamping is the stylesheet\'s job', () => {
-    const long = 'x'.repeat(4000);
-    assert.equal(notesOf({ detail: long })[0].text.length, 4000);
   });
 });
 

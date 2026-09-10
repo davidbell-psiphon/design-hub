@@ -85,54 +85,20 @@
 
   /* SESSION CARD — the card itself carries the brand colour */
   .session-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); border-left-width: 3px; border-left-style: solid; }
-  .session-card.needs-decision { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
+  .session-card.is-working { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
   .session-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
   .session-id { font-size: 11px; font-family: var(--mono); color: var(--text-muted); }
   .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
   .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
-  .stage-pill.needs-decision { background: rgba(239,159,39,.18); color: #f0b84a; }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
   .status-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--border-strong); color: var(--text-muted); white-space: nowrap; }
-  .status-pill.needs-decision { border-color: rgba(239,159,39,.45); color: #f0b84a; }
+  .status-pill.status-working { border-color: rgba(239,159,39,.45); color: #f0b84a; }
   .status-pill.status-error { border-color: rgba(224,120,100,.5); color: #e8846f; }
-  .status-pill.status-done { color: var(--text-dim); }
-  .session-detail { padding: 0 12px 8px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
-
-  /* PROMPT + DETAIL — collapsed.
-     Agent sessions carry multi-paragraph prompts and descriptions, and a card
-     that renders them inline drowns the board. So the card shows the first two
-     lines and one click opens the rest: the full text is always reachable and
-     nothing is truncated on the way through. */
-  .session-notes { border-top: 1px solid var(--border); }
-  .session-notes > summary { display: flex; align-items: flex-start; gap: 10px;
-                             cursor: pointer; list-style: none; padding: 7px 12px; }
-  .session-notes > summary::-webkit-details-marker { display: none; }
-  .session-notes > summary:hover .notes-toggle { color: var(--text-muted); }
-  .notes-peek { flex: 1; min-width: 0; font-size: 12px; color: var(--text-muted);
-                line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2;
-                -webkit-box-orient: vertical; overflow: hidden; }
-  .session-notes[open] .notes-peek { display: none; }
-  /* Open, the peek is gone — keep the control where it was so it does not
-     jump across the card between clicks. */
-  .session-notes[open] > summary { justify-content: flex-end; }
-  .notes-toggle { flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: .06em;
-                  text-transform: uppercase; color: var(--text-dim); }
-  .notes-toggle::after { content: 'More'; }
-  .session-notes[open] .notes-toggle::after { content: 'Less'; }
-  .notes-full { display: none; padding-top: 2px; }
-  .session-notes[open] .notes-full { display: block; }
-  /* Expanded, the agent's paragraph breaks are worth keeping. */
-  .notes-full .session-detail { white-space: pre-wrap; }
-  .note-label { display: block; font-size: 10px; font-weight: 600; letter-spacing: .07em;
-                text-transform: uppercase; color: var(--text-dim); margin-bottom: 2px; }
   .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .session-links { display: flex; gap: 6px; margin-left: auto; }
-  .no-research-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
   .reassign-select { font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 4px; font-family: var(--font); }
   .reassign-select option { background: #222226; }
   .empty-bucket { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 2px 0; }
-  .agent-reply { flex: 1; min-width: 180px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 10px; font-size: 13px; color: var(--text); font-family: var(--font); outline: none; }
-  .agent-reply:focus { border-color: rgba(255,255,255,.25); }
   .agent-link { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 4px 9px; border: 1px solid var(--border-strong); border-radius: 6px; flex-shrink: 0; }
   .agent-link:hover { color: var(--text); }
 
@@ -197,15 +163,11 @@
                   border-top: 1px solid var(--border); padding: 14px 0 28px; }
 
     /* Tap targets — 44px minimum on everything you press. */
-    .session-top, .session-detail, .session-actions { padding-left: 14px; padding-right: 14px; }
-    .session-notes > summary { padding-left: 14px; padding-right: 14px; min-height: 44px; align-items: center; }
+    .session-top, .session-actions { padding-left: 14px; padding-right: 14px; }
     .session-actions { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
     .btn { min-height: 44px; padding: 0 16px; }
-    .no-research-toggle { min-height: 44px; padding: 0 8px 0 4px; font-size: 13px; }
-    .no-research-toggle input { width: 20px; height: 20px; }
     .reassign-select { min-height: 44px; padding: 0 8px; font-size: 13px; }
     .agent-link { min-height: 44px; display: inline-flex; align-items: center; }
-    .agent-reply { min-height: 44px; width: 100%; flex-basis: 100%; }
     .session-links { margin-left: 0; }
     .sp-item { min-height: 40px; }
   }
@@ -285,19 +247,18 @@ function esc(s) {
 // ── CARD ───────────────────────────────────────────
 
 function sessionCard(r) {
-  const decision = needsDecision(r);
-  const bucket = bucketOf(r);
   const color = (brandsById[r.project] || {}).color || '#888780';
   const id = r.id;
-  const k = key(id);
+  const working = isWorking(r);
+  const pill = statusPill(r);
 
   const linksHtml = `<div class="session-links">
-    ${r.url ? `<a class="agent-link" href="${esc(r.url)}" target="_blank" rel="noopener">Linear ↗</a>` : ''}
-    ${r.figma_url ? `<a class="agent-link" href="${esc(r.figma_url)}" target="_blank" rel="noopener">Figma ↗</a>` : ''}
+    ${r.url ? `<a class="agent-link" href="${esc(r.url)}" target="_blank" rel="noopener">Linear \u2197</a>` : ''}
+    ${r.figma_url ? `<a class="agent-link" href="${esc(r.figma_url)}" target="_blank" rel="noopener">Figma \u2197</a>` : ''}
   </div>`;
 
   const reassignHtml = `<select class="reassign-select" onchange="reassignSession('${esc(id)}', this.value)">
-    <option value="">Move to…</option>
+    <option value="">Move to\u2026</option>
     ${brands.filter(b => b.id !== r.project).map(b =>
       `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}
   </select>`;
@@ -311,57 +272,38 @@ function sessionCard(r) {
   } else if (section === 'nodesign') {
     // Un-dismissable from where it sits, per the brief.
     actionsHtml = `
-      <button class="btn" onclick="undismissSession('${esc(id)}', this)">Undo — needs design</button>
+      <button class="btn" onclick="undismissSession('${esc(id)}', this)">Undo \u2014 needs design</button>
       ${linksHtml}`;
-  } else if (bucket !== 'inflight') {
-    // Not yet triggered — the only job of this card is the trigger button.
+  } else {
+    // One stage button, always rendered. actionFor returns null only at the
+    // final stage, and there is deliberately no other path to a card with no
+    // actions row — a card that offers nothing is the bug this replaced.
+    const action = actionFor(r);
+    const stageBtn = action
+      ? (working
+          ? `<button class="btn btn-primary" disabled>Working\u2026</button>`
+          : `<button class="btn btn-primary" onclick="triggerSession('${esc(id)}', '${action.stage}', this)">${esc(action.label)}</button>`)
+      : '';
     actionsHtml = `
-      <label class="no-research-toggle">
-        <input type="checkbox" id="nr-${k}"> no-research
-      </label>
-      <button class="btn btn-primary" onclick="triggerSession('${esc(id)}', 'go', this)">Trigger</button>
+      ${stageBtn}
       <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Applies the no-design label">No design</button>
       ${reassignHtml}
       ${linksHtml}`;
-  } else if (decision) {
-    // In flight and waiting on me — free-text reply, plus the QA button for
-    // "my Figma work is done, run QA".
-    actionsHtml = `
-      <input class="agent-reply" id="reply-${k}" placeholder="Your decision…"
-        onkeydown="if(event.key==='Enter')respondAgent('${esc(id)}', this)">
-      <button class="btn btn-primary" onclick="respondAgent('${esc(id)}', document.getElementById('reply-${k}'))">Send</button>
-      <button class="btn" onclick="triggerSession('${esc(id)}', 'qa', this)">Run QA</button>
-      ${reassignHtml}
-      ${linksHtml}`;
-  } else {
-    actionsHtml = `${reassignHtml}${linksHtml}`;
   }
 
-  // Everything the agent wrote in prose goes behind one disclosure. The card
-  // itself carries only what you scan a board for: which issue, which gate,
-  // what its status is, and what you can do about it.
-  const notes = notesOf(r);
-  const notesHtml = notes.length ? `
-    <details class="session-notes">
-      <summary>
-        <span class="notes-peek">${esc(notes[0].text)}</span>
-        <span class="notes-toggle"></span>
-      </summary>
-      <div class="notes-full">${notes.map(n =>
-        `<div class="session-detail"><span class="note-label">${esc(n.label)}</span>${esc(n.text)}</div>`
-      ).join('')}</div>
-    </details>` : '';
-
-  return `<div class="session-card ${decision ? 'needs-decision' : ''}" style="border-left-color:${color}">
+  // The card carries only what you scan a board for: which issue, which stage,
+  // whether anything is running, and the one thing you can do about it. The
+  // agent's research is a comment on the Linear issue and is read there — the
+  // Hub deliberately shows none of its prose.
+  return `<div class="session-card ${working ? 'is-working' : ''}" style="border-left-color:${color}">
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || '')}</span>
-      <span class="stage-pill ${decision ? 'needs-decision' : ''}">${esc(phaseLabel(r))}</span>
-      <span class="status-pill ${decision ? 'needs-decision' : 'status-' + esc(r.status || '')}">${esc(statusLabel(r))}</span>
+      <span class="stage-pill">${esc(stageName(stageOf(r)))}</span>
+      ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
-    ${notesHtml}
     <div class="session-actions">${actionsHtml}</div>
   </div>`;
 }
@@ -374,10 +316,13 @@ function bucketsFor(rows) {
       <div class="bucket-label">${label}</div>
       ${list.length ? list.map(sessionCard).join('') : '<div class="empty-bucket">Nothing here</div>'}
     </div>`;
+  // Four columns, in the order the work moves through them. Which one a card
+  // is in comes from what the agent has finished, never from when you clicked.
   return `<div class="buckets">
-    ${section('In flight', rows.filter(r => bucketOf(r) === 'inflight'))}
-    ${section('Queued',    rows.filter(r => bucketOf(r) === 'queued'))}
-    ${section('Backlog',   rows.filter(r => bucketOf(r) === 'backlog'))}
+    ${section('Backlog',     rows.filter(r => stageOf(r) === 'backlog'))}
+    ${section('Researched',  rows.filter(r => stageOf(r) === 'researched'))}
+    ${section('AI-designed', rows.filter(r => stageOf(r) === 'designed'))}
+    ${section("QA'd",        rows.filter(r => stageOf(r) === 'qa'))}
   </div>`;
 }
 
@@ -385,13 +330,13 @@ function brandSection(brand, allRows) {
   // Dismissed and completed rows live in the drawers, not in a brand bucket,
   // and must not show up in this brand's count either.
   const rows = allRows.filter(isOpen);
-  const waiting = rows.filter(needsDecision).length;
+  const working = rows.filter(isWorking).length;
   return `<section class="brand-section" id="brand-${esc(brand.id)}" style="--brand:${esc(brand.color)}">
     <div class="brand-header">
       <div class="brand-bar"></div>
       <div class="brand-name">${esc(brand.name)}</div>
       <div class="brand-meta">
-        ${waiting ? `<span class="brand-waiting">${waiting} waiting on me</span>` : ''}
+        ${working ? `<span class="brand-waiting">${working} running</span>` : ''}
         <span>${rows.length} open</span>
       </div>
     </div>
@@ -462,10 +407,9 @@ function drawer(id, label, rows) {
 
 function renderTopbar() {
   const scope = (filterBrand ? rowsFor(filterBrand) : sessions).filter(isOpen);
-  const waiting = scope.filter(needsDecision).length;
-  const short = window.matchMedia('(max-width: 600px)').matches;
-  document.getElementById('topbar-sub').textContent = waiting
-    ? `${waiting} waiting${short ? '' : ' on you'} · ${scope.length} open`
+  const working = scope.filter(isWorking).length;
+  document.getElementById('topbar-sub').textContent = working
+    ? `${working} running · ${scope.length} open`
     : `${scope.length} open`;
 
   // The chip is the way back to All brands, and the only always-visible
@@ -485,19 +429,19 @@ function renderSidebar(unplacedCount) {
   // The badge counts what needs me, not how much exists. Total open is already
   // in every brand header on the board; repeating it here would be noise.
   const item = b => {
-    const waiting = rowsFor(b.id).filter(isOpen).filter(needsDecision).length;
+    const working = rowsFor(b.id).filter(isOpen).filter(isWorking).length;
     const active = filterBrand === b.id ? ' active' : '';
     return `<button class="sb-item${active}" onclick="setFilter('${esc(b.id)}')">
       <div class="sb-dot" style="background:${esc(b.color)}"></div>
       <span class="sb-name">${esc(b.name)}</span>
-      ${waiting ? `<span class="sb-badge waiting">${waiting}</span>` : ''}
+      ${working ? `<span class="sb-badge waiting">${working}</span>` : ''}
     </button>`;
   };
-  const allWaiting = sessions.filter(needsDecision).length;
+  const allWorking = sessions.filter(isOpen).filter(isWorking).length;
   const allItem = `<button class="sb-item${filterBrand ? '' : ' active'}" onclick="setFilter(null)">
       <div class="sb-dot" style="background:var(--text-dim)"></div>
       <span class="sb-name">All brands</span>
-      ${allWaiting ? `<span class="sb-badge waiting">${allWaiting}</span>` : ''}
+      ${allWorking ? `<span class="sb-badge waiting">${allWorking}</span>` : ''}
     </button>`;
   const extra = unplacedCount ? item(UNASSIGNED) : '';
   document.getElementById('sidebar').innerHTML =
@@ -528,13 +472,12 @@ function closeMenu() {
 // ── SIDE PANEL — all in-flight work across every brand, App / Website ──
 
 function renderSidePanel() {
-  const inFlight = sessions.filter(r =>
-    isOpen(r) && r.triggered_at && ['active','waiting','error'].includes(r.status));
+  const inFlight = sessions.filter(r => isOpen(r) && isWorking(r));
   const item = r => {
     const color = (brandsById[r.project] || {}).color || '#888780';
     return `<button class="sp-item" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')">
       <span class="sp-dot" style="background:${color}"></span>
-      <span class="sp-text">${esc(r.linear_id || r.id)} — ${esc(stageLabel(r))}</span>
+      <span class="sp-text">${esc(r.linear_id || r.id)} \u2014 ${esc(r.requested_stage || '')}</span>
     </button>`;
   };
   const app = inFlight.filter(r => r.track === 'app');
@@ -550,22 +493,25 @@ function renderSidePanel() {
 
 // ── ACTIONS ────────────────────────────────────────
 
-async function triggerSession(id, action, btn) {
-  const nrBox = document.getElementById('nr-' + key(id));
-  const noResearch = !!(nrBox && nrBox.checked);
+// Asks the Hub to run a stage. The Hub writes it to its own queue and the
+// runner picks it up; nothing here touches Linear.
+const STAGE_TOAST = {
+  research: 'Research requested',
+  design: 'Design requested',
+  qa: 'QA requested',
+};
+
+async function triggerSession(id, stage, btn) {
   const original = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
   try {
     await api(`/agent/session/${encodeURIComponent(id)}/trigger`, {
-      method: 'POST', body: { action, noResearch },
+      method: 'POST', body: { stage },
     });
-    toast(action === 'go' ? (noResearch ? 'Triggered — no research' : 'Triggered') : 'QA requested');
-    await window.addEventListener('resize', () => { if (sessions.length) renderTopbar(); });
-window.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
-
-loadBoard();
+    toast(STAGE_TOAST[stage] || 'Requested');
+    await loadBoard();
   } catch (e) {
-    toast('Trigger failed — ' + String(e.message || e).slice(0, 120));
+    toast('Could not request — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = original; }
   }
 }
@@ -605,17 +551,10 @@ async function reassignSession(id, project) {
   } catch { toast('Could not move'); }
 }
 
-async function respondAgent(id, inputEl) {
-  const value = (inputEl && inputEl.value || '').trim();
-  if (!value) return;
-  try {
-    await api(`/agent/session/${encodeURIComponent(id)}/respond`, {
-      method: 'PATCH', body: { response: value },
-    });
-    toast('Answer sent');
-    await loadBoard();
-  } catch { toast('Could not send response'); }
-}
+// The two global listeners had been pasted inside triggerSession by mistake,
+// so they were registered on every button press and never at page load.
+window.addEventListener('resize', () => { if (sessions.length) renderTopbar(); });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
 loadBoard();
 </script>

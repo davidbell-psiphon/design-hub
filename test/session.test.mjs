@@ -20,7 +20,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // The schema as the live database got it: additive pieces, in order.
 const PIECES = ['agent-schema.sql', 'reader-schema.sql', 'track-schema.sql',
-                'piece4-schema.sql', 'piece5-schema.sql', 'piece6-schema.sql'];
+                'piece4-schema.sql', 'piece5-schema.sql', 'piece6-schema.sql',
+                'piece7-schema.sql'];
 
 // Comments first, then split on statement boundaries — that order matters,
 // because one piece4 comment has a semicolon in it. Safe here because none of
@@ -99,10 +100,13 @@ const issue = (o) => ({
 
 // Stub Linear: the reader's discovery query gets issues, reconciliation gets
 // the same states back, and label mutations always succeed.
-function stubLinear(issues) {
+function stubLinear(issues, mutations) {
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(init.body);
     const q = body.query;
+    // Optional recorder, so a test can assert that a route wrote nothing to
+    // Linear — which is the whole contract of the trigger button now.
+    if (mutations && /^\s*mutation/.test(q)) mutations.push(q.trim().split('\n')[0]);
     if (/DesignReaderIssues/.test(q)) {
       return { ok: true, json: async () => ({ data: { issues: { nodes: issues } } }) };
     }
@@ -268,7 +272,7 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(rows(db)[0].status, 'active');
   });
 
-  test('the trigger works through either id and marks the one card in flight', async () => {
+  test('the trigger works through either id and queues the one card', async () => {
     const db = freshDb();
     const e = env(db);
     stubLinear([issue({ identifier: 'RYV-84' })]);
@@ -276,11 +280,104 @@ describe('the agent still addresses its own session id', () => {
     await agentPost(e, AGENT_BODY);
 
     const res = await call(e, 'POST',
-      '/api/agent/session/' + encodeURIComponent(AGENT_ID) + '/trigger', { action: 'go' });
+      '/api/agent/session/' + encodeURIComponent(AGENT_ID) + '/trigger', { stage: 'research' });
     assert.equal(res.status, 200);
     const all = rows(db);
     assert.equal(all.length, 1);
-    assert.ok(all[0].triggered_at, 'the card was not marked in flight');
+    assert.equal(all[0].requested_stage, 'research');
+  });
+
+  test('the trigger applies no Linear label — the Hub owns the queue now', async () => {
+    // The whole point of piece 7: pressing a button must not write to Linear.
+    const db = freshDb();
+    const e = env(db);
+    const mutations = [];
+    stubLinear([issue({ identifier: 'RYV-84' })], mutations);
+    await readLinear(e);
+    await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger',
+      { stage: 'research' });
+    assert.equal(mutations.length, 0, 'the trigger mutated Linear: ' + mutations.join(', '));
+  });
+
+  test('an unknown stage is refused', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    const res = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger', { stage: 'go' });
+    assert.equal(res.status, 400);
+  });
+
+  test('a card already queued is not queued twice', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    const id = '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger';
+    assert.equal((await call(e, 'POST', id, { stage: 'research' })).status, 200);
+    assert.equal((await call(e, 'POST', id, { stage: 'design' })).status, 409);
+    assert.equal(rows(db)[0].requested_stage, 'research');
+  });
+
+  test('the reader collects design teams only', async () => {
+    // Every Backlog/Todo issue assigned to Dave used to reach the board,
+    // Marketing included, which buried the design work under campaign issues.
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([
+      issue({ identifier: 'RYV-84' }),                              // Ryve App
+      issue({ identifier: 'CON-116', team: 'Conduit App' }),
+      issue({ identifier: 'WEB-265', team: 'Websites' }),
+      issue({ identifier: 'MAR-980', team: 'Marketing' }),          // out of scope
+      issue({ identifier: 'STO-421', team: 'Sysadmin' }),           // out of scope
+    ]);
+    const result = await (await readLinear(e)).json();
+    const ids = rows(db).map(r => r.linear_id).sort();
+    assert.deepEqual(ids, ['CON-116', 'RYV-84', 'WEB-265']);
+    assert.equal(result.skipped, 2);
+  });
+
+  test('the queue is what the runner reads, oldest request first', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' }),
+                issue({ identifier: 'CON-116', team: 'Conduit App' })]);
+    await readLinear(e);
+    await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger',
+      { stage: 'research' });
+
+    const res = await call(e, 'GET', '/api/agent/queue', undefined, { 'X-Agent-Secret': 's' });
+    assert.equal(res.status, 200);
+    const queue = await res.json();
+    assert.equal(queue.length, 1);
+    assert.equal(queue[0].linear_id, 'RYV-84');
+    assert.equal(queue[0].requested_stage, 'research');
+  });
+
+  test('stage-done labels the issue, clears the queue and moves the card', async () => {
+    const db = freshDb();
+    const e = env(db);
+    const mutations = [];
+    stubLinear([issue({ identifier: 'RYV-84' })], mutations);
+    await readLinear(e);
+    await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger',
+      { stage: 'research' });
+
+    const res = await call(e, 'POST', '/api/agent/stage-done',
+      { linear_id: 'RYV-84', stage: 'research' }, { 'X-Agent-Secret': 's' });
+    assert.equal(res.status, 200);
+
+    const row = rows(db)[0];
+    assert.equal(row.requested_stage, null, 'still queued after reporting done');
+    // Written locally as well as in Linear: the reader only runs twice a week,
+    // and without this the card sits in the wrong column until it next does.
+    assert.ok(JSON.parse(row.labels).includes('AI-research done'),
+              'the done label was not recorded on the row');
+    assert.ok(mutations.length >= 1, 'no Linear label was applied');
   });
 
   test('a later phase posted as its own session is the same card', async () => {
@@ -350,7 +447,7 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
   // The state the live database is in before the migration: a reader row and
   // an agent row for the same issue, written by the two old code paths.
   function withDuplicates() {
-    const db = freshDb(PIECES.slice(0, -1));   // everything except piece6
+    const db = freshDb(PIECES.filter(p => p !== 'piece6-schema.sql'));  // everything except piece6
     db.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,

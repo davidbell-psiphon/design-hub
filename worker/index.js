@@ -1,4 +1,4 @@
-import { deriveBrand, deriveTrack } from '../lib/derive.mjs';
+import { deriveBrand, deriveTrack, TEAM_TRACK } from '../lib/derive.mjs';
 import { accessIdentity } from '../lib/access.mjs';
 import { linearKeyFromSessionId } from '../lib/session-id.mjs';
 
@@ -30,6 +30,17 @@ function json(data, status = 200, extra = {}) {
   });
 }
 function err(msg, status = 400) { return json({ error: msg }, status); }
+
+// The three stages the Hub can request, and the label the system writes when
+// one completes. Dave never applies these labels and nothing triggers off
+// them — they are the record of what has been done, and the board reads them
+// to decide which column a card is in.
+const STAGES = ['research', 'design', 'qa'];
+const STAGE_LABEL = {
+  research: 'AI-research done',
+  design: 'AI-design done',
+  qa: 'AI-QA done',
+};
 
 
 export default {
@@ -165,10 +176,21 @@ async function readLinear(env) {
     if (assignee !== 'Dave Bell') { skipped++; continue; }
 
     const teamName = issue.team && issue.team.name;
+
+    // Design teams only. This is a TEAM filter, not a label one — gathering is
+    // still not triggering, and no label decides whether an issue reaches the
+    // board. But the Design AI's own CLAUDE.md puts social, marketing and
+    // campaign work explicitly out of scope, and without this the reader drags
+    // every Marketing issue assigned to Dave onto a design board.
+    if (!TEAM_TRACK[teamName]) { skipped++; continue; }
     const track = deriveTrack(teamName);
     const brand = deriveBrand(issue);
 
     const detail = (issue.description || '').slice(0, 300) || null;
+    // The board reads these to decide the card's column, so the stage lives in
+    // Linear and cannot drift away from it.
+    const labelNames = JSON.stringify(
+      ((issue.labels && issue.labels.nodes) || []).map((l) => l.name));
     const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
     // An issue can arrive already labelled no-design, dismissed in Linear
     // before the Hub ever saw it.
@@ -193,8 +215,8 @@ async function readLinear(env) {
     await env.DB.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,
-          linear_id, team, linear_uuid, linear_state, title, dismissed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          linear_id, team, linear_uuid, linear_state, title, dismissed_at, labels)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          project      = COALESCE(agent_sessions.project, excluded.project),
          track        = COALESCE(agent_sessions.track, excluded.track),
@@ -216,6 +238,10 @@ async function readLinear(env) {
          -- if the label mutation has not propagated yet. Un-dismissing is the
          -- Hub's Undo control, which removes the label first.
          dismissed_at = COALESCE(agent_sessions.dismissed_at, excluded.dismissed_at),
+         -- Linear owns the label set outright. stage-done writes here too, so
+         -- a card moves the moment a stage finishes; this read reconciles it
+         -- with whatever Linear actually has.
+         labels       = excluded.labels,
          updated_at   = datetime('now')`
     ).bind(
       existingId || ('linear/' + issue.identifier),
@@ -232,7 +258,8 @@ async function readLinear(env) {
       issue.id,
       linearState || null,
       issue.title,
-      dismissedAt
+      dismissedAt,
+      labelNames
     ).run();
     if (existingId) { updated++; } else { inserted++; }
   }
@@ -473,33 +500,99 @@ async function route(request, env) {
     }
 
     // POST /api/agent/session/:id/trigger — human presses a card button.
-    // Applies a Linear label; that label is the entire trigger mechanism.
+    //
+    // This used to write a `design-ai:go` label onto the Linear issue, and the
+    // runner polled Linear looking for it: Linear was the message bus between
+    // the button and the agent, which is why board state and control labels
+    // ended up scattered across two systems. The button now writes to the
+    // Hub's own queue and applies no label at all. The runner reads
+    // /api/agent/queue.
     if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
       const id = await resolveId(env, path.split('/')[4]);
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
-      if (!['go', 'qa'].includes(b.action)) return err('action must be "go" or "qa"');
-      const row = await env.DB.prepare(`SELECT linear_uuid FROM agent_sessions WHERE id = ?`).bind(id).first();
+      if (!STAGES.includes(b.stage)) {
+        return err(`stage must be one of: ${STAGES.join(', ')}`);
+      }
+      const row = await env.DB.prepare(
+        `SELECT linear_uuid, requested_stage FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
       if (!row) return err('not found', 404);
+      // The runner works from the Linear issue, so a row with nothing behind it
+      // in Linear has nothing to run against.
       if (!row.linear_uuid) return err('session has no linked Linear issue');
-
-      const labelNames = b.action === 'go'
-        ? ['design-ai:go', ...(b.noResearch ? ['no-research'] : [])]
-        : ['design-ai:qa'];
-
-      for (const name of labelNames) {
-        const labelId = await getLabelId(env, name);
-        if (!labelId) return err(`Linear label "${name}" not found`, 502);
-        const res = await addLabelToIssue(env, row.linear_uuid, labelId);
-        if (res.error) return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+      if (row.requested_stage) {
+        return err(`already queued for ${row.requested_stage}`, 409);
       }
 
       await env.DB.prepare(
         `UPDATE agent_sessions
-         SET triggered_at = COALESCE(triggered_at, datetime('now')), updated_at = datetime('now')
+         SET requested_stage = ?, requested_at = datetime('now'),
+             updated_at = datetime('now')
          WHERE id = ?`
-      ).bind(id).run();
-      return json({ ok: true, labels: labelNames });
+      ).bind(b.stage, id).run();
+      return json({ ok: true, requested: b.stage });
+    }
+
+    // GET /api/agent/queue — what the runner asks for instead of polling
+    // Linear. Oldest request first, so a button pressed on Monday is not
+    // starved by one pressed this morning.
+    if (method === 'GET' && path === '/api/agent/queue') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, linear_id, linear_uuid, title, project, track, team,
+                requested_stage, requested_at
+           FROM agent_sessions
+          WHERE requested_stage IS NOT NULL AND dismissed_at IS NULL
+          ORDER BY requested_at ASC`
+      ).all();
+      return json(results || []);
+    }
+
+    // POST /api/agent/stage-done — the runner reports a finished stage.
+    // The Hub, not the runner, is what writes the record label: it already
+    // holds the Linear key and the mutation helpers, and keeping label writes
+    // in one place is what stops the two systems disagreeing again.
+    if (method === 'POST' && path === '/api/agent/stage-done') {
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      if (!b.linear_id) return err('linear_id required');
+      if (!STAGES.includes(b.stage)) {
+        return err(`stage must be one of: ${STAGES.join(', ')}`);
+      }
+      const id = await rowIdForLinearKey(env, String(b.linear_id).toUpperCase());
+      if (!id) return err(`no row for Linear issue ${b.linear_id}`, 404);
+      const row = await env.DB.prepare(
+        `SELECT linear_uuid, labels FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!row) return err('not found', 404);
+      if (!row.linear_uuid) return err('session has no linked Linear issue');
+
+      const name = STAGE_LABEL[b.stage];
+      const labelId = await getLabelId(env, name);
+      if (!labelId) return err(`Linear label "${name}" not found`, 502);
+      const res = await addLabelToIssue(env, row.linear_uuid, labelId);
+      // Deliberately leave requested_stage set. A stage whose label could not
+      // be written must stay in the queue and be retried, not silently vanish
+      // from both the board and the runner's view of the work.
+      if (res.error) {
+        return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+      }
+
+      // Write the label locally as well. The reader only runs Wednesday and
+      // Friday; without this the card would sit in the wrong column for days
+      // after the work was actually finished.
+      let labels = [];
+      try { labels = JSON.parse(row.labels || '[]'); } catch { labels = []; }
+      if (!Array.isArray(labels)) labels = [];
+      if (!labels.includes(name)) labels.push(name);
+
+      await env.DB.prepare(
+        `UPDATE agent_sessions
+         SET labels = ?, requested_stage = NULL, requested_at = NULL,
+             status = 'done', updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(JSON.stringify(labels), id).run();
+      return json({ ok: true, label: name, stage: b.stage });
     }
 
     // POST /api/agent/session/:id/dismiss — "this needs no design".
