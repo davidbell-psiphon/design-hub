@@ -106,11 +106,31 @@ panel moves below the board, and every control is a 44px tap target.
 
 ## The trigger
 
-Pressing a stage button writes a request into the Hub's own database —
-`requested_stage` on that row — and applies no Linear label at all. The runner
-asks the Hub what has been requested (`GET /api/agent/queue`), does the work,
-and reports back (`POST /api/agent/stage-done`). The Hub then writes the record
-label and clears the queue entry.
+Pressing a stage button does two things, in this order:
+
+1. **Writes the request into the Hub's own database** — `requested_stage` on
+   that row. No Linear label is applied. This is the durable part: once it is
+   written, the work will happen.
+2. **Starts the runner**, by firing a `workflow_dispatch` at the design-ai
+   GitHub Actions workflow. This is the part that decides whether the work
+   happens in seconds or waits.
+
+The runner then asks the Hub what has been requested
+(`GET /api/agent/queue`), does the work, and reports back
+(`POST /api/agent/stage-done`). The Hub writes the record label and clears the
+queue entry.
+
+Step 2 is deliberately advisory, and deliberately second. If GitHub is
+unreachable or `GITHUB_TOKEN` has expired, the press is still recorded and the
+board still shows the request — the response says `started: false` with the
+reason, and the board's toast repeats it, so a press that queued but did not
+start never looks like one that did. That is also why nothing runs on a
+schedule: there is no cron on either side, and no run happens that a person did
+not ask for.
+
+The dispatch passes **no inputs**. The runner drains the whole queue itself, so
+a press also picks up anything else already sitting there rather than stranding
+it.
 
 This used to work the other way round: the button applied a `design-ai:go`
 label and the runner polled Linear looking for it. Linear was the message bus

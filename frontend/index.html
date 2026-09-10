@@ -505,10 +505,16 @@ async function triggerSession(id, stage, btn) {
   const original = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
   try {
-    await api(`/agent/session/${encodeURIComponent(id)}/trigger`, {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/trigger`, {
       method: 'POST', body: { stage },
     });
-    toast(STAGE_TOAST[stage] || 'Requested');
+    // The request is queued either way — that is what the button is for. But a
+    // press that could not start the run is a press that will sit there until
+    // someone starts one by hand, and saying "requested" for both hides the
+    // difference at exactly the moment it matters.
+    toast(res && res.started === false
+      ? `${STAGE_TOAST[stage] || 'Requested'} — queued, but the run did not start. ${res.detail || ''}`.trim()
+      : `${STAGE_TOAST[stage] || 'Requested'} — run started`);
     await loadBoard();
   } catch (e) {
     toast('Could not request — ' + String(e.message || e).slice(0, 120));

@@ -19,10 +19,27 @@ two deploy independently.
 ```bash
 npx wrangler secret put LINEAR_API_KEY   # raw Linear key, no "Bearer" prefix
 npx wrangler secret put AGENT_SECRET     # shared with the design-ai agent
+npx wrangler secret put GITHUB_TOKEN     # starts the runner when a button is pressed
 ```
 
 `LINEAR_API_KEY` is required — the reader and every trigger call go through it.
 `AGENT_SECRET` guards `POST /api/agent/session`, the route the agent writes to.
+
+`GITHUB_TOKEN` is optional, and what it buys is *when* the work happens. Without
+it a stage button still queues the request; the runner just does not learn about
+it until someone starts a run. With it, pressing a button fires a
+`workflow_dispatch` at the runner's GitHub Actions workflow and the work begins
+in seconds.
+
+Make it a **fine-grained personal access token** on
+`davidbell-psiphon/design-ai`, with one permission: **Actions: Read and write**.
+Nothing else — it never reads code, issues, or secrets. GitHub → Settings →
+Developer settings → Personal access tokens → Fine-grained tokens.
+
+Fine-grained tokens expire. When this one does, the board says so on the next
+press — the toast reads "queued, but the run did not start" and names the
+reason — rather than failing silently. Two optional vars override the target if
+the repo is ever renamed: `RUNNER_REPO`, `RUNNER_WORKFLOW`.
 
 ## Database
 

@@ -42,6 +42,12 @@ const STAGE_LABEL = {
   qa: 'AI-QA done',
 };
 
+// Where the runner lives. Overridable by env vars so a fork or a rename does
+// not need a code change, but the defaults are the real thing.
+const RUNNER_REPO = 'davidbell-psiphon/design-ai';
+const RUNNER_WORKFLOW = 'design-ai.yml';
+const RUNNER_REF = 'main';
+
 
 export default {
   async fetch(request, env) {
@@ -356,6 +362,62 @@ async function addLabelToIssue(env, issueId, labelId) {
   return linearGraphQL(env, m, { issueId, labelId });
 }
 
+// ─── STARTING THE RUNNER ──────────────────────────────
+// Pressing a stage button queues the work. Something still has to come along
+// and do it, and this is what tells it to: a workflow_dispatch on the runner's
+// GitHub Actions workflow, fired the moment the queue row is written.
+//
+// It is deliberately advisory. The queue row is the durable record of the
+// request and is written first; this only decides whether the work starts in
+// seconds or waits for someone to start a run by hand. So every failure here
+// is reported and none of them fail the button press — a press that queued the
+// work but could not start it is still a press that was recorded.
+//
+// With no GITHUB_TOKEN set the Hub behaves exactly as it did before: it queues,
+// and says plainly that nothing was started.
+async function startRunner(env) {
+  if (!env.GITHUB_TOKEN) {
+    return { started: false, reason: 'no GITHUB_TOKEN set on the Hub — the request was queued but nothing was started' };
+  }
+
+  const repo = env.RUNNER_REPO || RUNNER_REPO;
+  const workflow = env.RUNNER_WORKFLOW || RUNNER_WORKFLOW;
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/${workflow}/dispatches`;
+
+  // No inputs. The runner drains the queue itself, so a press also picks up
+  // anything else already sitting there — passing this one issue would strand
+  // the rest.
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        // GitHub rejects an API call with no User-Agent.
+        'User-Agent': 'design-hub-worker',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ref: env.RUNNER_REF || RUNNER_REF }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (e) {
+    return { started: false, reason: `could not reach GitHub — ${e.name === 'TimeoutError' ? 'no response in 10s' : e.message}` };
+  }
+
+  // A dispatch that works answers 204 with an empty body.
+  if (res.status === 204) return { started: true };
+
+  const body = (await res.text()).slice(0, 300);
+  const hint = res.status === 401 || res.status === 403
+    ? 'GITHUB_TOKEN is wrong, expired, or lacks Actions: read and write on the runner repo'
+    : res.status === 404
+      ? `no workflow ${workflow} on ${RUNNER_REF} in ${repo} — or the token cannot see the repo`
+      : `GitHub returned HTTP ${res.status}`;
+  return { started: false, reason: `${hint}. ${body}`.trim() };
+}
+
 // ─── ACCESS IDENTITY ──────────────────────────────────
 // Verification lives in lib/access.mjs so it can be tested against tokens
 // signed in the test itself. Enforcement stays off until ACCESS_AUD and
@@ -507,6 +569,12 @@ async function route(request, env) {
     // ended up scattered across two systems. The button now writes to the
     // Hub's own queue and applies no label at all. The runner reads
     // /api/agent/queue.
+    //
+    // Writing the queue row and starting the runner are two steps on purpose,
+    // in that order. The row is the request; starting the run is a convenience
+    // on top of it. If GitHub is down, or the token has expired, the press is
+    // still recorded and the work still happens on the next run — the response
+    // says so rather than pretending the run began.
     if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
       const id = await resolveId(env, path.split('/')[4]);
       let b;
@@ -531,7 +599,9 @@ async function route(request, env) {
              updated_at = datetime('now')
          WHERE id = ?`
       ).bind(b.stage, id).run();
-      return json({ ok: true, requested: b.stage });
+
+      const run = await startRunner(env);
+      return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason });
     }
 
     // GET /api/agent/queue — what the runner asks for instead of polling
