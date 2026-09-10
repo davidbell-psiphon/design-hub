@@ -15,6 +15,7 @@ import { webcrypto } from 'node:crypto';
 
 import { detectBrand, deriveBrand, deriveTrack } from '../lib/derive.mjs';
 import { accessIdentity, resetAccessKeyCache } from '../lib/access.mjs';
+import { linearKeyFromSessionId } from '../lib/session-id.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -23,7 +24,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 // hands back the functions with no DOM stub at all.
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
-const { bucketOf, sectionOf, isOpen, needsDecision, stageLabel, key, timeAgo } = board;
+const { bucketOf, sectionOf, isOpen, needsDecision, stageLabel, phaseLabel,
+        statusLabel, notesOf, key, timeAgo } = board;
 
 // Shorthand for a Linear issue as the reader sees it.
 const issue = (team, extra = {}) => ({ team: team ? { name: team } : null, ...extra });
@@ -223,6 +225,101 @@ describe('stageLabel', () => {
 
   test('no phase renders an em dash', () => {
     assert.equal(stageLabel({ status: 'active', phase: null }), '—');
+  });
+});
+
+describe('phaseLabel — the card badge for the gate or phase', () => {
+  test('the phase shows through, whatever the status is', () => {
+    // stageLabel hides the phase behind "Waiting on me"; the card needs both,
+    // so this one never overrides it.
+    assert.equal(phaseLabel({ status: 'waiting', phase: 'design' }), 'Design');
+  });
+
+  test('qa is upper-cased as a unit', () => {
+    assert.equal(phaseLabel({ status: 'active', phase: 'qa' }), 'QA');
+  });
+
+  test('an unfamiliar phase is shown as written — the Hub does not judge it', () => {
+    assert.equal(phaseLabel({ phase: 'copy-review' }), 'Copy-review');
+  });
+
+  test('no phase renders an em dash', () => {
+    assert.equal(phaseLabel({ status: 'active', phase: null }), '—');
+    assert.equal(phaseLabel({ phase: '   ' }), '—');
+  });
+});
+
+describe('statusLabel — the card badge for the status', () => {
+  test('a genuine decision says so', () => {
+    assert.equal(statusLabel({ status: 'waiting', triggered_at: '2026-09-09 09:00:00' }),
+                 'Waiting on you');
+  });
+
+  test('waiting but never triggered is not a decision, so it reads plainly', () => {
+    // Every row the reader writes is 'waiting'. Claiming each one waits on the
+    // human is exactly the noise the badge is there to avoid.
+    assert.equal(statusLabel({ status: 'waiting', triggered_at: null }), 'Waiting');
+  });
+
+  test('the other statuses are capitalised', () => {
+    assert.equal(statusLabel({ status: 'active' }), 'Active');
+    assert.equal(statusLabel({ status: 'done' }), 'Done');
+    assert.equal(statusLabel({ status: 'error' }), 'Error');
+  });
+
+  test('a missing status renders an em dash', () => {
+    assert.equal(statusLabel({}), '—');
+  });
+});
+
+describe('notesOf — what the card collapses', () => {
+  test('prompt first, then detail, then the answer', () => {
+    const notes = notesOf({ prompt: 'Which direction?', detail: 'Long context.',
+                            response: 'B', responded_at: null });
+    // Joined rather than deep-compared: these arrays come out of the vm
+    // context, so they are structurally right but not reference-equal.
+    assert.equal(notes.map(n => n.label).join(','), 'Prompt,Detail,Answered');
+    assert.equal(notes[0].text, 'Which direction?');
+    assert.equal(notes[1].text, 'Long context.');
+  });
+
+  test('nothing to say means no disclosure', () => {
+    assert.equal(notesOf({ title: 'CON-116' }).length, 0);
+  });
+
+  test('a detail identical to the prompt is not repeated', () => {
+    const notes = notesOf({ prompt: 'Same text', detail: 'Same text' });
+    assert.equal(notes.length, 1);
+  });
+
+  test('the text is handed over whole — clamping is the stylesheet\'s job', () => {
+    const long = 'x'.repeat(4000);
+    assert.equal(notesOf({ detail: long })[0].text.length, 4000);
+  });
+});
+
+describe('linearKeyFromSessionId — the join between the two id conventions', () => {
+  test('the agent session id shape', () => {
+    assert.equal(linearKeyFromSessionId('ryve/ryv-84/research'), 'RYV-84');
+    assert.equal(linearKeyFromSessionId('conduit/CON-116/design'), 'CON-116');
+  });
+
+  test('a bare key, and the reader\'s own id', () => {
+    assert.equal(linearKeyFromSessionId('RYV-84'), 'RYV-84');
+    assert.equal(linearKeyFromSessionId('linear/CON-116'), 'CON-116');
+  });
+
+  test('a session id with no issue behind it stays unmatched', () => {
+    // This is the case that must not produce a false positive: matching a
+    // whole path segment is what keeps 'wallet-flow' from reading as a key.
+    assert.equal(linearKeyFromSessionId('conduit/wallet-flow/design'), null);
+    assert.equal(linearKeyFromSessionId('social-ai/october-campaign'), null);
+  });
+
+  test('bad input does not throw', () => {
+    for (const v of [null, undefined, '', 42, {}]) {
+      assert.equal(linearKeyFromSessionId(v), null);
+    }
   });
 });
 

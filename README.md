@@ -44,8 +44,19 @@ each brand, three buckets in this order:
 | **Backlog** | Candidates |
 
 Each card carries its brand colour on the card itself, and shows the Linear ID
-and title, the stage, the track (app or website), links out to Linear and
-Figma, and — the most important signal — whether it needs a decision.
+and title, the gate or phase and the status as two short badges, the track (app
+or website), links out to Linear and Figma, and — the most important signal —
+whether it needs a decision.
+
+**One Linear issue is one card.** Whatever the agent is doing to it shows as
+state on that card; a new phase never adds a row. See
+[One card per issue](#one-card-per-issue).
+
+Everything the agent wrote in prose — the prompt, the detail behind it, the
+answer that was given — sits behind one disclosure on the card, showing two
+clamped lines with a **More** control. Cards were rendering whole paragraphs
+inline, which is what made the board unreadable; nothing is truncated, it is
+one click away.
 
 Brand colours:
 
@@ -128,14 +139,55 @@ control is the only way, and it removes the label before clearing the column.
 
 ---
 
+## One card per issue
+
+Two writers share `agent_sessions` and each brought its own id convention. The
+reader keys its rows `linear/RYV-84`. The agent posts the session id it owns,
+`ryve/ryv-84/research`. Neither collided with the other on `ON CONFLICT(id)`,
+so one Linear issue grew two rows — the Linear card, and a sibling agent card
+for the same work — and triggering research added a row beside the card you
+pressed instead of moving it.
+
+They are reconciled on the Linear issue key, not by changing what the agent
+sends:
+
+- [`lib/session-id.mjs`](./lib/session-id.mjs) pulls the issue key back out of
+  a session id, matching a **whole path segment** so `conduit/wallet-flow/design`
+  cannot look like a key.
+- A write from either side lands on whichever row already owns that key. The
+  agent's state — phase, status, prompt, detail, Figma link — goes onto the
+  card; `linear_id`, `linear_uuid`, `title`, `url`, the brand and the
+  `triggered_at` / `dismissed_at` history stay as they are.
+- `agent_session_id` remembers the id the agent used, and every `:id` route
+  resolves it. So `GET /api/agent/session/ryve%2Fryv-84%2Fresearch` still
+  answers, and a `respond` or `trigger` through either id reaches the one row.
+- It works in both directions: the agent can post before the Wednesday read
+  has ever seen the issue, and the read merges onto that row rather than
+  inserting a second one.
+
+**The agent's contract does not change.** It posts and polls exactly the ids it
+always did — that is the reason the join lives in the Worker rather than in a
+new field design-ai would have to send.
+
+A session with no Linear issue behind it (`conduit/wallet-flow/design`, or
+anything from another `system`) has no key to join on and behaves exactly as it
+did before: its own row, its own id, agent-owned fields written straight
+through.
+
+[`piece6-schema.sql`](./piece6-schema.sql) adds the column and merges the pairs
+that were already in the table — newest twin wins where an issue had more than
+one, and the Linear row keeps its identity and its history.
+
+---
+
 ## API
 
 Written by the agent:
 
 | Route | Purpose |
 |---|---|
-| `POST /api/agent/session` | Upsert session state. Requires `X-Agent-Secret`. |
-| `GET /api/agent/session/:id` | Poll for the human's decision |
+| `POST /api/agent/session` | Upsert session state, onto the card for its Linear issue. Requires `X-Agent-Secret`. |
+| `GET /api/agent/session/:id` | Poll for the human's decision. `:id` may be the agent's own session id or the row's. |
 
 Used by the board:
 
@@ -245,7 +297,19 @@ tampered payload, cookie fallback, unreachable certs endpoint.
 
 **`test/render.test.mjs`** runs the board's own JS against a stub DOM and
 fabricated rows, covering what pure functions cannot: that a dismissed or
-closed card actually leaves the brand buckets, the counts and the badges.
+closed card actually leaves the brand buckets, the counts and the badges, and
+that a card carrying paragraphs of agent prose renders none of it outside the
+disclosure while still keeping every word inside it.
+
+**`test/session.test.mjs`** runs the Worker itself — no network, no
+dependencies. `node:sqlite` stands in for D1 behind the same
+`prepare/bind/first/all/run` shape, Linear is a stubbed `fetch`, and the schema
+comes from the `*-schema.sql` files in the order the live database got them. So
+it exercises the SQL that ships: that a read then an agent post is one row and
+not two, that the reverse order is too, that a later read does not wipe what
+the agent wrote, that the agent still reaches the card by its own session id,
+and that `piece6-schema.sql` merges the pairs already in the table without
+losing the Linear identity or the dismissal history.
 
 **`test/smoke.test.mjs`** hits production and is read-only. Its one non-GET
 case sends a deliberately invalid `action`, which the Worker rejects before it
@@ -275,9 +339,11 @@ reader-schema.sql              linear_id, team
 track-schema.sql               track
 piece4-schema.sql              linear_uuid, linear_state, triggered_at, figma_url, title
 piece5-schema.sql              dismissed_at (no-design)
+piece6-schema.sql              agent_session_id + the duplicate-row merge
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL
 lib/derive.mjs                 brand + track derivation, shared and testable
 lib/access.mjs                 Access JWT verification
+lib/session-id.mjs             the Linear key inside an agent session id
 frontend/board-logic.js        pure board logic (bucketing, staging, hashing)
 test/                          node:test suites — see Tests above
 DEPLOY.md                      how to deploy

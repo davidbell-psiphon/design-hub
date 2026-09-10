@@ -34,11 +34,26 @@ npx wrangler d1 execute design-hub --remote --file=./agent-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./reader-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./track-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece4-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece5-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece6-schema.sql
 ```
 
-All four are already applied to the live database. They are additive
-(`ALTER TABLE` / `CREATE INDEX IF NOT EXISTS`), so re-running one fails on the
-duplicate column rather than destroying anything.
+Every piece up to and including `piece5-schema.sql` is already applied to the
+live database. They are additive (`ALTER TABLE` / `CREATE INDEX IF NOT
+EXISTS`), so re-running one fails on the duplicate column rather than
+destroying anything.
+
+**`piece6-schema.sql` goes first, before `npx wrangler deploy`.** It adds
+`agent_session_id`, which the new Worker reads on every session route — deploy
+the Worker against a database without that column and every one of those routes
+throws. It also merges the duplicate rows that are in the table now (see
+[One card per issue](./README.md#one-card-per-issue)), so it is worth reading
+the row counts before and after:
+
+```bash
+npx wrangler d1 execute design-hub --remote \
+  --command="SELECT count(*) AS rows, count(linear_id) AS linear FROM agent_sessions"
+```
 
 **Do not run `schema.sql` against the live database.** It opens with
 `DROP TABLE` and recreates the old hierarchy with seed data. It is kept for

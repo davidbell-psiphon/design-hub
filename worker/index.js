@@ -1,5 +1,6 @@
 import { deriveBrand, deriveTrack } from '../lib/derive.mjs';
 import { accessIdentity } from '../lib/access.mjs';
+import { linearKeyFromSessionId } from '../lib/session-id.mjs';
 
 // Allowed origins - your Pages deployments
 const ALLOWED_ORIGINS = [
@@ -44,6 +45,65 @@ export default {
     ctx.waitUntil(readLinear(env));
   },
 };
+
+// ─── ONE CARD PER LINEAR ISSUE ─────────────────────
+// Two writers share agent_sessions and used to disagree about the primary key.
+// The reader keys rows `linear/RYV-84`; the agent posts `ryve/ryv-84/research`.
+// Neither collided with the other on ON CONFLICT(id), so one Linear issue grew
+// two rows and triggering research added a sibling instead of moving the card.
+//
+// The agent's contract is untouched — it still posts and polls the id it always
+// used. These two lookups are what make that id land on the existing card:
+// `agent_session_id` remembers the alias, and the Linear issue key extracted
+// from it (lib/session-id.mjs) is what joins the two conventions together.
+
+// The row an id names outright: its own primary key, or the agent alias
+// recorded on it. Null when neither matches. Primary keys win, so a row whose
+// id happens to equal another row's alias is never shadowed.
+async function aliasId(env, id) {
+  if (!id) return null;
+  const row = await env.DB.prepare(
+    `SELECT id FROM agent_sessions
+      WHERE id = ? OR agent_session_id = ?
+      ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+      LIMIT 1`
+  ).bind(id, id, id).first();
+  return row ? row.id : null;
+}
+
+// The row an id refers to, however it is written. Falls back to the Linear
+// issue the id names, so a session id the Hub has never been posted under —
+// a later phase running as its own session, `ryve/ryv-84/design` after
+// `ryve/ryv-84/research` — still reaches the card for that issue instead of
+// a 404. Null when nothing matches.
+async function canonicalId(env, id) {
+  return (await aliasId(env, id)) ||
+         (await rowIdForLinearKey(env, linearKeyFromSessionId(id)));
+}
+
+// A path segment as a row id: decoded, then resolved through the aliases.
+// Falls back to the id as asked for, so a miss still reaches the route's own
+// "not found" check rather than turning into a different error here.
+async function resolveId(env, segment) {
+  const asked = decodeURIComponent(segment || '');
+  return (await canonicalId(env, asked)) || asked;
+}
+
+// The row that already owns a Linear issue key, whichever writer created it:
+// the reader (`linear_id`) or the agent (a session id with the key in it).
+// This is the join the two id conventions share.
+async function rowIdForLinearKey(env, key) {
+  if (!key) return null;
+  const row = await env.DB.prepare(
+    `SELECT id FROM agent_sessions
+      WHERE linear_id = ?
+         OR '/' || lower(COALESCE(agent_session_id, id)) || '/'
+            LIKE '%/' || lower(?) || '/%'
+      ORDER BY CASE WHEN linear_id = ? THEN 0 ELSE 1 END, updated_at DESC
+      LIMIT 1`
+  ).bind(key, key, key).first();
+  return row ? row.id : null;
+}
 
 // ─── LINEAR READER ─────────────────────────────────
 // Pulls every issue assigned to Dave Bell, across all teams, sitting in
@@ -123,9 +183,12 @@ async function readLinear(env) {
     // owns — status, phase, prompt, response, triggered_at, figma_url — is left
     // alone, and a manual brand/track reassignment survives because those two
     // are only filled in when still null.
-    const existing = await env.DB.prepare(
-      `SELECT id FROM agent_sessions WHERE linear_id = ?`
-    ).bind(issue.identifier).first();
+    //
+    // The row id is whatever row already owns this issue — including one the
+    // agent created first under its own session id — and only falls back to
+    // `linear/<KEY>` for an issue nothing has seen yet. Without that, an
+    // agent-first row and a reader row are two cards for one issue.
+    const existingId = await rowIdForLinearKey(env, issue.identifier);
 
     await env.DB.prepare(
       `INSERT INTO agent_sessions
@@ -135,9 +198,16 @@ async function readLinear(env) {
        ON CONFLICT(id) DO UPDATE SET
          project      = COALESCE(agent_sessions.project, excluded.project),
          track        = COALESCE(agent_sessions.track, excluded.track),
-         detail       = excluded.detail,
+         -- The Linear description, unless the agent has posted to this row:
+         -- once it has, detail carries the context behind its decision
+         -- prompt, and a Wednesday read must not wipe that.
+         detail       = CASE WHEN agent_sessions.agent_session_id IS NULL
+                             THEN excluded.detail ELSE agent_sessions.detail END,
          url          = excluded.url,
          team         = excluded.team,
+         -- An agent-first row arrives with no linear_id; this is what links it
+         -- to its issue, so the next read finds it instead of inserting again.
+         linear_id    = excluded.linear_id,
          linear_uuid  = excluded.linear_uuid,
          linear_state = excluded.linear_state,
          title        = excluded.title,
@@ -148,7 +218,7 @@ async function readLinear(env) {
          dismissed_at = COALESCE(agent_sessions.dismissed_at, excluded.dismissed_at),
          updated_at   = datetime('now')`
     ).bind(
-      'linear/' + issue.identifier,
+      existingId || ('linear/' + issue.identifier),
       'design-ai',
       brand,
       track,
@@ -164,7 +234,7 @@ async function readLinear(env) {
       issue.title,
       dismissedAt
     ).run();
-    if (existing) { updated++; } else { inserted++; }
+    if (existingId) { updated++; } else { inserted++; }
   }
 
   const reconciled = await reconcileTracked(env);
@@ -319,26 +389,84 @@ async function route(request, env) {
       if (!['active','waiting','done','error'].includes(status)) return err('invalid status');
       // Accepts both the original field names (project/phase/url) and the
       // integration-surface names (brand/stage/figma_url) — same columns.
-      await env.DB.prepare(
-        `INSERT INTO agent_sessions (id, system, project, track, phase, status, prompt, detail, url, figma_url, title)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           system=excluded.system, project=excluded.project, track=excluded.track,
-           phase=excluded.phase, status=excluded.status, prompt=excluded.prompt,
-           detail=excluded.detail, url=excluded.url, figma_url=excluded.figma_url,
-           title=excluded.title, updated_at=datetime('now')`
-      ).bind(
-        b.session_id, b.system, b.project || b.brand || null, b.track || null,
-        b.phase || b.stage || null, status, b.prompt || null, b.detail || null,
-        b.url || null, b.figma_url || null, b.title || null
-      ).run();
+      const project = b.project || b.brand || null;
+      const track = b.track || null;
+      const phase = b.phase || b.stage || null;
+      const url = b.url || null;
+      const title = b.title || null;
+
+      // Which row this post belongs to. The agent's own session id first —
+      // that is the row it has been writing to all along — then the Linear
+      // issue its session id names, which is how `ryve/ryv-84/research` lands
+      // on the card the reader already made for RYV-84 instead of beside it.
+      // `linear_id` in the body is honoured if sent, but nothing has to send
+      // it: the key is derivable from the session id the agent already posts.
+      const key = String(b.linear_id || linearKeyFromSessionId(b.session_id) || '')
+        .toUpperCase() || null;
+      const target = (await aliasId(env, b.session_id)) ||
+                     (key ? await rowIdForLinearKey(env, key) : null);
+
+      if (target) {
+        // Agent-owned columns are written straight through, exactly as the
+        // upsert did. The four Linear-owned ones — project, track, url,
+        // title — are only filled in where they are still empty, so merging
+        // onto a Linear card cannot rename it, relink it, or undo a manual
+        // brand reassignment. On a Hub-only session (no Linear issue behind
+        // it) there is nothing to protect and the agent still owns them.
+        await env.DB.prepare(
+          `UPDATE agent_sessions SET
+             agent_session_id = ?,
+             system    = ?,
+             phase     = ?,
+             status    = ?,
+             prompt    = ?,
+             detail    = COALESCE(?, detail),
+             figma_url = COALESCE(?, figma_url),
+             project   = CASE WHEN linear_id IS NULL
+                              THEN COALESCE(?, project) ELSE COALESCE(project, ?) END,
+             track     = CASE WHEN linear_id IS NULL
+                              THEN COALESCE(?, track) ELSE COALESCE(track, ?) END,
+             url       = CASE WHEN linear_id IS NULL
+                              THEN COALESCE(?, url) ELSE COALESCE(url, ?) END,
+             title     = CASE WHEN linear_id IS NULL
+                              THEN COALESCE(?, title) ELSE COALESCE(title, ?) END,
+             updated_at = datetime('now')
+           WHERE id = ?`
+        ).bind(
+          b.session_id, b.system, phase, status, b.prompt || null, b.detail || null,
+          b.figma_url || null,
+          project, project, track, track, url, url, title, title,
+          target
+        ).run();
+      } else {
+        await env.DB.prepare(
+          `INSERT INTO agent_sessions
+             (id, agent_session_id, system, project, track, phase, status,
+              prompt, detail, url, figma_url, title, linear_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           -- Unreachable unless two posts for a brand-new session race each
+           -- other, but this route was an upsert before and stays one.
+           ON CONFLICT(id) DO UPDATE SET
+             agent_session_id=excluded.agent_session_id, system=excluded.system,
+             project=excluded.project, track=excluded.track, phase=excluded.phase,
+             status=excluded.status, prompt=excluded.prompt, detail=excluded.detail,
+             url=excluded.url, figma_url=excluded.figma_url, title=excluded.title,
+             updated_at=datetime('now')`
+        ).bind(
+          b.session_id, b.session_id, b.system, project, track, phase, status,
+          b.prompt || null, b.detail || null, url, b.figma_url || null, title, key
+        ).run();
+      }
       return json({ ok: true, session_id: b.session_id, status });
     }
 
     // GET /api/agent/session/:id — agent polls for the human's response
     if (method === 'GET' && path.startsWith('/api/agent/session/') && !path.includes('/trigger') && !path.includes('/reassign') && !path.includes('/respond') && !path.includes('/dismiss')) {
-      const id = decodeURIComponent(path.slice('/api/agent/session/'.length));
-      if (!id) return err('session_id required');
+      const asked = decodeURIComponent(path.slice('/api/agent/session/'.length));
+      if (!asked) return err('session_id required');
+      // The agent polls by the session id it posted; after a merge that id is
+      // an alias for the card's row, so resolve it before reading.
+      const id = (await canonicalId(env, asked)) || asked;
       const row = await env.DB.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(id).first();
       if (!row) return err('not found', 404);
       return json(row);
@@ -347,7 +475,7 @@ async function route(request, env) {
     // POST /api/agent/session/:id/trigger — human presses a card button.
     // Applies a Linear label; that label is the entire trigger mechanism.
     if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
-      const id = decodeURIComponent(path.split('/')[4]);
+      const id = await resolveId(env, path.split('/')[4]);
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
       if (!['go', 'qa'].includes(b.action)) return err('action must be "go" or "qa"');
@@ -385,7 +513,7 @@ async function route(request, env) {
     // reconciliation would dismiss it again — a card that flickers.
     if (path.match(/^\/api\/agent\/session\/[^/]+\/dismiss$/) &&
         (method === 'POST' || method === 'DELETE')) {
-      const id = decodeURIComponent(path.split('/')[4]);
+      const id = await resolveId(env, path.split('/')[4]);
       const row = await env.DB.prepare(
         `SELECT linear_uuid FROM agent_sessions WHERE id = ?`
       ).bind(id).first();
@@ -419,7 +547,7 @@ async function route(request, env) {
     // PATCH /api/agent/session/:id/reassign — manual brand/track correction
     // for when the Linear Reader's auto-detected brand is wrong.
     if (method === 'PATCH' && path.match(/^\/api\/agent\/session\/[^/]+\/reassign$/)) {
-      const id = decodeURIComponent(path.split('/')[4]);
+      const id = await resolveId(env, path.split('/')[4]);
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
       const fields = []; const values = [];
@@ -445,8 +573,8 @@ async function route(request, env) {
 
     // PATCH /api/agent/session/:id/respond — human answers the prompt
     if (method === 'PATCH' && path.match(/\/respond$/)) {
-      const id = decodeURIComponent(
-        path.slice('/api/agent/session/'.length, path.length - '/respond'.length)
+      const id = await resolveId(
+        env, path.slice('/api/agent/session/'.length, path.length - '/respond'.length)
       );
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
@@ -464,7 +592,7 @@ async function route(request, env) {
 
     // DELETE /api/agent/session/:id
     if (method === 'DELETE' && path.startsWith('/api/agent/session/')) {
-      const id = decodeURIComponent(path.slice('/api/agent/session/'.length));
+      const id = await resolveId(env, path.slice('/api/agent/session/'.length));
       await env.DB.prepare(`DELETE FROM agent_sessions WHERE id = ?`).bind(id).run();
       return json({ ok: true });
     }

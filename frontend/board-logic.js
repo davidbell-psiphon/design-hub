@@ -51,6 +51,41 @@ function stageLabel(r) {
   return r.phase.charAt(0).toUpperCase() + r.phase.slice(1);
 }
 
+// The gate or phase the session is in, as a short badge. Whatever the agent
+// put in `phase`, capitalised — the Hub does not know what a gate is, so it
+// does not translate one, it just shows it.
+function phaseLabel(r) {
+  if (!r.phase) return '—';
+  var p = String(r.phase).trim();
+  if (!p) return '—';
+  if (p.toLowerCase() === 'qa') return 'QA';
+  return p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+// The session's status, said plainly. 'Waiting on you' only where it is
+// genuinely a decision: the reader writes every new row 'waiting', so an
+// untriggered card claiming to be waiting on you would be a lie.
+function statusLabel(r) {
+  if (needsDecision(r)) return 'Waiting on you';
+  var s = String(r.status || '').trim();
+  if (!s) return '—';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// The card's collapsed text, in the order it reads. Cards used to render all
+// of this inline, multiple paragraphs of it, which is what made the board
+// unreadable — so it lives behind a disclosure, whole, nothing truncated.
+// An empty list means the card renders no disclosure at all.
+function notesOf(r) {
+  var notes = [];
+  if (r.prompt) notes.push({ label: 'Prompt', text: r.prompt });
+  if (r.detail && r.detail !== r.prompt) notes.push({ label: 'Detail', text: r.detail });
+  if (r.response) {
+    notes.push({ label: 'Answered', text: r.response + ' · ' + timeAgo(r.responded_at) + ' ago' });
+  }
+  return notes;
+}
+
 // Element ids are derived from session ids, which contain '/' and '-'.
 // btoa would throw on any non-Latin1 character — issue titles already contain
 // em dashes — so hash to hex instead.

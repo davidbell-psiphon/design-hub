@@ -49,7 +49,7 @@ function stubEl() {
   };
 }
 
-let board, sidebar, topbar, drawers;
+let board, sidebar, topbar, drawers, sessionCard;
 
 before(async () => {
   const html = fs.readFileSync(path.join(ROOT, 'frontend/index.html'), 'utf8');
@@ -66,8 +66,10 @@ before(async () => {
     json: async () => (url.endsWith('/brands') ? brandRows : sessions),
   });
 
-  const run = new Function(logic + '\n' + inline + '\n;return { loadBoard };');
-  await run().loadBoard();
+  const run = new Function(logic + '\n' + inline + '\n;return { loadBoard, sessionCard };');
+  const api = run();
+  sessionCard = api.sessionCard;
+  await api.loadBoard();
 
   board = nodes['board'].innerHTML;
   sidebar = nodes['sidebar'].innerHTML;
@@ -120,6 +122,65 @@ describe('drawer rows leave the board proper', () => {
     // CON-120 is the only genuine decision; CON-125 is waiting but dismissed.
     assert.equal((sidebar.match(/class="sb-badge waiting/g) || []).length, 2); // All brands + Conduit
     assert.match(sidebar, /sb-badge waiting">1</);
+  });
+});
+
+describe('the card keeps the agent prose collapsed', () => {
+  // What the board was drowning in: an agent session carrying a paragraph of
+  // prompt and a paragraph of detail on every card.
+  const PROMPT = 'Two directions for the wallet header.\n\n' + 'A keeps the balance card. '.repeat(12);
+  const DETAIL = 'Research notes.\n\n' + 'The current header stacks three rows. '.repeat(14);
+  const wordy = () => sessionCard({
+    ...row({ linear_id: 'RYV-84', project: 'ryve', title: 'Wallet header',
+             triggered_at: '2026-09-09 09:00:00' }),
+    phase: 'research', status: 'waiting', prompt: PROMPT, detail: DETAIL,
+  });
+
+  // The card outside the disclosure. Inside it, the peek line is visible too —
+  // that is the two-line clamp — but the paragraphs behind it are not.
+  const shown = html => html.slice(0, html.indexOf('<details')) +
+                        html.slice(html.indexOf('</details>'));
+
+  test('no prose is rendered outside the disclosure', () => {
+    const html = wordy();
+    assert.equal(shown(html).includes('Research notes.'), false, 'detail is on the card');
+    assert.equal(shown(html).includes('A keeps the balance card.'), false,
+                 'the body of the prompt is on the card');
+  });
+
+  test('the card still shows the issue, the gate, the status and the controls', () => {
+    const html = shown(wordy());
+    assert.ok(html.includes('>RYV-84<'), 'no issue id');
+    assert.ok(html.includes('>Wallet header<'), 'no issue title');
+    assert.match(html, /class="stage-pill[^"]*">Research</);
+    assert.match(html, /class="status-pill[^"]*">Waiting on you</);
+    assert.ok(html.includes('respondAgent'), 'no action controls');
+  });
+
+  test('the full text is behind the disclosure, whole and untruncated', () => {
+    const html = wordy();
+    const details = html.slice(html.indexOf('<details'), html.indexOf('</details>'));
+    assert.ok(details.includes('notes-peek'), 'no clamped peek line');
+    assert.ok(details.includes(PROMPT.trim().slice(-40)), 'the prompt is cut short');
+    assert.ok(details.includes(DETAIL.trim().slice(-40)), 'the detail is cut short');
+  });
+
+  test('the disclosure is closed on every render', () => {
+    assert.equal(/<details class="session-notes"[^>]*\bopen\b/.test(wordy()), false);
+  });
+
+  test('a card with nothing to say renders no disclosure at all', () => {
+    const html = sessionCard(row({ linear_id: 'CON-116' }));
+    assert.equal(html.includes('<details'), false);
+  });
+
+  test('the answer the human gave is kept with the question', () => {
+    const html = sessionCard({
+      ...row({ linear_id: 'RYV-84', status: 'active', triggered_at: '2026-09-09 09:00:00' }),
+      prompt: PROMPT, response: 'Direction B', responded_at: '2026-09-09 10:00:00',
+    });
+    assert.ok(html.slice(html.indexOf('<details')).includes('Direction B'));
+    assert.equal(shown(html).includes('Direction B'), false);
   });
 });
 

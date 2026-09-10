@@ -92,7 +92,39 @@
   .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
   .stage-pill.needs-decision { background: rgba(239,159,39,.18); color: #f0b84a; }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+  .status-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--border-strong); color: var(--text-muted); white-space: nowrap; }
+  .status-pill.needs-decision { border-color: rgba(239,159,39,.45); color: #f0b84a; }
+  .status-pill.status-error { border-color: rgba(224,120,100,.5); color: #e8846f; }
+  .status-pill.status-done { color: var(--text-dim); }
   .session-detail { padding: 0 12px 8px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+
+  /* PROMPT + DETAIL — collapsed.
+     Agent sessions carry multi-paragraph prompts and descriptions, and a card
+     that renders them inline drowns the board. So the card shows the first two
+     lines and one click opens the rest: the full text is always reachable and
+     nothing is truncated on the way through. */
+  .session-notes { border-top: 1px solid var(--border); }
+  .session-notes > summary { display: flex; align-items: flex-start; gap: 10px;
+                             cursor: pointer; list-style: none; padding: 7px 12px; }
+  .session-notes > summary::-webkit-details-marker { display: none; }
+  .session-notes > summary:hover .notes-toggle { color: var(--text-muted); }
+  .notes-peek { flex: 1; min-width: 0; font-size: 12px; color: var(--text-muted);
+                line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical; overflow: hidden; }
+  .session-notes[open] .notes-peek { display: none; }
+  /* Open, the peek is gone — keep the control where it was so it does not
+     jump across the card between clicks. */
+  .session-notes[open] > summary { justify-content: flex-end; }
+  .notes-toggle { flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: .06em;
+                  text-transform: uppercase; color: var(--text-dim); }
+  .notes-toggle::after { content: 'More'; }
+  .session-notes[open] .notes-toggle::after { content: 'Less'; }
+  .notes-full { display: none; padding-top: 2px; }
+  .session-notes[open] .notes-full { display: block; }
+  /* Expanded, the agent's paragraph breaks are worth keeping. */
+  .notes-full .session-detail { white-space: pre-wrap; }
+  .note-label { display: block; font-size: 10px; font-weight: 600; letter-spacing: .07em;
+                text-transform: uppercase; color: var(--text-dim); margin-bottom: 2px; }
   .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .session-links { display: flex; gap: 6px; margin-left: auto; }
   .no-research-toggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
@@ -166,6 +198,7 @@
 
     /* Tap targets — 44px minimum on everything you press. */
     .session-top, .session-detail, .session-actions { padding-left: 14px; padding-right: 14px; }
+    .session-notes > summary { padding-left: 14px; padding-right: 14px; min-height: 44px; align-items: center; }
     .session-actions { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
     .btn { min-height: 44px; padding: 0 16px; }
     .no-research-toggle { min-height: 44px; padding: 0 8px 0 4px; font-size: 13px; }
@@ -304,17 +337,31 @@ function sessionCard(r) {
     actionsHtml = `${reassignHtml}${linksHtml}`;
   }
 
+  // Everything the agent wrote in prose goes behind one disclosure. The card
+  // itself carries only what you scan a board for: which issue, which gate,
+  // what its status is, and what you can do about it.
+  const notes = notesOf(r);
+  const notesHtml = notes.length ? `
+    <details class="session-notes">
+      <summary>
+        <span class="notes-peek">${esc(notes[0].text)}</span>
+        <span class="notes-toggle"></span>
+      </summary>
+      <div class="notes-full">${notes.map(n =>
+        `<div class="session-detail"><span class="note-label">${esc(n.label)}</span>${esc(n.text)}</div>`
+      ).join('')}</div>
+    </details>` : '';
+
   return `<div class="session-card ${decision ? 'needs-decision' : ''}" style="border-left-color:${color}">
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
-      <span class="session-title">${esc(r.title || r.detail || '')}</span>
-      <span class="stage-pill ${decision ? 'needs-decision' : ''}">${esc(stageLabel(r))}</span>
+      <span class="session-title">${esc(r.title || '')}</span>
+      <span class="stage-pill ${decision ? 'needs-decision' : ''}">${esc(phaseLabel(r))}</span>
+      <span class="status-pill ${decision ? 'needs-decision' : 'status-' + esc(r.status || '')}">${esc(statusLabel(r))}</span>
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
-    ${r.prompt ? `<div class="session-detail">${esc(r.prompt)}</div>`
-              : (r.detail ? `<div class="session-detail">${esc(r.detail)}</div>` : '')}
-    ${r.response ? `<div class="session-detail">Answered <b>${esc(r.response)}</b> · ${timeAgo(r.responded_at)} ago</div>` : ''}
+    ${notesHtml}
     <div class="session-actions">${actionsHtml}</div>
   </div>`;
 }
