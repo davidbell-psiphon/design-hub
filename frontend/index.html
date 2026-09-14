@@ -90,6 +90,9 @@
   .session-id { font-size: 11px; font-family: var(--mono); color: var(--text-muted); }
   .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
   .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
+  /* A stage that was passed over rather than run. Outlined instead of filled:
+     the card is at that level, but nothing was done to get it there. */
+  .stage-pill.is-skipped { background: none; border: 1px dashed var(--border-strong); color: var(--text-dim); }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
   .status-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--border-strong); color: var(--text-muted); white-space: nowrap; }
   .status-pill.status-working { border-color: rgba(239,159,39,.45); color: #f0b84a; }
@@ -357,7 +360,7 @@ function sessionCard(r) {
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || '')}</span>
-      <span class="stage-pill">${esc(stageName(stageOf(r)))}</span>
+      <span class="stage-pill${isSkipped(r) ? ' is-skipped' : ''}">${esc(stageLabel(r))}</span>
       ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}

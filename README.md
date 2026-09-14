@@ -158,10 +158,31 @@ single read if the database is ever lost.
 
 | Label | Meaning |
 |---|---|
-| `no-research` | Skip research — a Backlog card offers Run Design instead |
+| `no-research` | Skip research — the card advances to Researched, marked skipped |
 | `no-design` | Not design work at all — collapses the card into No design |
 
 All of them are workspace-level in Linear, so one name resolves to one id.
+
+**A stage has three states, not two.** Absence of `AI-research done` used to
+mean both "has not run" and "was deliberately passed over", so a card marked
+`no-research` was indistinguishable from one whose research silently failed.
+The skip labels already recorded the difference; the board now reads it:
+
+| State | Comes from | On the card |
+|---|---|---|
+| not started | neither label | the previous column, plain pill |
+| done | `AI-research done` / `AI-design done` | that column, plain pill |
+| skipped | `no-research` / `no-design` | that column, **dashed pill saying "Research skipped"** |
+
+Skipped counts as complete for grouping — the card advances a column and
+becomes eligible for the next stage, exactly as a completed one does — but it
+never renders as done. Done outranks skipped where a card carries both: the run
+happened in the end, whatever was intended earlier.
+
+This is read-side derivation only (`stageState` / `stageReached` in
+`board-logic.js`). Nothing new is written, and no column was added. `actionFor`
+reads the column rather than special-casing `no-research`, so the stage button
+and the column a card sits in can no longer disagree.
 
 `design-ai:go` and `design-ai:qa` are retired. Nothing writes them and nothing
 reads them.

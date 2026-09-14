@@ -26,7 +26,8 @@ const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
 const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         sectionOf, isOpen, key, timeAgo,
-        optionsOf, isGateOpen, isGateAnswered, chosenLabel } = board;
+        optionsOf, isGateOpen, isGateAnswered, chosenLabel,
+        stageState, stageReached, stageLabel, isSkipped } = board;
 
 // A row as the reader writes it. `labels` is the JSON array the board reads to
 // decide a card's column.
@@ -142,9 +143,11 @@ describe('stageOf — which column a card is in', () => {
     assert.equal(stageOf(rowWith('AI-research done', 'AI-design done')), 'designed');
   });
 
-  test("Dave's own labels do not move a card between columns", () => {
-    assert.equal(stageOf(rowWith('no-research')), 'backlog');
-    assert.equal(stageOf(rowWith('Design', 'no-design')), 'backlog');
+  test('a skipped stage advances the card, same as a completed one', () => {
+    // Skipping is a decision. Leaving the card in Backlog hid it, and made a
+    // card you marked no-research look like one whose research failed.
+    assert.equal(stageOf(rowWith('no-research')), 'researched');
+    assert.equal(stageOf(rowWith('Design', 'no-design')), 'designed');
   });
 
   test('malformed labels render as Backlog rather than throwing', () => {
@@ -171,6 +174,57 @@ describe('stageOf — which column a card is in', () => {
   });
 });
 
+describe('stage completion — done, skipped, or not started', () => {
+  // The three states the board could not tell apart. Absence of the done-label
+  // used to mean both "has not run" and "was deliberately passed over".
+  test('each stage reads back its own three states', () => {
+    assert.equal(stageState(rowWith(), 'research'), null);
+    assert.equal(stageState(rowWith('AI-research done'), 'research'), 'done');
+    assert.equal(stageState(rowWith('no-research'), 'research'), 'skipped');
+
+    assert.equal(stageState(rowWith(), 'design'), null);
+    assert.equal(stageState(rowWith('AI-design done'), 'design'), 'done');
+    assert.equal(stageState(rowWith('no-design'), 'design'), 'skipped');
+  });
+
+  test('nothing skips QA', () => {
+    assert.equal(stageState(rowWith('AI-QA done'), 'qa'), 'done');
+    assert.equal(stageState(rowWith('no-research', 'no-design'), 'qa'), null);
+  });
+
+  test('done outranks skipped — the run happened in the end', () => {
+    assert.equal(stageState(rowWith('no-research', 'AI-research done'), 'research'), 'done');
+    assert.equal(stageLabel(rowWith('no-research', 'AI-research done')), 'Researched');
+  });
+
+  test('the pill says skipped where the column cannot', () => {
+    assert.equal(stageLabel(rowWith()), 'Backlog');
+    assert.equal(stageLabel(rowWith('AI-research done')), 'Researched');
+    assert.equal(stageLabel(rowWith('no-research')), 'Research skipped');
+    assert.equal(stageLabel(rowWith('no-design')), 'Design skipped');
+    assert.equal(stageLabel(rowWith('AI-QA done')), "QA'd");
+  });
+
+  test('isSkipped tracks the stage that put the card where it is', () => {
+    assert.equal(isSkipped(rowWith('no-research')), true);
+    assert.equal(isSkipped(rowWith('AI-research done')), false);
+    assert.equal(isSkipped(rowWith()), false);
+    // Research was skipped, but design actually ran — the card's level is
+    // design, and that level was earned.
+    assert.equal(isSkipped(rowWith('no-research', 'AI-design done')), false);
+    assert.equal(stageLabel(rowWith('no-research', 'AI-design done')), 'AI-designed');
+  });
+
+  test('a skipped stage is eligible for the next one', () => {
+    // The whole point of counting it as complete: the button and the column
+    // agree, because the button now reads the column.
+    const act = (r) => { const a = actionFor(r); return a && a.stage + '/' + a.label; };
+    assert.equal(stageOf(rowWith('no-research')), 'researched');
+    assert.equal(act(rowWith('no-research')), 'design/Run Design');
+    assert.equal(act(rowWith('no-design')), 'qa/Run QA');
+  });
+});
+
 describe('actionFor — the one button a card offers', () => {
   // Field by field, not deepEqual: these objects are built inside the vm
   // context, so they are structurally right but never reference-equal.
@@ -182,7 +236,10 @@ describe('actionFor — the one button a card offers', () => {
 
   test('no-research skips it straight to Design', () => {
     // Dave applies this label in Linear himself: "this one needs no research".
+    // The card now sits under Researched too, so the button and the column say
+    // the same thing rather than disagreeing.
     assert.equal(act(rowWith('no-research')), 'design/Run Design');
+    assert.equal(stageOf(rowWith('no-research')), 'researched');
   });
 
   test('researched offers Design', () => {

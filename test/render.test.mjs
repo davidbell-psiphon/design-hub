@@ -270,6 +270,45 @@ describe('a gate renders as options, not as a box to type in', () => {
   });
 });
 
+describe('a skipped stage looks different from a completed one', () => {
+  const pill = (html) => (html.match(/class="stage-pill[^"]*">([^<]+)</) || [])[1];
+
+  test('the pill says which stage was skipped, and is marked as such', () => {
+    const skipped = sessionCard(row({ linear_id: 'RYV-90', labels: ['no-research'] }));
+    assert.equal(pill(skipped), 'Research skipped');
+    assert.match(skipped, /class="stage-pill is-skipped"/);
+  });
+
+  test('a completed stage keeps the plain pill it always had', () => {
+    const done = sessionCard(row({ linear_id: 'RYV-91', labels: ['AI-research done'] }));
+    assert.equal(pill(done), 'Researched');
+    assert.equal(done.includes('is-skipped'), false);
+  });
+
+  test('an untouched card is still Backlog, not skipped', () => {
+    const fresh = sessionCard(row({ linear_id: 'RYV-92' }));
+    assert.equal(pill(fresh), 'Backlog');
+    assert.equal(fresh.includes('is-skipped'), false);
+  });
+
+  test('skipping advances the card, so the button offers the next stage', () => {
+    // The failure this closes: the card sat in Backlog offering Run Design,
+    // with the column and the button disagreeing about where it was.
+    const skipped = sessionCard(row({ linear_id: 'RYV-90', labels: ['no-research'] }));
+    assert.match(skipped, /triggerSession\('[^']+', 'design'/);
+    assert.ok(skipped.includes('Run Design'));
+  });
+
+  test('a no-design card in the drawer says why it is at that level', () => {
+    const aside = sessionCard(row({ linear_id: 'RYV-93', labels: ['no-design'],
+                                    dismissed_at: '2026-09-05 02:00:00' }));
+    assert.equal(pill(aside), 'Design skipped');
+    // Still put aside, and still offering only Undo — sectioning is untouched.
+    assert.ok(aside.includes('undismissSession'));
+    assert.equal(aside.includes('triggerSession'), false);
+  });
+});
+
 describe('controls per section', () => {
   test('No design cards offer Undo and cannot be triggered', () => {
     assert.ok(drawers.nodesign.includes('undismissSession'));

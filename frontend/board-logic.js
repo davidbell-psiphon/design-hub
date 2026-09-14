@@ -106,13 +106,57 @@ function chosenLabel(r) {
   return r.response_label || r.response_option_id;
 }
 
-// Which column the card sits in. Read from the labels, most-advanced first, so
-// an issue carrying every label lands in the last stage rather than the first.
+// ─── STAGE COMPLETION: THREE STATES, NOT TWO ───────
+// Absence of `AI-research done` used to mean two different things — the stage
+// has not run, and the stage was deliberately passed over — so a card marked
+// no-research was indistinguishable from one whose research silently failed.
+//
+// Skipping is a decision, and a decision the board hid. These read it back out
+// of the labels that already record it: nothing is written here, and no column
+// was added.
+
+// Dave's own labels, applied in Linear: "this one needs no research", "this
+// one needs no design". Nothing skips QA, which is why `qa` has no entry.
+var SKIP_LABELS = {
+  research: 'no-research',
+  design: 'no-design',
+};
+
+// How far one stage got: 'done', 'skipped', or null for not started.
+//
+// Done outranks skipped. A card carrying both `no-research` and
+// `AI-research done` had the research run in the end, whatever was intended
+// earlier, and the label the system wrote is the more reliable of the two.
+function stageState(r, stage) {
+  if (hasLabel(r, STAGE_LABELS[stage])) return 'done';
+  var skip = SKIP_LABELS[stage];
+  if (skip && hasLabel(r, skip)) return 'skipped';
+  return null;
+}
+
+// The furthest stage a card has got past, and how it got past it, as
+// { stage, how }. Most-advanced first, so an issue carrying every label lands
+// in the last stage rather than the first.
+//
+// A skipped stage counts as got-past: the card advances to the next column and
+// becomes eligible for the next stage, exactly as a completed one does. What
+// it must not do is *look* the same, which is what `how` carries.
+function stageReached(r) {
+  var levels = [
+    { stage: 'qa', of: 'qa' },
+    { stage: 'designed', of: 'design' },
+    { stage: 'researched', of: 'research' },
+  ];
+  for (var i = 0; i < levels.length; i++) {
+    var how = stageState(r, levels[i].of);
+    if (how) return { stage: levels[i].stage, how: how };
+  }
+  return { stage: 'backlog', how: null };
+}
+
+// Which column the card sits in.
 function stageOf(r) {
-  if (hasLabel(r, STAGE_LABELS.qa)) return 'qa';
-  if (hasLabel(r, STAGE_LABELS.design)) return 'designed';
-  if (hasLabel(r, STAGE_LABELS.research)) return 'researched';
-  return 'backlog';
+  return stageReached(r).stage;
 }
 
 // Column headings. 'Backlog' rather than 'Queued': nothing is queued until you
@@ -122,6 +166,23 @@ function stageName(stage) {
   if (stage === 'designed') return 'AI-designed';
   if (stage === 'qa') return "QA'd";
   return 'Backlog';
+}
+
+// What the card's own pill says. A skipped stage says so: 'Researched' would
+// claim work that never happened, and 'Backlog' would hide a decision you
+// made. The column heading stays plain — the pill is where the difference goes.
+function stageLabel(r) {
+  var reached = stageReached(r);
+  if (reached.how !== 'skipped') return stageName(reached.stage);
+  if (reached.stage === 'researched') return 'Research skipped';
+  if (reached.stage === 'designed') return 'Design skipped';
+  return stageName(reached.stage);
+}
+
+// True when the card is where it is because a stage was passed over rather
+// than run. The pill reads differently for these.
+function isSkipped(r) {
+  return stageReached(r).how === 'skipped';
 }
 
 // A run has been asked for and has not reported back. This is the only thing
@@ -135,14 +196,15 @@ function isWorking(r) {
 // card is on the board: there is deliberately no branch here that can return
 // nothing for an open card short of the final stage.
 //
-// `no-research` is Dave's own label, applied in Linear, and means "this one
-// needs no research" — so a Backlog card carrying it offers Design instead.
+// `no-research` used to be a special case here, offering Design from a card
+// the board still showed in Backlog — the button and the column disagreed
+// about where the card was. Skipping is part of stageOf now, so this reads the
+// column and nothing else, and the two cannot drift apart.
 function actionFor(r) {
   var stage = stageOf(r);
   if (stage === 'qa') return null;
   if (stage === 'designed') return { stage: 'qa', label: 'Run QA' };
   if (stage === 'researched') return { stage: 'design', label: 'Run Design' };
-  if (hasLabel(r, 'no-research')) return { stage: 'design', label: 'Run Design' };
   return { stage: 'research', label: 'Run Research' };
 }
 
