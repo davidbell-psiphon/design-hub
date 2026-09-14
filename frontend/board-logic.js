@@ -84,18 +84,34 @@ function isGateOpen(r) {
   return !!(r && r.status === 'waiting' && optionsOf(r).length && !r.response_option_id);
 }
 
-// Answered, by naming one of the options. Stays true after the agent carries
-// on working, because a decision you can no longer see is a decision you can
-// no longer take back.
-function isGateAnswered(r) {
-  return !!(r && r.response_option_id && optionsOf(r).length);
+// A design you drew yourself, named by the Figma section it lives in — the
+// answer for when none of the offered directions is the one you want.
+//
+// It is a decision with no option id, because a section name was never one of
+// the ids the agent offered and must never be stored as though it were. That
+// shape — answered, options present, nothing named — is what identifies it,
+// and it is the same rule the Hub applies to derive `response_kind`.
+function ownSection(r) {
+  if (!r || r.response_option_id || !r.responded_at) return '';
+  if (!optionsOf(r).length) return '';
+  return r.response_note || '';
 }
 
-// What was chosen, in words. The board never shows the bare id — "d2" says
-// nothing about what was decided. Falls back to the label the Hub resolved
-// server-side, and then to the id itself, so an option that has since been
-// dropped still renders as something rather than as an empty space.
+// Answered, either way. Stays true after the agent carries on working, because
+// a decision you can no longer see is a decision you can no longer take back.
+function isGateAnswered(r) {
+  if (!r || !optionsOf(r).length) return false;
+  return !!(r.response_option_id || ownSection(r));
+}
+
+// What was decided, in words. The board never shows the bare id — "d2" says
+// nothing about what was decided. For your own design that is the section name
+// you typed. Falls back to the label the Hub resolved server-side, and then to
+// the id itself, so an option since dropped still renders as something rather
+// than as an empty space.
 function chosenLabel(r) {
+  var own = ownSection(r);
+  if (own) return own;
   if (!r || !r.response_option_id) return '';
   var opts = optionsOf(r);
   for (var i = 0; i < opts.length; i++) {

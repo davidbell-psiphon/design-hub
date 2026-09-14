@@ -26,7 +26,7 @@ const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
 const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         sectionOf, isOpen, key, timeAgo,
-        optionsOf, isGateOpen, isGateAnswered, chosenLabel,
+        optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
         stageState, stageReached, stageLabel, isSkipped } = board;
 
 // A row as the reader writes it. `labels` is the JSON array the board reads to
@@ -397,6 +397,38 @@ describe('the gate helpers — options, open, answered, chosen', () => {
   test('the chosen option resolves to its label, never the bare id', () => {
     assert.equal(chosenLabel(asJson({ response_option_id: 'd2' })), 'Labelled corner control');
     assert.equal(chosenLabel(asJson({})), '');
+  });
+
+  test('a design of your own is a decision with no option id', () => {
+    // The shape that identifies it: answered, options present, nothing named.
+    const own = asJson({ status: 'active', responded_at: '2026-09-13 10:00:00',
+                         response_note: 'Wallet header v3' });
+    assert.equal(ownSection(own), 'Wallet header v3');
+    assert.equal(isGateAnswered(own), true);
+    assert.equal(isGateOpen(own), false);
+    assert.equal(chosenLabel(own), 'Wallet header v3');
+  });
+
+  test('a note on an unanswered gate is not a decision', () => {
+    // Nothing has been responded to, so a note is just a note — which is the
+    // whole reason a section arrives under its own field.
+    const noted = asJson({ status: 'waiting', response_note: 'Wallet header v3' });
+    assert.equal(ownSection(noted), '');
+    assert.equal(isGateAnswered(noted), false);
+    assert.equal(isGateOpen(noted), true);
+  });
+
+  test('a note beside a chosen option is not a section', () => {
+    const withNote = asJson({ status: 'active', responded_at: '2026-09-13 10:00:00',
+                              response_option_id: 'd2', response_note: 'tighten the copy' });
+    assert.equal(ownSection(withNote), '');
+    assert.equal(chosenLabel(withNote), 'Labelled corner control');
+  });
+
+  test('a free-text session has no section either', () => {
+    // No options at all: the old behaviour, and nothing here applies to it.
+    assert.equal(ownSection({ status: 'active', responded_at: '2026-09-13 10:00:00',
+                              response_note: 'Direction B' }), '');
   });
 
   test('an id the options no longer carry falls back rather than blanking', () => {

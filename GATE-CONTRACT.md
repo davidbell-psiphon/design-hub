@@ -48,11 +48,43 @@ different in a later round corrupts the decision history.
 ```
 
 **Rejected with 400 when `options` is present and:**
-- `response_option_id` is missing
+- neither `response_option_id` nor `response_section` is given
 - `response_option_id` matches no id in `options`
+- both are given at once
 
 A note alone is never a decision. This is the whole point — it is what stops
 "Yes" from reading as approval.
+
+## Answering with a design that already exists
+
+The agent enumerates the choices, so the agent bounds what can be decided. When
+none of the offered directions is the right one and the design already exists
+in Figma, name the section it lives in:
+
+```json
+{ "response_section": "Wallet header v3" }
+```
+
+That decides the gate. `status` returns to `active` and the agent iterates on
+that section rather than asking again.
+
+**`response_option_id` stays null.** A section name was never one of the ids on
+the list, and that column only ever holds something that was. There is no
+reserved id to special-case either — reads carry an explicit `response_kind`
+instead:
+
+| `response_kind` | Means | `response_label` |
+|---|---|---|
+| `option` | one of the offered ids | the option's label |
+| `own` | a design named by its Figma section | the section name |
+| `free` | a gate with no `options`, answered in prose | the prose |
+| `null` | nothing decided yet | `null` |
+
+**`GATE: DECIDED` requires `response_kind` to be non-null**, not
+`response_option_id` specifically. An own-design decision has no option id and
+is still a decision. The section arrives under its own field name and never as
+a bare `response_note`, because a note that decides a gate is the "Yes" bug
+whatever words are in it.
 
 ## Reading — what the agent sees
 
@@ -60,9 +92,24 @@ A note alone is never a decision. This is the whole point — it is what stops
 {
   "status": "active",
   "gate_round": 1,
+  "response_kind": "option",
   "response_option_id": "d2",
   "response_label": "Labelled corner control",
   "response_note": "but tighten the label copy",
+  "options": [ ... ]
+}
+```
+
+An own-design answer reads back as:
+
+```json
+{
+  "status": "active",
+  "gate_round": 1,
+  "response_kind": "own",
+  "response_option_id": null,
+  "response_label": "Wallet header v3",
+  "response_note": "Wallet header v3",
   "options": [ ... ]
 }
 ```

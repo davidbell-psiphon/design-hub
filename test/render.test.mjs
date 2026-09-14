@@ -212,6 +212,7 @@ describe('a gate renders as options, not as a box to type in', () => {
     options: JSON.stringify(OPTIONS),
     response_option_id: o.response_option_id || null,
     response_note: o.response_note || null,
+    responded_at: o.responded_at || (o.response_option_id ? '2026-09-13 10:00:00' : null),
   });
 
   test('every option is its own button, carrying its label and summary', () => {
@@ -223,14 +224,14 @@ describe('a gate renders as options, not as a box to type in', () => {
     assert.match(html, /answerGate\('[^']+', 'd2'/);
   });
 
-  test('the question is shown, and nothing is typed to answer it', () => {
+  test('the question is shown, and no prose answers it', () => {
     const html = gate();
     assert.ok(html.includes('Which direction proceeds?'), 'the question is missing');
     assert.equal(html.includes('<textarea'), false, 'a free-text answer box came back');
-    // Two fields, and neither of them is an answer: the note that rides with a
-    // choice, and the reason that has to accompany rejecting all of them.
+    // Two fields, and neither takes an answer in words: one names a Figma
+    // section, the other gives a reason for rejecting every option.
     const ids = [...html.matchAll(/<input[^>]*\sid="([a-z-]+)-[^"]*"/g)].map(m => m[1]);
-    assert.deepEqual(ids, ['note', 'reject-note']);
+    assert.deepEqual(ids, ['own', 'reject-note']);
   });
 
   test('rejecting all three is offered, and is not one of the options', () => {
@@ -245,11 +246,28 @@ describe('a gate renders as options, not as a box to type in', () => {
     assert.equal(/answerGate\([^)]*none/i.test(html), false);
   });
 
-  test('the rejection asks for its own reason, separate from the note', () => {
+  test('the rejection asks for its own reason, separate from the section', () => {
     const html = gate();
     assert.match(html, /id="reject-note-[^"]+"[\s\S]*?Why none of these\? \(required\)/);
-    // The optional note still says what it is for, and is a different field.
-    assert.match(html, /id="note-[^"]+"[\s\S]*?not instead of it/);
+    assert.match(html, /id="own-[^"]+"[\s\S]*?Wallet header v3/);
+  });
+
+  test('a design you already made is answered by naming its section', () => {
+    const html = gate();
+    assert.ok(html.includes('name its Figma section'), 'the field does not say what it takes');
+    // An Enter button beside the input, and the Enter key doing the same thing.
+    assert.match(html, /id="own-go-[^"]+"[\s\S]*?onclick="chooseOwn\('[^']+'\)">Enter</);
+    assert.match(html, /onkeydown="if \(event\.key === 'Enter'\)[\s\S]*?chooseOwn/);
+  });
+
+  test('naming a section is a decision, and the card shows it as yours', () => {
+    const html = gate({ status: 'active', responded_at: '2026-09-13 10:00:00',
+                        response_note: 'Wallet header v3' });
+    assert.ok(html.includes('Your design'), 'it does not read as your own direction');
+    assert.ok(html.includes('Wallet header v3'), 'the section is missing');
+    // Not shown twice: the section is the decision, not a note beside one.
+    assert.equal((html.match(/Wallet header v3/g) || []).length, 1);
+    assert.match(html, /askReopen\('[^']+'\)/, 'it cannot be taken back');
   });
 
   test('an answered gate shows the label and never the id', () => {

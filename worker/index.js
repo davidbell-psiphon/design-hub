@@ -105,17 +105,42 @@ function labelFor(options, optionId) {
   return hit && hit.label ? hit.label : null;
 }
 
+// What kind of decision a row is carrying, and what it amounts to in words.
+//
+//   'option' — one of the ids the agent offered
+//   'own'    — a design the human already drew, named by its Figma section
+//   'free'   — a gate with no options at all, answered in prose
+//   null     — nothing decided yet
+//
+// The discriminator is derived rather than stored, so no reserved id has to
+// live in the data and `response_option_id` never holds anything that was not
+// on the list. An own-design answer is a decision with no option id, which is
+// exactly what distinguishes it from an open gate.
+function decisionOf(row, options) {
+  if (!row.responded_at) return { kind: null, label: null };
+  if (row.response_option_id) {
+    return { kind: 'option', label: labelFor(options, row.response_option_id) };
+  }
+  if (options.length) {
+    return row.response_note ? { kind: 'own', label: row.response_note }
+                             : { kind: null, label: null };
+  }
+  return { kind: 'free', label: row.response || null };
+}
+
 // A row as anything reading it should see it: options as an array rather than
-// a JSON blob, and the chosen label resolved alongside the id. A run log that
-// says "d2" says nothing about what was decided, and no consumer should have
-// to look that up itself.
+// a JSON blob, and the decision resolved into words alongside the id. A run log
+// that says "d2" says nothing about what was decided, and no consumer should
+// have to look that up itself.
 function withGate(row) {
   if (!row) return row;
   const options = parseOptions(row.options);
+  const decision = decisionOf(row, options);
   return {
     ...row,
     options: options.length ? options : null,
-    response_label: labelFor(options, row.response_option_id),
+    response_kind: decision.kind,
+    response_label: decision.label,
   };
 }
 
@@ -907,8 +932,38 @@ async function route(request, env) {
       const options = parseOptions(existing.options);
       if (options.length) {
         const offered = options.map(o => o.id).join(', ');
+
+        // A direction you drew yourself. The agent enumerates the choices, so
+        // the agent bounds what you are allowed to decide — and sometimes the
+        // right answer is a design that already exists in Figma. Naming its
+        // section decides the gate.
+        //
+        // It is a decision, but it is not one of the ids the agent offered, so
+        // `response_option_id` stays null: that column only ever holds
+        // something that was actually on the list. `response_kind` on reads is
+        // what tells a consumer which kind of decision it is looking at.
+        //
+        // This arrives under its own field name, never as a bare note. A note
+        // that decides a gate is the "Yes" bug, whatever it says.
+        const section = b.response_section === undefined || b.response_section === null
+          ? '' : String(b.response_section).trim();
+        if (section && b.response_option_id) {
+          return err('answer with an option or with your own design, not both');
+        }
+        if (section) {
+          if (section.length > 200) return err('section name too long — 200 characters at most');
+          await env.DB.prepare(
+            `UPDATE agent_sessions
+                SET response_option_id = NULL, response_note = ?, response = ?,
+                    responded_at = datetime('now'),
+                    status = 'active', updated_at = datetime('now')
+              WHERE id = ?`
+          ).bind(section, section, id).run();
+          return json({ ok: true, response_kind: 'own', response_label: section });
+        }
+
         if (!b.response_option_id) {
-          return err('response_option_id required — this gate offers ' + offered);
+          return err('response_option_id or response_section required — this gate offers ' + offered);
         }
         const chosen = options.find(o => o && o.id === b.response_option_id);
         if (!chosen) {
@@ -926,7 +981,8 @@ async function route(request, env) {
                   status = 'active', updated_at = datetime('now')
             WHERE id = ?`
         ).bind(chosen.id, b.response_note || null, chosen.label, id).run();
-        return json({ ok: true, response_option_id: chosen.id, response_label: chosen.label });
+        return json({ ok: true, response_kind: 'option',
+                      response_option_id: chosen.id, response_label: chosen.label });
       }
 
       if (!b.response) return err('response required');

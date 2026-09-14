@@ -290,9 +290,9 @@ against a prose question is structurally wrong, not badly worded.
 { "response_option_id": "d2", "response_note": "but tighten the label copy" }
 ```
 
-Rejected with 400 when `options` is present and `response_option_id` is missing
-or names nothing in the array. Reads carry `response_label` beside the id, so a
-run log says what was decided rather than printing `d2`.
+Rejected with 400 when `options` is present and the answer names nothing on the
+list. Reads carry `response_kind` and `response_label` beside the id, so a run
+log says what was decided rather than printing `d2`.
 
 Ids are opaque tokens — letters, digits and `. _ : -` — and are stable for the
 life of a round. Reusing `d1` to mean something different later corrupts the
@@ -312,6 +312,27 @@ rejecting the options outright records nothing but the reason, and a gate that
 reopens with no reason tells the agent only that it reopened — so it re-asks
 the same question. That case is refused with 400.
 
+### Answering with a design you already made
+
+The agent enumerates the choices, so the agent bounds what can be decided —
+and sometimes the right answer is something already drawn. The card takes a
+Figma section name and an Enter button beside it:
+
+```json
+{ "response_section": "Wallet header v3" }
+```
+
+That **decides** the gate: `status` returns to `active` and the agent iterates
+on that section instead of asking again. `response_option_id` stays null,
+because a section name was never one of the ids on the list and that column
+only ever holds something that was. No reserved id either — reads carry
+`response_kind` (`option` | `own` | `free` | `null`) and `response_label`, so
+nothing has to infer what kind of decision it is looking at.
+
+The section arrives under its own field name and never as a bare
+`response_note`. A note that decides a gate is the "Yes" bug whatever words
+are in it.
+
 ### Rejecting every option
 
 A gate can be wrong in a way none of its answers can express, so the board
@@ -324,8 +345,10 @@ id that consumers have to special-case. Mechanically it is the reopen path: the
 round closes with the reason on its `gate_decisions` row, `gate_round`
 increments, the card returns to `waiting`, and the agent posts a fresh set.
 
-So the three things you can do with an open gate are: choose an option (note
-optional), reject all of them (reason required), or leave it open.
+So the things you can do with an open gate are: choose one of the options, name
+the Figma section of a design you already made, reject all of them with a
+reason, or leave it open. The first two decide it; the third starts a new round;
+the fourth leaves the agent waiting.
 
 `PATCH /api/agent/session/:id/state` carries the two completion levels that had
 nowhere to live: `mockups_url` / `mockups_at` for when something was actually
@@ -364,7 +387,7 @@ Used by the board:
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
-| `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id","response_note"}` where the gate has options, free text where it does not |
+| `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id"}` or `{"response_section"}` where the gate has options, free text where it does not |
 | `PATCH /api/agent/session/:id/reopen` | Send a gate back for a new round — taking a decision back, or rejecting every option with `{"note"}` |
 | `DELETE /api/agent/session/:id` | Drop a session |
 | `POST /api/read-linear` | Run the reader now |

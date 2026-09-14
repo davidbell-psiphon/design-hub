@@ -529,7 +529,7 @@ describe('answering a gate', () => {
     const { db, e } = await gated();
     const res = await respond(e, AGENT_ID, { response_note: 'Yes' });
     assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /response_option_id required/);
+    assert.match((await res.json()).error, /response_option_id or response_section required/);
     assert.equal(only(db).response_option_id, null);
     assert.equal(only(db).status, 'waiting', 'a rejected answer must not start the agent');
   });
@@ -666,6 +666,85 @@ describe('reopening a gate', () => {
   test('reopening a session that does not exist is a 404', async () => {
     const { e } = await gated();
     assert.equal((await reopen(e, 'nope/nothing/here', { note: 'x' })).status, 404);
+  });
+});
+
+describe('answering with a design you already made', () => {
+  // The agent enumerates the choices, so the agent bounds what can be decided.
+  // Naming a Figma section decides the gate with something it never offered —
+  // without that section name ever being stored as though it were an option id.
+  test('the section decides the gate, and no option id is invented for it', async () => {
+    const { db, e } = await gated();
+    const res = await respond(e, AGENT_ID, { response_section: 'Wallet header v3' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.response_kind, 'own');
+    assert.equal(body.response_label, 'Wallet header v3');
+
+    const r = only(db);
+    assert.equal(r.response_option_id, null, 'a section name must never land in response_option_id');
+    assert.equal(r.response_note, 'Wallet header v3');
+    assert.equal(r.response, 'Wallet header v3');
+    assert.equal(r.status, 'active', 'the agent proceeds rather than asking again');
+    assert.ok(r.responded_at);
+  });
+
+  test('reads say which kind of decision it is', async () => {
+    const { e } = await gated();
+    await respond(e, AGENT_ID, { response_section: 'Wallet header v3' });
+    const one = await (await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
+                                  undefined, { 'X-Agent-Secret': 's' })).json();
+    assert.equal(one.response_kind, 'own');
+    assert.equal(one.response_label, 'Wallet header v3');
+    assert.equal(one.response_option_id, null);
+  });
+
+  test('choosing an option is still marked as one', async () => {
+    const { e } = await gated();
+    await respond(e, AGENT_ID, { response_option_id: 'd2' });
+    const one = await (await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
+                                  undefined, { 'X-Agent-Secret': 's' })).json();
+    assert.equal(one.response_kind, 'option');
+    assert.equal(one.response_label, 'Labelled corner control');
+  });
+
+  test('an unanswered gate has no decision kind at all', async () => {
+    const { e } = await gated();
+    const one = await (await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
+                                  undefined, { 'X-Agent-Secret': 's' })).json();
+    assert.equal(one.response_kind, null);
+    assert.equal(one.response_label, null);
+  });
+
+  test('a bare note is still not a decision, whatever it says', async () => {
+    // The whole point: the section arrives under its own field name. A note
+    // that decides a gate is the "Yes" bug however it is worded.
+    const { db, e } = await gated();
+    assert.equal((await respond(e, AGENT_ID, { response_note: 'Wallet header v3' })).status, 400);
+    assert.equal(only(db).responded_at, null);
+    assert.equal(only(db).status, 'waiting');
+  });
+
+  test('an empty or oversized section is refused, and both answers at once', async () => {
+    const { db, e } = await gated();
+    assert.equal((await respond(e, AGENT_ID, { response_section: '   ' })).status, 400);
+    assert.equal((await respond(e, AGENT_ID, { response_section: 'x'.repeat(201) })).status, 400);
+    const both = await respond(e, AGENT_ID, { response_option_id: 'd2', response_section: 'Mine' });
+    assert.equal(both.status, 400);
+    assert.match((await both.json()).error, /not both/);
+    assert.equal(only(db).responded_at, null);
+  });
+
+  test('it can be taken back like any other decision', async () => {
+    const { db, e } = await gated();
+    await respond(e, AGENT_ID, { response_section: 'Wallet header v3' });
+    assert.equal((await reopen(e, AGENT_ID, undefined)).status, 200,
+                 'a decision is a trail, so no reason is needed');
+    assert.equal(only(db).response_note, null);
+    assert.equal(only(db).status, 'waiting');
+    assert.equal(decisions(db).length, 1);
+    assert.match(decisions(db)[0].response_note, /Wallet header v3/);
+    assert.equal(decisions(db)[0].response_option_id, null);
   });
 });
 

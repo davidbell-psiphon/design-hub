@@ -123,6 +123,13 @@
   .gate-chosen-label { font-size: 12px; font-weight: 600; color: var(--text); }
   .gate-said { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
   .gate-reopen { margin-top: 8px; }
+  /* A direction you drew yourself: an answer the agent could not enumerate,
+     so it gets a field rather than a button. */
+  .gate-own { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); }
+  .gate-own-label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+  .gate-own-row { display: flex; gap: 6px; align-items: stretch; }
+  .gate-own-input { margin-top: 0; flex: 1; min-width: 0; }
+  .gate-own-enter { flex-shrink: 0; }
   /* Rejecting every option sits apart from them, so it never reads as a
      fourth thing you could pick. */
   .gate-reject-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -338,8 +345,16 @@ function sessionCard(r) {
           ${o.summary ? `<span class="gate-option-summary">${esc(o.summary)}</span>` : ''}
         </button>`).join('')}
       </div>
-      <input class="gate-note" id="note-${gk}" type="text" autocomplete="off"
-             placeholder="Note (optional) — goes with the choice, not instead of it">
+      <div class="gate-own">
+        <label class="gate-own-label" for="own-${gk}">Or a design you already made — name its Figma section</label>
+        <div class="gate-own-row">
+          <input class="gate-note gate-own-input" id="own-${gk}" type="text" autocomplete="off"
+                 placeholder="e.g. Wallet header v3"
+                 onkeydown="if (event.key === 'Enter') { event.preventDefault(); chooseOwn('${esc(id)}'); }">
+          <button class="btn gate-own-enter" id="own-go-${gk}"
+                  onclick="chooseOwn('${esc(id)}')">Enter</button>
+        </div>
+      </div>
       <div class="gate-reject-row">
         <button class="btn gate-reject" id="reject-${gk}"
                 onclick="askRejectAll('${esc(id)}')">None of these</button>
@@ -353,10 +368,10 @@ function sessionCard(r) {
   } else if (section === 'board' && isGateAnswered(r)) {
     gateHtml = `<div class="gate">
       <div class="gate-chosen">
-        <span class="gate-round">Decided</span>
+        <span class="gate-round">${ownSection(r) ? 'Your design' : 'Decided'}</span>
         <span class="gate-chosen-label">${esc(chosenLabel(r))}</span>
       </div>
-      ${r.response_note ? `<div class="gate-said">${esc(r.response_note)}</div>` : ''}
+      ${!ownSection(r) && r.response_note ? `<div class="gate-said">${esc(r.response_note)}</div>` : ''}
       <button class="btn gate-reopen" id="reopen-${gk}" onclick="askReopen('${esc(id)}')">Reopen</button>
       <div id="reopen-box-${gk}" hidden>
         <input class="gate-note" id="reopen-note-${gk}" type="text" autocomplete="off"
@@ -622,20 +637,49 @@ async function undismissSession(id, btn) {
   }
 }
 
-// The answer to a gate is one of the options, never something typed. The note
-// rides along with the choice — it is what "but tighten the label copy" is
-// for — and the Hub rejects it arriving on its own, because a note that names
-// none of the directions is not a direction.
+// Choosing a design you already made. The agent enumerates the directions, so
+// the agent bounds what you can decide — and sometimes the answer is something
+// already drawn. Naming its Figma section decides the gate, and the agent
+// iterates on that rather than asking again.
+//
+// It sends its own field, never a bare note: a note that decides a gate is the
+// "Yes" bug whatever words are in it.
+async function chooseOwn(id) {
+  const k = key(id);
+  const input = document.getElementById('own-' + k);
+  const section = input && input.value ? input.value.trim() : '';
+  if (!section) {
+    toast('Name the Figma section your design is in');
+    if (input && input.focus) input.focus();
+    return;
+  }
+  const btn = document.getElementById('own-go-' + k);
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  if (input) input.disabled = true;
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/respond`, {
+      method: 'PATCH', body: { response_section: section },
+    });
+    toast('Decided — your design in ' + ((res && res.response_label) || section));
+    await loadBoard();
+  } catch (e) {
+    toast('Could not send — ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Enter'; }
+    if (input) input.disabled = false;
+  }
+}
+
+// The answer to a gate is one of the options, or a design you point at. Never
+// something typed into a note: the Hub rejects a note arriving on its own,
+// because a note that names none of the directions is not a direction.
 async function answerGate(id, optionId, btn) {
-  const noteEl = document.getElementById('note-' + key(id));
-  const note = noteEl && noteEl.value ? noteEl.value.trim() : '';
   const siblings = btn && btn.parentElement
     ? Array.from(btn.parentElement.querySelectorAll('button')) : [];
   siblings.forEach(b => { b.disabled = true; });
   try {
     const res = await api(`/agent/session/${encodeURIComponent(id)}/respond`, {
       method: 'PATCH',
-      body: { response_option_id: optionId, response_note: note || null },
+      body: { response_option_id: optionId },
     });
     toast('Decided — ' + ((res && res.response_label) || optionId));
     await loadBoard();
