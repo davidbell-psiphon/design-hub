@@ -18,10 +18,12 @@ import { DatabaseSync } from 'node:sqlite';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// The schema as the live database got it: additive pieces, in order.
+// The schema as the live database got it: additive pieces, in order. The gate
+// migration is last because that is the order it was applied in, and applying
+// them in order is half of what this suite checks.
 const PIECES = ['agent-schema.sql', 'reader-schema.sql', 'track-schema.sql',
                 'piece4-schema.sql', 'piece5-schema.sql', 'piece6-schema.sql',
-                'piece7-schema.sql'];
+                'piece7-schema.sql', 'migration-001-gates.sql'];
 
 // Comments first, then split on statement boundaries — that order matters,
 // because one piece4 comment has a semicolon in it. Safe here because none of
@@ -142,6 +144,9 @@ const readLinear = (e) => call(e, 'POST', '/api/read-linear');
 const rows = (db) => db.prepare(
   `SELECT * FROM agent_sessions ORDER BY id`).all();
 
+// Options as stored (JSON) or as a read hands them back (an array).
+const parseOpts = (raw) => (typeof raw === 'string' ? JSON.parse(raw) : (raw || []));
+
 // The agent's session id for a Linear issue, exactly as design-ai posts it.
 const AGENT_ID = 'ryve/ryv-84/research';
 const AGENT_BODY = {
@@ -154,9 +159,13 @@ describe('the schema pieces apply in order', () => {
   test('every piece applies to a clean database', () => {
     const db = freshDb();
     const cols = db.prepare(`PRAGMA table_info(agent_sessions)`).all().map(c => c.name);
-    for (const c of ['linear_id', 'track', 'linear_uuid', 'dismissed_at', 'agent_session_id']) {
+    for (const c of ['linear_id', 'track', 'linear_uuid', 'dismissed_at', 'agent_session_id',
+                     'options', 'response_option_id', 'response_note', 'gate_round',
+                     'mockups_url', 'mockups_at', 'handoff_at']) {
       assert.ok(cols.includes(c), `${c} missing`);
     }
+    assert.ok(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'gate_decisions'`).get(),
+              'gate_decisions missing');
   });
 
   test('re-running piece6 fails on the duplicate column rather than destroying data', () => {
@@ -440,6 +449,293 @@ describe('sessions with no Linear issue behind them', () => {
     const all = rows(db);
     assert.equal(all.length, 2);
     assert.deepEqual(all.map(r => r.linear_id).sort(), ['CON-116', 'RYV-84']);
+  });
+});
+
+
+// ─── CONSTRAINED GATE DECISIONS ────────────────────
+// The bug these close: a three-option question was answered "Yes". "Yes" names
+// none of the three, the client still reported a decision, and the agent was
+// left to pick a direction itself. Everything below is about the answer naming
+// one of the options that were actually offered.
+
+const OPTIONS = [
+  { id: 'd1', label: 'Icon-only corner button', summary: '48x48 circular + at the corner.' },
+  { id: 'd2', label: 'Labelled corner control', summary: 'Costs card width.' },
+  { id: 'd3', label: 'Collection-level add row', summary: 'Leaves the corner empty.' },
+];
+const GATE = { ...AGENT_BODY, status: 'waiting', options: OPTIONS };
+
+const respond = (e, id, body) =>
+  call(e, 'PATCH', '/api/agent/session/' + encodeURIComponent(id) + '/respond', body);
+const reopen = (e, id, body) =>
+  call(e, 'PATCH', '/api/agent/session/' + encodeURIComponent(id) + '/reopen', body);
+const setState = (e, id, body) =>
+  call(e, 'PATCH', '/api/agent/session/' + encodeURIComponent(id) + '/state', body);
+const decisions = (db) => db.prepare(`SELECT * FROM gate_decisions ORDER BY id`).all();
+const only = (db) => rows(db)[0];
+
+// A Linear card with a gate posted against it, reached through the agent's own
+// session id — the same path everything else in this file uses.
+async function gated(body = GATE) {
+  const db = freshDb();
+  const e = env(db);
+  stubLinear([issue({ identifier: 'RYV-84' })]);
+  await readLinear(e);
+  const res = await agentPost(e, body);
+  assert.equal(res.status, 200, await res.clone().text());
+  return { db, e };
+}
+
+describe('posting a gate', () => {
+  test('options are stored, and read back as an array rather than a blob', async () => {
+    const { db, e } = await gated();
+    assert.equal(typeof only(db).options, 'string', 'the column should hold JSON');
+
+    const res = await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
+                           undefined, { 'X-Agent-Secret': 's' });
+    const body = await res.json();
+    assert.equal(Array.isArray(body.options), true, 'options came back as a string');
+    assert.deepEqual(body.options.map(o => o.id), ['d1', 'd2', 'd3']);
+    assert.equal(body.options[1].label, 'Labelled corner control');
+  });
+
+  test('options that cannot be answered are refused at post time', async () => {
+    const db = freshDb();
+    const e = env(db);
+    const bad = async (options) => {
+      const res = await agentPost(e, { ...GATE, options });
+      assert.equal(res.status, 400, JSON.stringify(options));
+      return (await res.json()).error;
+    };
+    await bad('d1, d2, d3');                              // not an array
+    await bad([]);                                        // nothing to choose
+    await bad([{ label: 'No id' }]);                      // no id to answer with
+    await bad([{ id: 'd1' }]);                            // no label to show
+    await bad([{ id: 'd1', label: 'A' }, { id: 'd1', label: 'B' }]);  // ambiguous
+    await bad([{ id: "d1' onclick='x", label: 'A' }]);    // not an opaque token
+    assert.equal(rows(db).length, 0, 'a refused gate should write nothing');
+  });
+
+  test('a later post without options leaves the question standing', async () => {
+    const { db, e } = await gated();
+    await agentPost(e, { ...AGENT_BODY, status: 'active', detail: 'Still working.' });
+    assert.equal(parseOpts(only(db).options).length, 3, 'the options were wiped');
+  });
+});
+
+describe('answering a gate', () => {
+  test('a note on its own is not a decision', async () => {
+    const { db, e } = await gated();
+    const res = await respond(e, AGENT_ID, { response_note: 'Yes' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /response_option_id required/);
+    assert.equal(only(db).response_option_id, null);
+    assert.equal(only(db).status, 'waiting', 'a rejected answer must not start the agent');
+  });
+
+  test('free text on its own is not a decision either — this is the "Yes" bug', async () => {
+    const { db, e } = await gated();
+    const res = await respond(e, AGENT_ID, { response: 'Yes' });
+    assert.equal(res.status, 400);
+    assert.equal(only(db).response, null);
+    assert.equal(only(db).status, 'waiting');
+  });
+
+  test('an id that names no option is refused', async () => {
+    const { db, e } = await gated();
+    const res = await respond(e, AGENT_ID, { response_option_id: 'd9' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /d1, d2, d3/);
+    assert.equal(only(db).response_option_id, null);
+  });
+
+  test('a valid id is accepted, and the answer comes back in words', async () => {
+    const { db, e } = await gated();
+    const res = await respond(e, AGENT_ID, {
+      response_option_id: 'd2', response_note: 'but tighten the label copy',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).response_label, 'Labelled corner control');
+
+    const r = only(db);
+    assert.equal(r.response_option_id, 'd2');
+    assert.equal(r.response_note, 'but tighten the label copy');
+    // The old column carries the answer in words, copied off the option.
+    assert.equal(r.response, 'Labelled corner control');
+    assert.equal(r.status, 'active');
+    assert.ok(r.responded_at);
+  });
+
+  test('the chosen label rides alongside the id on every read', async () => {
+    const { e } = await gated();
+    await respond(e, AGENT_ID, { response_option_id: 'd2' });
+
+    const one = await (await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
+                                  undefined, { 'X-Agent-Secret': 's' })).json();
+    assert.equal(one.response_label, 'Labelled corner control');
+
+    const list = await (await call(e, 'GET', '/api/agent/sessions')).json();
+    assert.equal(list[0].response_label, 'Labelled corner control');
+    assert.equal(Array.isArray(list[0].options), true);
+  });
+
+  test('a gate with no options is still answered in free text', async () => {
+    // No backfill: every session posted before the contract changed keeps
+    // working exactly as it did.
+    const { db, e } = await gated(AGENT_BODY);
+    const res = await respond(e, AGENT_ID, { response: 'Direction B' });
+    assert.equal(res.status, 200);
+    assert.equal(only(db).response, 'Direction B');
+    assert.equal(only(db).response_option_id, null);
+    assert.equal(only(db).status, 'active');
+  });
+
+  test('a free-text gate still requires something to be said', async () => {
+    const { e } = await gated(AGENT_BODY);
+    assert.equal((await respond(e, AGENT_ID, {})).status, 400);
+  });
+});
+
+describe('reopening a gate', () => {
+  test('the round is archived, the decision clears, and it waits again', async () => {
+    const { db, e } = await gated();
+    await respond(e, AGENT_ID, { response_option_id: 'd2', response_note: 'tighten the copy' });
+
+    const res = await reopen(e, AGENT_ID, { note: 'Both collide with the Wallet Connect pill.' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).gate_round, 2);
+
+    const r = only(db);
+    assert.equal(r.status, 'waiting');
+    assert.equal(r.gate_round, 2);
+    assert.equal(r.response_option_id, null);
+    assert.equal(r.response_note, null);
+    assert.equal(r.response, null);
+    assert.equal(r.responded_at, null);
+
+    // The first round survives, with what was offered and what was chosen.
+    const history = decisions(db);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].gate_round, 1);
+    assert.equal(history[0].response_option_id, 'd2');
+    assert.deepEqual(parseOpts(history[0].options_snapshot).map(o => o.id), ['d1', 'd2', 'd3']);
+    assert.match(history[0].response_note, /tighten the copy/);
+    assert.match(history[0].response_note, /Wallet Connect pill/);
+  });
+
+  test('the agent posts a fresh round onto the reopened gate', async () => {
+    const { db, e } = await gated();
+    await respond(e, AGENT_ID, { response_option_id: 'd2' });
+    await reopen(e, AGENT_ID, { note: 'Revise.' });
+
+    const round2 = [{ id: 'r1', label: 'Pill above the card' },
+                    { id: 'r2', label: 'Pill inside the header' }];
+    await agentPost(e, { ...GATE, options: round2 });
+    assert.deepEqual(parseOpts(only(db).options).map(o => o.id), ['r1', 'r2']);
+    assert.equal(only(db).gate_round, 2);
+
+    // And the ids of the new round are the only ones it will take.
+    assert.equal((await respond(e, AGENT_ID, { response_option_id: 'd2' })).status, 400);
+    assert.equal((await respond(e, AGENT_ID, { response_option_id: 'r1' })).status, 200);
+    assert.equal(only(db).response, 'Pill above the card');
+  });
+
+  test('reopening an unanswered gate keeps the reason and nothing else', async () => {
+    const { db, e } = await gated();
+    await reopen(e, AGENT_ID, { note: 'Ask it differently.' });
+    const history = decisions(db);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].response_option_id, null);
+    assert.match(history[0].response_note, /Ask it differently/);
+    assert.equal(only(db).gate_round, 2);
+  });
+
+  test('reopening with nothing to record writes no history', async () => {
+    const { db, e } = await gated();
+    const res = await reopen(e, AGENT_ID, undefined);
+    assert.equal(res.status, 200);
+    assert.equal(decisions(db).length, 0);
+    assert.equal(only(db).gate_round, 2);
+  });
+
+  test('reopening a session that does not exist is a 404', async () => {
+    const { e } = await gated();
+    assert.equal((await reopen(e, 'nope/nothing/here', { note: 'x' })).status, 404);
+  });
+});
+
+describe('a different set of options is a different question', () => {
+  test('the old answer is archived and cleared, never carried over', async () => {
+    // Ids are stable for the life of a round. A round-1 `d1` sitting on a
+    // round-2 gate is the "Yes" bug wearing an id.
+    const { db, e } = await gated();
+    await respond(e, AGENT_ID, { response_option_id: 'd2' });
+
+    await agentPost(e, { ...GATE, options: [
+      { id: 'd1', label: 'Something else entirely' },
+      { id: 'd2', label: 'And another thing' },
+    ] });
+
+    const r = only(db);
+    assert.equal(r.response_option_id, null, 'the previous answer survived the new question');
+    assert.equal(r.response, null);
+    assert.equal(r.gate_round, 2);
+    assert.equal(r.status, 'waiting');
+    assert.equal(decisions(db).length, 1);
+    assert.equal(decisions(db)[0].response_option_id, 'd2');
+  });
+
+  test('re-posting the same options is the agent repeating itself', async () => {
+    // The agent posts its state as it works. If each post reset the gate, an
+    // answer given a second earlier would vanish.
+    const { db, e } = await gated();
+    await respond(e, AGENT_ID, { response_option_id: 'd2' });
+    await agentPost(e, GATE);
+
+    assert.equal(only(db).response_option_id, 'd2');
+    assert.equal(only(db).gate_round, 1);
+    assert.equal(decisions(db).length, 0);
+  });
+});
+
+describe('mockups and handoff', () => {
+  test('a mockups url and its timestamp both land', async () => {
+    const { db, e } = await gated();
+    const res = await setState(e, AGENT_ID, {
+      mockups_url: 'https://figma.com/file/abc/page', mockups_at: 'now',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(only(db).mockups_url, 'https://figma.com/file/abc/page');
+    assert.match(only(db).mockups_at, /^\d{4}-\d{2}-\d{2} /);
+  });
+
+  test('a url with no timestamp still records when it arrived', async () => {
+    const { db, e } = await gated();
+    await setState(e, AGENT_ID, { mockups_url: 'https://figma.com/file/abc/page' });
+    assert.ok(only(db).mockups_at, 'a url without a stamp records half the fact');
+  });
+
+  test('handoff is its own level and touches nothing else', async () => {
+    const { db, e } = await gated();
+    await setState(e, AGENT_ID, { mockups_url: 'https://figma.com/file/abc/page', mockups_at: 'now' });
+    await setState(e, AGENT_ID, { handoff_at: 'now' });
+    assert.ok(only(db).handoff_at);
+    assert.equal(only(db).mockups_url, 'https://figma.com/file/abc/page');
+  });
+
+  test('an explicit timestamp is taken as given, and null clears', async () => {
+    const { db, e } = await gated();
+    await setState(e, AGENT_ID, { handoff_at: '2026-09-12 14:30:00' });
+    assert.equal(only(db).handoff_at, '2026-09-12 14:30:00');
+    await setState(e, AGENT_ID, { handoff_at: null });
+    assert.equal(only(db).handoff_at, null);
+  });
+
+  test('a state call with nothing in it, or for nothing, is refused', async () => {
+    const { e } = await gated();
+    assert.equal((await setState(e, AGENT_ID, { phase: 'qa' })).status, 400);
+    assert.equal((await setState(e, 'nope/nothing/here', { handoff_at: 'now' })).status, 404);
   });
 });
 

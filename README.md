@@ -243,6 +243,63 @@ one, and the Linear row keeps its identity and its history.
 
 ---
 
+## Gates
+
+A gate is a question the agent stops on, and it now carries the answers with
+it. The agent posts `options` — a JSON array of `{id, label, summary}` — and
+the answer has to name one of those ids. A note can ride alongside the choice;
+it can never stand in for it.
+
+This exists because of one recorded answer. A three-option question was
+answered `"Yes"`. "Yes" names none of the three, the client reported the gate
+as decided, and the agent — following its own documentation — chose a direction
+itself. Direction choice is exactly what a gate is for, so a free-text answer
+against a prose question is structurally wrong, not badly worded.
+
+```jsonc
+// POST /api/agent/session
+{ "session_id": "ryve/ryv-84/design", "system": "design-ai", "status": "waiting",
+  "prompt": "Which direction proceeds?",
+  "options": [
+    { "id": "d1", "label": "Icon-only corner button", "summary": "48x48 circular +." },
+    { "id": "d2", "label": "Labelled corner control", "summary": "Costs card width." }
+  ] }
+
+// PATCH /api/agent/session/:id/respond
+{ "response_option_id": "d2", "response_note": "but tighten the label copy" }
+```
+
+Rejected with 400 when `options` is present and `response_option_id` is missing
+or names nothing in the array. Reads carry `response_label` beside the id, so a
+run log says what was decided rather than printing `d2`.
+
+Ids are opaque tokens — letters, digits and `. _ : -` — and are stable for the
+life of a round. Reusing `d1` to mean something different later corrupts the
+history, so the Hub treats a changed set of options as a new round: the
+decision it supersedes is archived to `gate_decisions` and cleared, rather than
+left sitting on a question it never answered. The same set re-posted is the
+agent repeating its state and changes nothing.
+
+`PATCH /api/agent/session/:id/reopen` does the same thing deliberately —
+archives the round, increments `gate_round`, clears the decision and sets the
+card back to `waiting`, with an optional `{"note": "…"}` recorded against the
+round that is ending. The agent posts fresh options for the new round.
+
+`PATCH /api/agent/session/:id/state` carries the two completion levels that had
+nowhere to live: `mockups_url` / `mockups_at` for when something was actually
+drawn, and `handoff_at` for when a developer can pick it up. `"now"` is
+accepted in place of a timestamp. `AI-design done` still only means a spec
+exists.
+
+**Sessions with no `options` are untouched by all of this** — free text, no
+constraint, the quiet card. There was no backfill and none is needed.
+
+On the board a waiting gate renders its options as buttons, one click each,
+with a separate optional note field. An answered one shows the chosen label —
+never the id — and offers Reopen.
+
+---
+
 ## API
 
 Written by the agent:
@@ -250,7 +307,8 @@ Written by the agent:
 | Route | Purpose |
 |---|---|
 | `POST /api/agent/session` | Upsert session state, onto the card for its Linear issue. Requires `X-Agent-Secret`. |
-| `GET /api/agent/session/:id` | Poll for the human's decision. `:id` may be the agent's own session id or the row's. |
+| `GET /api/agent/session/:id` | Poll for the human's decision — `response_option_id`, `response_label`, `response_note`, `gate_round`. `:id` may be the agent's own session id or the row's. |
+| `PATCH /api/agent/session/:id/state` | Record `mockups_url` / `mockups_at` / `handoff_at` |
 
 Used by the board:
 
@@ -264,7 +322,8 @@ Used by the board:
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
-| `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt |
+| `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id","response_note"}` where the gate has options, free text where it does not |
+| `PATCH /api/agent/session/:id/reopen` | Send an answered gate back for a new round |
 | `DELETE /api/agent/session/:id` | Drop a session |
 | `POST /api/read-linear` | Run the reader now |
 | `GET /api/sessions` | Waiting sessions only (legacy shape, kept for the agent) |
@@ -374,7 +433,12 @@ it exercises the SQL that ships: that a read then an agent post is one row and
 not two, that the reverse order is too, that a later read does not wipe what
 the agent wrote, that the agent still reaches the card by its own session id,
 and that `piece6-schema.sql` merges the pairs already in the table without
-losing the Linear identity or the dismissal history.
+losing the Linear identity or the dismissal history. It also runs the gate
+contract end to end: a note alone and an unknown id are both refused, a valid
+id is accepted and comes back as its label, reopening archives the round and
+clears the decision, a changed set of options supersedes an answer while the
+same set re-posted leaves it alone, and a session with no options still answers
+in free text.
 
 **`test/smoke.test.mjs`** hits production and is read-only. Its one non-GET
 case sends a deliberately invalid `action`, which the Worker rejects before it
@@ -406,6 +470,8 @@ piece4-schema.sql              linear_uuid, linear_state, triggered_at, figma_ur
 piece5-schema.sql              dismissed_at (no-design)
 piece6-schema.sql              agent_session_id + the duplicate-row merge
 piece7-schema.sql              requested_stage / requested_at (the queue) + labels
+migration-001-gates.sql        options, the constrained decision, gate_round,
+                               mockups/handoff, and the gate_decisions table
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL
 lib/derive.mjs                 brand + track derivation, shared and testable
 lib/access.mjs                 Access JWT verification

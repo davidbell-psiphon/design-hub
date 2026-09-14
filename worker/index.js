@@ -31,6 +31,126 @@ function json(data, status = 200, extra = {}) {
 }
 function err(msg, status = 400) { return json({ error: msg }, status); }
 
+// ─── GATES ─────────────────────────────────────────
+// A gate is a question with a fixed set of answers. Free text still exists —
+// it rides alongside the choice as a note, never instead of it.
+//
+// What this closes: a three-option question was answered "Yes". "Yes" names
+// none of the three, the client still reported a decision, and an agent
+// following its own documentation then picked a direction itself — the one
+// thing the gate model exists to prevent. Prose answered against prose will
+// keep producing that, so the answer is constrained to what was offered.
+//
+// Sessions posted without options are untouched by all of it: no options, no
+// constraint, free text exactly as before. There is no backfill.
+
+// Option ids are opaque tokens, not prose. They are compared for equality and
+// nothing else, and they end up inside the board's onclick attributes — so
+// holding them to this alphabet means an id can never carry a quote or markup.
+const OPTION_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+// The options stored on a row, as an array. Tolerant of null, of an array
+// already parsed, and of malformed JSON, for the same reason labelsOf is on
+// the board: one bad row must not take a whole read down with it.
+function parseOptions(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+// Options as posted. Returns the normalised array, or a string saying what is
+// wrong with them — the agent gets told at post time, rather than the Hub
+// storing a gate that nobody can answer.
+function normaliseOptions(raw) {
+  if (!Array.isArray(raw) || !raw.length) {
+    return 'options must be a non-empty array of { id, label }';
+  }
+  const seen = new Set();
+  const out = [];
+  for (const o of raw) {
+    if (!o || typeof o !== 'object') return 'each option must be an object with id and label';
+    const id = String(o.id === undefined || o.id === null ? '' : o.id).trim();
+    const label = String(o.label === undefined || o.label === null ? '' : o.label).trim();
+    if (!OPTION_ID.test(id)) {
+      return 'option id ' + JSON.stringify(o.id === undefined ? null : o.id) +
+             ' is not usable — letters, digits and . _ : - only';
+    }
+    if (!label) return "option '" + id + "' needs a label";
+    if (seen.has(id)) return "duplicate option id '" + id + "'";
+    seen.add(id);
+    out.push({ id, label, summary: o.summary ? String(o.summary) : null });
+  }
+  return out;
+}
+
+// Whether two option sets are the same question. Re-posting a gate unchanged
+// is the agent repeating its state and must change nothing; posting a
+// different set is a new question, and a new question cannot keep the old
+// answer.
+function sameOptions(a, b) {
+  const norm = (list) => JSON.stringify(list.map(o => [
+    String(o && o.id), String(o && o.label), o && o.summary ? String(o.summary) : '',
+  ]));
+  return norm(a) === norm(b);
+}
+
+// What an option id resolves to, in words. Null when nothing was chosen, or
+// when the id names nothing in the set currently stored.
+function labelFor(options, optionId) {
+  if (!optionId) return null;
+  const hit = options.find(o => o && o.id === optionId);
+  return hit && hit.label ? hit.label : null;
+}
+
+// A row as anything reading it should see it: options as an array rather than
+// a JSON blob, and the chosen label resolved alongside the id. A run log that
+// says "d2" says nothing about what was decided, and no consumer should have
+// to look that up itself.
+function withGate(row) {
+  if (!row) return row;
+  const options = parseOptions(row.options);
+  return {
+    ...row,
+    options: options.length ? options : null,
+    response_label: labelFor(options, row.response_option_id),
+  };
+}
+
+// Close the round a session is on: the decision goes to gate_decisions, the
+// round number moves on, and the session's own answer fields clear. Two paths
+// arrive here — the reopen route, and an agent posting a different set of
+// options — because they are the same event. The question changed, and the
+// previous answer must neither survive onto the new one nor disappear.
+// Returns the new round number. The caller owns `status`.
+async function closeRound(env, id, row, note) {
+  const round = row.gate_round || 1;
+  const decided = row.response_option_id || row.response || row.response_note;
+  if (decided || note) {
+    // The reopen note is the last thing said about the round that is ending,
+    // so it is kept with that round. The contract clears the session's own
+    // note on reopen and there is no column for a reopen reason, so this row
+    // is the only place it survives.
+    const trail = [row.response_note, note ? 'Reopened: ' + note : null]
+      .filter(Boolean).join('\n\n') || null;
+    await env.DB.prepare(
+      `INSERT INTO gate_decisions
+         (session_id, gate_round, options_snapshot, response_option_id, response_note)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, round, row.options || null, row.response_option_id || null, trail).run();
+  }
+  await env.DB.prepare(
+    `UPDATE agent_sessions
+        SET gate_round = COALESCE(gate_round, 1) + 1,
+            response = NULL, response_option_id = NULL, response_note = NULL,
+            responded_at = NULL, updated_at = datetime('now')
+      WHERE id = ?`
+  ).bind(id).run();
+  return round + 1;
+}
+
 // The three stages the Hub can request, and the label the system writes when
 // one completes. Dave never applies these labels and nothing triggers off
 // them — they are the record of what has been done, and the board reads them
@@ -484,6 +604,17 @@ async function route(request, env) {
       const url = b.url || null;
       const title = b.title || null;
 
+      // The gate's options, when this post carries them. A post without
+      // `options` leaves whatever is stored alone: the agent posts its gate
+      // once and then keeps posting its state as it works, and none of those
+      // later posts may erase the question Dave is looking at.
+      let options = null;
+      if (b.options !== undefined && b.options !== null) {
+        const parsed = normaliseOptions(b.options);
+        if (typeof parsed === 'string') return err(parsed);
+        options = JSON.stringify(parsed);
+      }
+
       // Which row this post belongs to. The agent's own session id first —
       // that is the row it has been writing to all along — then the Linear
       // issue its session id names, which is how `ryve/ryv-84/research` lands
@@ -496,6 +627,25 @@ async function route(request, env) {
                      (key ? await rowIdForLinearKey(env, key) : null);
 
       if (target) {
+        // A different set of options supersedes a decision that has already
+        // been made, so that decision is archived and cleared rather than left
+        // sitting on the new question: a round-1 `d1` answering a round-2 gate
+        // is the "Yes" bug wearing an id.
+        //
+        // Two things deliberately do not move the round on. The same set
+        // re-posted is the agent repeating its state as it works, and must not
+        // wipe an answer given a second earlier. A new set replacing a gate
+        // nobody has answered yet is just the question being rewritten — there
+        // is no decision to supersede, and no round to archive.
+        const prev = await env.DB.prepare(
+          `SELECT id, options, gate_round, response, response_option_id, response_note
+             FROM agent_sessions WHERE id = ?`
+        ).bind(target).first();
+        if (options && prev && (prev.response_option_id || prev.response) &&
+            !sameOptions(parseOptions(prev.options), parseOptions(options))) {
+          await closeRound(env, target, prev, null);
+        }
+
         // Agent-owned columns are written straight through, exactly as the
         // upsert did. The four Linear-owned ones — project, track, url,
         // title — are only filled in where they are still empty, so merging
@@ -511,6 +661,7 @@ async function route(request, env) {
              prompt    = ?,
              detail    = COALESCE(?, detail),
              figma_url = COALESCE(?, figma_url),
+             options   = COALESCE(?, options),
              project   = CASE WHEN linear_id IS NULL
                               THEN COALESCE(?, project) ELSE COALESCE(project, ?) END,
              track     = CASE WHEN linear_id IS NULL
@@ -523,7 +674,7 @@ async function route(request, env) {
            WHERE id = ?`
         ).bind(
           b.session_id, b.system, phase, status, b.prompt || null, b.detail || null,
-          b.figma_url || null,
+          b.figma_url || null, options,
           project, project, track, track, url, url, title, title,
           target
         ).run();
@@ -531,8 +682,8 @@ async function route(request, env) {
         await env.DB.prepare(
           `INSERT INTO agent_sessions
              (id, agent_session_id, system, project, track, phase, status,
-              prompt, detail, url, figma_url, title, linear_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              prompt, detail, url, figma_url, title, linear_id, options)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            -- Unreachable unless two posts for a brand-new session race each
            -- other, but this route was an upsert before and stays one.
            ON CONFLICT(id) DO UPDATE SET
@@ -540,10 +691,12 @@ async function route(request, env) {
              project=excluded.project, track=excluded.track, phase=excluded.phase,
              status=excluded.status, prompt=excluded.prompt, detail=excluded.detail,
              url=excluded.url, figma_url=excluded.figma_url, title=excluded.title,
+             options=COALESCE(excluded.options, options),
              updated_at=datetime('now')`
         ).bind(
           b.session_id, b.session_id, b.system, project, track, phase, status,
-          b.prompt || null, b.detail || null, url, b.figma_url || null, title, key
+          b.prompt || null, b.detail || null, url, b.figma_url || null, title, key,
+          options
         ).run();
       }
       return json({ ok: true, session_id: b.session_id, status });
@@ -558,7 +711,7 @@ async function route(request, env) {
       const id = (await canonicalId(env, asked)) || asked;
       const row = await env.DB.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(id).first();
       if (!row) return err('not found', 404);
-      return json(row);
+      return json(withGate(row));
     }
 
     // POST /api/agent/session/:id/trigger — human presses a card button.
@@ -731,25 +884,127 @@ async function route(request, env) {
                               WHEN 'active' THEN 2 ELSE 3 END,
                   updated_at DESC`
       ).all();
-      return json(rows.results);
+      return json((rows.results || []).map(withGate));
     }
 
-    // PATCH /api/agent/session/:id/respond — human answers the prompt
+    // PATCH /api/agent/session/:id/respond — human answers the prompt.
+    //
+    // When the gate offers options the answer has to name one of them. A note
+    // on its own is never a decision: that is the whole point, and it is what
+    // stops "Yes" from reading as a direction. A gate with no options is
+    // answered in free text exactly as it always was.
     if (method === 'PATCH' && path.match(/\/respond$/)) {
       const id = await resolveId(
         env, path.slice('/api/agent/session/'.length, path.length - '/respond'.length)
       );
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
-      if (!b.response) return err('response required');
-      const existing = await env.DB.prepare(`SELECT id FROM agent_sessions WHERE id = ?`).bind(id).first();
+      const existing = await env.DB.prepare(
+        `SELECT id, options FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
       if (!existing) return err('not found', 404);
+
+      const options = parseOptions(existing.options);
+      if (options.length) {
+        const offered = options.map(o => o.id).join(', ');
+        if (!b.response_option_id) {
+          return err('response_option_id required — this gate offers ' + offered);
+        }
+        const chosen = options.find(o => o && o.id === b.response_option_id);
+        if (!chosen) {
+          return err("unknown option '" + b.response_option_id +
+                     "' — this gate offers " + offered);
+        }
+        // `response` keeps carrying the answer in words for anything still
+        // reading that column, but it is copied off the chosen option rather
+        // than typed, so it can no longer say something the question never
+        // offered.
+        await env.DB.prepare(
+          `UPDATE agent_sessions
+              SET response_option_id = ?, response_note = ?, response = ?,
+                  responded_at = datetime('now'),
+                  status = 'active', updated_at = datetime('now')
+            WHERE id = ?`
+        ).bind(chosen.id, b.response_note || null, chosen.label, id).run();
+        return json({ ok: true, response_option_id: chosen.id, response_label: chosen.label });
+      }
+
+      if (!b.response) return err('response required');
       await env.DB.prepare(
         `UPDATE agent_sessions
-         SET response = ?, responded_at = datetime('now'),
+         SET response = ?, response_note = ?, responded_at = datetime('now'),
              status = 'active', updated_at = datetime('now')
          WHERE id = ?`
-      ).bind(b.response, id).run();
+      ).bind(b.response, b.response_note || null, id).run();
+      return json({ ok: true });
+    }
+
+    // PATCH /api/agent/session/:id/reopen — the answer was wrong, or the
+    // options were. gates.md has always listed "Revise — [feedback]" as a
+    // valid answer, which means going back to a gate that was already
+    // answered. The round is archived, the round number moves on, the decision
+    // clears and the card returns to waiting. The agent posts a fresh options
+    // array for the new round; the old round survives in gate_decisions, so a
+    // revised direction does not erase the first one.
+    if (method === 'PATCH' && path.startsWith('/api/agent/session/') && path.endsWith('/reopen')) {
+      const id = await resolveId(
+        env, path.slice('/api/agent/session/'.length, path.length - '/reopen'.length)
+      );
+      // The note is optional, and so is the body that would carry it.
+      let b = {};
+      try { b = (await request.json()) || {}; } catch { b = {}; }
+      const row = await env.DB.prepare(
+        `SELECT id, options, gate_round, response, response_option_id, response_note
+           FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!row) return err('not found', 404);
+      const round = await closeRound(env, id, row, b.note || null);
+      await env.DB.prepare(
+        `UPDATE agent_sessions SET status = 'waiting', updated_at = datetime('now')
+          WHERE id = ?`
+      ).bind(id).run();
+      return json({ ok: true, gate_round: round, status: 'waiting' });
+    }
+
+    // PATCH /api/agent/session/:id/state — the two completion levels that had
+    // nowhere to live. "AI-design done" means a spec was written; mockups_at
+    // means something was actually drawn; handoff_at means a developer can
+    // pick it up. The Hub stores all three and interprets none of them.
+    if (method === 'PATCH' && path.startsWith('/api/agent/session/') && path.endsWith('/state')) {
+      const id = await resolveId(
+        env, path.slice('/api/agent/session/'.length, path.length - '/state'.length)
+      );
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      const existing = await env.DB.prepare(
+        `SELECT id FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!existing) return err('not found', 404);
+
+      // "now" is what the contract's examples send, and it is the only thing
+      // an agent reliably knows at the moment it finishes. An explicit
+      // timestamp is taken as given; an explicit null clears the field.
+      const stamp = (v) => (v === 'now' || v === true) ? nowStamp() : (v || null);
+      const fields = []; const values = [];
+      if (b.mockups_url !== undefined) {
+        fields.push('mockups_url = ?'); values.push(b.mockups_url || null);
+      }
+      if (b.mockups_at !== undefined) {
+        fields.push('mockups_at = ?'); values.push(stamp(b.mockups_at));
+      } else if (b.mockups_url) {
+        // A url and no timestamp still means mockups exist, and that they
+        // exist now. Storing the url alone would record half the fact.
+        fields.push('mockups_at = ?'); values.push(nowStamp());
+      }
+      if (b.handoff_at !== undefined) {
+        fields.push('handoff_at = ?'); values.push(stamp(b.handoff_at));
+      }
+      if (!fields.length) return err('mockups_url, mockups_at or handoff_at required');
+      fields.push("updated_at = datetime('now')");
+      values.push(id);
+      await env.DB.prepare(
+        `UPDATE agent_sessions SET ${fields.join(', ')} WHERE id = ?`
+      ).bind(...values).run();
       return json({ ok: true });
     }
 
@@ -786,7 +1041,7 @@ async function route(request, env) {
     const { results } = await env.DB.prepare(
       `SELECT * FROM agent_sessions WHERE status = 'waiting' ORDER BY created_at DESC`
     ).all();
-    return json(results || []);
+    return json((results || []).map(withGate));
   }
 
   return err('not found', 404);

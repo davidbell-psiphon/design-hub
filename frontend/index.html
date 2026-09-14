@@ -102,6 +102,25 @@
   .agent-link { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 4px 9px; border: 1px solid var(--border-strong); border-radius: 6px; flex-shrink: 0; }
   .agent-link:hover { color: var(--text); }
 
+  /* GATE — a question with a fixed set of answers. One click per option, no
+     free-text box: a note typed against three directions is how "Yes" got
+     recorded as a decision. */
+  .gate { padding: 9px 12px 11px; border-top: 1px solid var(--border); background: rgba(240,184,74,.05); }
+  .gate-prompt { font-size: 12px; color: var(--text); line-height: 1.45; margin-bottom: 8px; }
+  .gate-options { display: flex; flex-direction: column; gap: 5px; }
+  .gate-option { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); cursor: pointer; font-family: var(--font); }
+  .gate-option:hover { border-color: rgba(240,184,74,.55); background: var(--surface-3); }
+  .gate-option:disabled { opacity: .5; cursor: default; }
+  .gate-option-label { display: block; font-size: 12px; font-weight: 600; }
+  .gate-option-summary { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+  .gate-note { display: block; width: 100%; margin-top: 7px; font-size: 12px; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); font-family: var(--font); }
+  .gate-note::placeholder { color: var(--text-dim); }
+  .gate-chosen { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .gate-round { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); }
+  .gate-chosen-label { font-size: 12px; font-weight: 600; color: var(--text); }
+  .gate-said { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+  .gate-reopen { margin-top: 8px; }
+
   /* SIDE PANEL — persistent, all in-flight work across every brand */
   .side-panel { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: 12px 0; }
   .side-panel::-webkit-scrollbar { width: 3px; }
@@ -169,6 +188,7 @@
     .reassign-select { min-height: 44px; padding: 0 8px; font-size: 13px; }
     .agent-link { min-height: 44px; display: inline-flex; align-items: center; }
     .session-links { margin-left: 0; }
+    .gate-option, .gate-note { min-height: 44px; }
     .sp-item { min-height: 40px; }
   }
 
@@ -291,6 +311,44 @@ function sessionCard(r) {
       ${linksHtml}`;
   }
 
+  // The gate block. A question with a fixed set of answers is the one piece
+  // of agent prose the card shows, and only while the answer is the thing
+  // holding the work up: the options are the decision, and one click on one of
+  // them is the whole interaction. The note field is beside the options, never
+  // in place of them.
+  //
+  // Sessions with no options render exactly as before, and so do the drawers —
+  // a card that is closed in Linear or put aside has no live decision on it.
+  const gk = key(id);
+  let gateHtml = '';
+  if (section === 'board' && isGateOpen(r)) {
+    gateHtml = `<div class="gate">
+      ${r.prompt ? `<div class="gate-prompt">${esc(r.prompt)}</div>` : ''}
+      <div class="gate-options">
+        ${optionsOf(r).map(o => `<button class="gate-option" onclick="answerGate('${esc(id)}', '${esc(o.id)}', this)">
+          <span class="gate-option-label">${esc(o.label)}</span>
+          ${o.summary ? `<span class="gate-option-summary">${esc(o.summary)}</span>` : ''}
+        </button>`).join('')}
+      </div>
+      <input class="gate-note" id="note-${gk}" type="text" autocomplete="off"
+             placeholder="Note (optional) — goes with the choice, not instead of it">
+    </div>`;
+  } else if (section === 'board' && isGateAnswered(r)) {
+    gateHtml = `<div class="gate">
+      <div class="gate-chosen">
+        <span class="gate-round">Decided</span>
+        <span class="gate-chosen-label">${esc(chosenLabel(r))}</span>
+      </div>
+      ${r.response_note ? `<div class="gate-said">${esc(r.response_note)}</div>` : ''}
+      <button class="btn gate-reopen" id="reopen-${gk}" onclick="askReopen('${esc(id)}')">Reopen</button>
+      <div id="reopen-box-${gk}" hidden>
+        <input class="gate-note" id="reopen-note-${gk}" type="text" autocomplete="off"
+               placeholder="Why is it going back? (optional)">
+        <button class="btn gate-reopen" onclick="reopenGate('${esc(id)}', this)">Send it back</button>
+      </div>
+    </div>`;
+  }
+
   // The card carries only what you scan a board for: which issue, which stage,
   // whether anything is running, and the one thing you can do about it. The
   // agent's research is a comment on the Linear issue and is read there — the
@@ -304,6 +362,7 @@ function sessionCard(r) {
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
+    ${gateHtml}
     <div class="session-actions">${actionsHtml}</div>
   </div>`;
 }
@@ -543,6 +602,57 @@ async function undismissSession(id, btn) {
   } catch (e) {
     toast('Could not undo — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = 'Undo — needs design'; }
+  }
+}
+
+// The answer to a gate is one of the options, never something typed. The note
+// rides along with the choice — it is what "but tighten the label copy" is
+// for — and the Hub rejects it arriving on its own, because a note that names
+// none of the directions is not a direction.
+async function answerGate(id, optionId, btn) {
+  const noteEl = document.getElementById('note-' + key(id));
+  const note = noteEl && noteEl.value ? noteEl.value.trim() : '';
+  const siblings = btn && btn.parentElement
+    ? Array.from(btn.parentElement.querySelectorAll('button')) : [];
+  siblings.forEach(b => { b.disabled = true; });
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/respond`, {
+      method: 'PATCH',
+      body: { response_option_id: optionId, response_note: note || null },
+    });
+    toast('Decided — ' + ((res && res.response_label) || optionId));
+    await loadBoard();
+  } catch (e) {
+    toast('Could not answer — ' + String(e.message || e).slice(0, 120));
+    siblings.forEach(b => { b.disabled = false; });
+  }
+}
+
+// Reopening asks for a reason, so the field appears before the send does. One
+// click to open it and one to send it: taking a decision back is worth two.
+function askReopen(id) {
+  const k = key(id);
+  const box = document.getElementById('reopen-box-' + k);
+  const btn = document.getElementById('reopen-' + k);
+  if (box) box.hidden = false;
+  if (btn) btn.hidden = true;
+  const note = document.getElementById('reopen-note-' + k);
+  if (note && note.focus) note.focus();
+}
+
+async function reopenGate(id, btn) {
+  const noteEl = document.getElementById('reopen-note-' + key(id));
+  const note = noteEl && noteEl.value ? noteEl.value.trim() : '';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/reopen`, {
+      method: 'PATCH', body: { note: note || null },
+    });
+    toast('Back to waiting — the agent posts fresh options for the new round');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not reopen — ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Send it back'; }
   }
 }
 

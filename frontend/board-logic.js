@@ -55,6 +55,57 @@ function hasLabel(r, name) {
   return labelsOf(r).indexOf(name) !== -1;
 }
 
+
+// ─── GATES ─────────────────────────────────────────
+// A gate is a question with a fixed set of answers. The options are the
+// decision, so they are the one piece of agent prose the card does show: a
+// question you cannot see from the board is a card that just sits there.
+//
+// Sessions with no options are unaffected by every one of these — no gate
+// block, no prose, the quiet card the board already had.
+
+// The options on a row, as an array. Same tolerance as labelsOf, for the same
+// reason: a board that throws on one bad row renders nothing at all.
+function optionsOf(r) {
+  var raw = r && r.options;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// Waiting on an answer nobody has given yet. This is the only state that puts
+// the options in front of you.
+function isGateOpen(r) {
+  return !!(r && r.status === 'waiting' && optionsOf(r).length && !r.response_option_id);
+}
+
+// Answered, by naming one of the options. Stays true after the agent carries
+// on working, because a decision you can no longer see is a decision you can
+// no longer take back.
+function isGateAnswered(r) {
+  return !!(r && r.response_option_id && optionsOf(r).length);
+}
+
+// What was chosen, in words. The board never shows the bare id — "d2" says
+// nothing about what was decided. Falls back to the label the Hub resolved
+// server-side, and then to the id itself, so an option that has since been
+// dropped still renders as something rather than as an empty space.
+function chosenLabel(r) {
+  if (!r || !r.response_option_id) return '';
+  var opts = optionsOf(r);
+  for (var i = 0; i < opts.length; i++) {
+    if (opts[i] && opts[i].id === r.response_option_id) {
+      return opts[i].label || r.response_option_id;
+    }
+  }
+  return r.response_label || r.response_option_id;
+}
+
 // Which column the card sits in. Read from the labels, most-advanced first, so
 // an issue carrying every label lands in the last stage rather than the first.
 function stageOf(r) {

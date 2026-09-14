@@ -196,6 +196,80 @@ describe('the four stage columns', () => {
   });
 });
 
+describe('a gate renders as options, not as a box to type in', () => {
+  // The bug in the UI half: a three-option question with a free-text field
+  // under it invites "Yes". One click per option is the whole interaction.
+  const OPTIONS = [
+    { id: 'd1', label: 'Icon-only corner button', summary: '48x48 circular + at the corner.' },
+    { id: 'd2', label: 'Labelled corner control', summary: 'Costs card width.' },
+    { id: 'd3', label: 'Collection-level add row', summary: 'Leaves the corner empty.' },
+  ];
+  const gate = (o = {}) => sessionCard({
+    ...row({ linear_id: 'RYV-84', project: 'ryve', title: 'Wallet header',
+             linear_state: o.linear_state, dismissed_at: o.dismissed_at }),
+    status: o.status || 'waiting',
+    prompt: 'Which direction proceeds?',
+    options: JSON.stringify(OPTIONS),
+    response_option_id: o.response_option_id || null,
+    response_note: o.response_note || null,
+  });
+
+  test('every option is its own button, carrying its label and summary', () => {
+    const html = gate();
+    assert.equal((html.match(/class="gate-option"/g) || []).length, 3);
+    assert.ok(html.includes('Icon-only corner button'));
+    assert.ok(html.includes('Collection-level add row'));
+    assert.ok(html.includes('Costs card width.'));
+    assert.match(html, /answerGate\('[^']+', 'd2'/);
+  });
+
+  test('the question is shown, and nothing is typed to answer it', () => {
+    const html = gate();
+    assert.ok(html.includes('Which direction proceeds?'), 'the question is missing');
+    assert.equal(html.includes('<textarea'), false, 'a free-text answer box came back');
+    // The one input is the note, and it says what it is for.
+    assert.equal((html.match(/<input/g) || []).length, 1);
+    assert.match(html, /class="gate-note"[\s\S]*?not instead of it/);
+  });
+
+  test('an answered gate shows the label and never the id', () => {
+    const html = gate({ status: 'active', response_option_id: 'd2',
+                        response_note: 'but tighten the label copy' });
+    assert.ok(html.includes('Labelled corner control'), 'the chosen label is missing');
+    assert.ok(html.includes('but tighten the label copy'), 'the note is missing');
+    assert.equal(/>d2</.test(html), false, 'the bare option id reached the card');
+    assert.equal(html.includes('gate-option"'), false, 'the options are still clickable');
+  });
+
+  test('an answered gate can be sent back', () => {
+    const html = gate({ status: 'active', response_option_id: 'd2' });
+    assert.match(html, /askReopen\('[^']+'\)/);
+    assert.match(html, /reopenGate\('[^']+', this\)/);
+  });
+
+  test('the stage button is still there — a gate does not replace the card', () => {
+    assert.match(gate(), /btn btn-primary/);
+    assert.ok(gate().includes('dismissSession'));
+  });
+
+  test('a card in a drawer carries no live decision', () => {
+    // Put aside or closed in Linear: there is nothing to answer from there.
+    assert.equal(gate({ dismissed_at: '2026-09-05 02:00:00' }).includes('answerGate'), false);
+    assert.equal(gate({ linear_state: 'completed' }).includes('answerGate'), false);
+    assert.equal(gate({ linear_state: 'completed', status: 'active',
+                        response_option_id: 'd2' }).includes('askReopen'), false);
+  });
+
+  test('a session with no options renders the quiet card, unchanged', () => {
+    const html = sessionCard({
+      ...row({ linear_id: 'RYV-84', project: 'ryve', title: 'Wallet header' }),
+      status: 'waiting', prompt: 'Which direction proceeds?',
+    });
+    assert.equal(html.includes('class="gate"'), false);
+    assert.equal(html.includes('Which direction proceeds?'), false);
+  });
+});
+
 describe('controls per section', () => {
   test('No design cards offer Undo and cannot be triggered', () => {
     assert.ok(drawers.nodesign.includes('undismissSession'));

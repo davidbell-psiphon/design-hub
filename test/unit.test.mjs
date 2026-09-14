@@ -25,7 +25,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
 const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
-        sectionOf, isOpen, key, timeAgo } = board;
+        sectionOf, isOpen, key, timeAgo,
+        optionsOf, isGateOpen, isGateAnswered, chosenLabel } = board;
 
 // A row as the reader writes it. `labels` is the JSON array the board reads to
 // decide a card's column.
@@ -296,6 +297,57 @@ describe('linearKeyFromSessionId — the join between the two id conventions', (
     for (const v of [null, undefined, '', 42, {}]) {
       assert.equal(linearKeyFromSessionId(v), null);
     }
+  });
+});
+
+describe('the gate helpers — options, open, answered, chosen', () => {
+  const OPTS = [
+    { id: 'd1', label: 'Icon-only corner button', summary: '48x48 circular +.' },
+    { id: 'd2', label: 'Labelled corner control', summary: 'Costs card width.' },
+  ];
+  // The Hub sends options as an array; the column holds JSON. Both arrive.
+  const asJson = (o) => ({ ...o, options: JSON.stringify(OPTS) });
+  const asArray = (o) => ({ ...o, options: OPTS });
+
+  test('options parse from JSON, from an array, and from neither', () => {
+    assert.equal(optionsOf(asJson({})).length, 2);
+    assert.equal(optionsOf(asArray({})).length, 2);
+    assert.equal(optionsOf({}).length, 0);
+    assert.equal(optionsOf({ options: null }).length, 0);
+    assert.equal(optionsOf(null).length, 0);
+  });
+
+  test('a malformed options column is empty, not an exception', () => {
+    assert.equal(optionsOf({ options: '{not json' }).length, 0);
+    assert.equal(optionsOf({ options: '{"id":"d1"}' }).length, 0);
+  });
+
+  test('a gate is open only while it is waiting and unanswered', () => {
+    assert.equal(isGateOpen(asJson({ status: 'waiting' })), true);
+    assert.equal(isGateOpen(asJson({ status: 'active' })), false);
+    assert.equal(isGateOpen(asJson({ status: 'waiting', response_option_id: 'd2' })), false);
+    // No options, no gate — the free-text sessions are untouched.
+    assert.equal(isGateOpen({ status: 'waiting', prompt: 'Which?' }), false);
+  });
+
+  test('a gate stays answered after the agent carries on working', () => {
+    assert.equal(isGateAnswered(asJson({ status: 'active', response_option_id: 'd2' })), true);
+    assert.equal(isGateAnswered(asJson({ status: 'waiting' })), false);
+    // A free-text answer is not a gate decision and offers nothing to reopen.
+    assert.equal(isGateAnswered({ response: 'Direction B' }), false);
+  });
+
+  test('the chosen option resolves to its label, never the bare id', () => {
+    assert.equal(chosenLabel(asJson({ response_option_id: 'd2' })), 'Labelled corner control');
+    assert.equal(chosenLabel(asJson({})), '');
+  });
+
+  test('an id the options no longer carry falls back rather than blanking', () => {
+    // A round that dropped an option, read back from history.
+    assert.equal(
+      chosenLabel({ ...asJson({}), response_option_id: 'd9', response_label: 'Something else' }),
+      'Something else');
+    assert.equal(chosenLabel({ ...asJson({}), response_option_id: 'd9' }), 'd9');
   });
 });
 
