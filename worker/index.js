@@ -958,7 +958,19 @@ async function route(request, env) {
            FROM agent_sessions WHERE id = ?`
       ).bind(id).first();
       if (!row) return err('not found', 404);
-      const round = await closeRound(env, id, row, b.note || null);
+
+      // A reopen always leaves a trail. Taking a decision back has one to
+      // archive already. Rejecting the options outright — "none of these" —
+      // has nothing but the reason, and that reason is the only record the
+      // round will ever have: without it the agent learns the gate reopened
+      // and nothing about why, so it re-asks the same question.
+      const note = b.note ? String(b.note).trim() : '';
+      const decided = row.response_option_id || row.response || row.response_note;
+      if (!decided && !note) {
+        return err('note required — rejecting the options with no reason recorded ' +
+                   'leaves the agent nothing to go on');
+      }
+      const round = await closeRound(env, id, row, note || null);
       await env.DB.prepare(
         `UPDATE agent_sessions SET status = 'waiting', updated_at = datetime('now')
           WHERE id = ?`

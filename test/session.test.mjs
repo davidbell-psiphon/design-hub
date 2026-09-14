@@ -641,27 +641,74 @@ describe('reopening a gate', () => {
     assert.equal(only(db).response, 'Pill above the card');
   });
 
-  test('reopening an unanswered gate keeps the reason and nothing else', async () => {
+  test('a reopen always leaves a trail', async () => {
+    // Nothing decided and no reason given records nothing at all, which is
+    // how a gate reopens and the agent re-asks the same question.
     const { db, e } = await gated();
-    await reopen(e, AGENT_ID, { note: 'Ask it differently.' });
-    const history = decisions(db);
-    assert.equal(history.length, 1);
-    assert.equal(history[0].response_option_id, null);
-    assert.match(history[0].response_note, /Ask it differently/);
-    assert.equal(only(db).gate_round, 2);
+    const bare = await reopen(e, AGENT_ID, undefined);
+    assert.equal(bare.status, 400);
+    assert.match((await bare.json()).error, /note required/);
+    assert.equal(decisions(db).length, 0);
+    assert.equal(only(db).gate_round, 1, 'a refused reopen must not move the round');
+    assert.equal(only(db).status, 'waiting');
+
+    assert.equal((await reopen(e, AGENT_ID, { note: '   ' })).status, 400, 'whitespace is not a reason');
   });
 
-  test('reopening with nothing to record writes no history', async () => {
+  test('taking back a decision needs no reason — the decision is the trail', async () => {
     const { db, e } = await gated();
-    const res = await reopen(e, AGENT_ID, undefined);
-    assert.equal(res.status, 200);
-    assert.equal(decisions(db).length, 0);
-    assert.equal(only(db).gate_round, 2);
+    await respond(e, AGENT_ID, { response_option_id: 'd2' });
+    assert.equal((await reopen(e, AGENT_ID, undefined)).status, 200);
+    assert.equal(decisions(db).length, 1);
+    assert.equal(decisions(db)[0].response_option_id, 'd2');
   });
 
   test('reopening a session that does not exist is a 404', async () => {
     const { e } = await gated();
     assert.equal((await reopen(e, 'nope/nothing/here', { note: 'x' })).status, 404);
+  });
+});
+
+describe('rejecting every option', () => {
+  // Not a fourth option. Nothing was chosen, so nothing may be recorded as
+  // chosen — the reason is the decision record, and the round starts again.
+  test('the reason is kept, and nothing is recorded as chosen', async () => {
+    const { db, e } = await gated();
+    const res = await reopen(e, AGENT_ID, {
+      note: 'None of these — put the control in the collection header instead.',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).gate_round, 2);
+
+    const r = only(db);
+    assert.equal(r.response_option_id, null, 'a rejection must never name an option');
+    assert.equal(r.response, null);
+    assert.equal(r.response_note, null);
+    assert.equal(r.status, 'waiting');
+    assert.equal(r.gate_round, 2);
+
+    const history = decisions(db);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].gate_round, 1);
+    assert.equal(history[0].response_option_id, null);
+    assert.match(history[0].response_note, /collection header/);
+    // What was rejected is kept with the reason for rejecting it.
+    assert.deepEqual(parseOpts(history[0].options_snapshot).map(o => o.id), ['d1', 'd2', 'd3']);
+  });
+
+  test('the agent posts a fresh round onto it without the round moving twice', async () => {
+    const { db, e } = await gated();
+    await reopen(e, AGENT_ID, { note: 'None of these.' });
+    await agentPost(e, { ...GATE, options: [
+      { id: 'r1', label: 'Control in the collection header' },
+      { id: 'r2', label: 'Control in the toolbar' },
+    ] });
+    assert.equal(only(db).gate_round, 2, 'replacing an unanswered gate is not another round');
+    assert.deepEqual(parseOpts(only(db).options).map(o => o.id), ['r1', 'r2']);
+    assert.equal(decisions(db).length, 1, 'nothing was decided, so nothing more to archive');
+
+    assert.equal((await respond(e, AGENT_ID, { response_option_id: 'r2' })).status, 200);
+    assert.equal(only(db).response, 'Control in the toolbar');
   });
 });
 

@@ -123,6 +123,11 @@
   .gate-chosen-label { font-size: 12px; font-weight: 600; color: var(--text); }
   .gate-said { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
   .gate-reopen { margin-top: 8px; }
+  /* Rejecting every option sits apart from them, so it never reads as a
+     fourth thing you could pick. */
+  .gate-reject-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .gate-reject { margin-top: 8px; }
+  .gate-reject-row .gate-reject { margin-top: 0; }
 
   /* SIDE PANEL — persistent, all in-flight work across every brand */
   .side-panel { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: 12px 0; }
@@ -335,6 +340,15 @@ function sessionCard(r) {
       </div>
       <input class="gate-note" id="note-${gk}" type="text" autocomplete="off"
              placeholder="Note (optional) — goes with the choice, not instead of it">
+      <div class="gate-reject-row">
+        <button class="btn gate-reject" id="reject-${gk}"
+                onclick="askRejectAll('${esc(id)}')">None of these</button>
+      </div>
+      <div id="reject-box-${gk}" hidden>
+        <input class="gate-note" id="reject-note-${gk}" type="text" autocomplete="off"
+               placeholder="Why none of these? (required)">
+        <button class="btn gate-reject" onclick="rejectAll('${esc(id)}', this)">Send it back</button>
+      </div>
     </div>`;
   } else if (section === 'board' && isGateAnswered(r)) {
     gateHtml = `<div class="gate">
@@ -628,6 +642,44 @@ async function answerGate(id, optionId, btn) {
   } catch (e) {
     toast('Could not answer — ' + String(e.message || e).slice(0, 120));
     siblings.forEach(b => { b.disabled = false; });
+  }
+}
+
+// Rejecting every option is not a fourth option, and it never writes
+// response_option_id — nothing was chosen. Mechanically it is the reopen path:
+// the round closes with the reason recorded against it, the round number moves
+// on, and the agent posts a fresh set of options for the next one.
+//
+// The reason is required. It is the only record that round will ever have, and
+// an agent told the gate reopened but not why re-asks the same question.
+function askRejectAll(id) {
+  const k = key(id);
+  const box = document.getElementById('reject-box-' + k);
+  const btn = document.getElementById('reject-' + k);
+  if (box) box.hidden = false;
+  if (btn) btn.hidden = true;
+  const note = document.getElementById('reject-note-' + k);
+  if (note && note.focus) note.focus();
+}
+
+async function rejectAll(id, btn) {
+  const noteEl = document.getElementById('reject-note-' + key(id));
+  const reason = noteEl && noteEl.value ? noteEl.value.trim() : '';
+  if (!reason) {
+    toast('A reason is required — it is the only record of why these were wrong');
+    if (noteEl && noteEl.focus) noteEl.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/reopen`, {
+      method: 'PATCH', body: { note: reason },
+    });
+    toast('Sent back — the agent posts fresh options for the new round');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not send back — ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Send it back'; }
   }
 }
 

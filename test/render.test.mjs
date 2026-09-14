@@ -227,9 +227,29 @@ describe('a gate renders as options, not as a box to type in', () => {
     const html = gate();
     assert.ok(html.includes('Which direction proceeds?'), 'the question is missing');
     assert.equal(html.includes('<textarea'), false, 'a free-text answer box came back');
-    // The one input is the note, and it says what it is for.
-    assert.equal((html.match(/<input/g) || []).length, 1);
-    assert.match(html, /class="gate-note"[\s\S]*?not instead of it/);
+    // Two fields, and neither of them is an answer: the note that rides with a
+    // choice, and the reason that has to accompany rejecting all of them.
+    const ids = [...html.matchAll(/<input[^>]*\sid="([a-z-]+)-[^"]*"/g)].map(m => m[1]);
+    assert.deepEqual(ids, ['note', 'reject-note']);
+  });
+
+  test('rejecting all three is offered, and is not one of the options', () => {
+    const html = gate();
+    assert.match(html, /askRejectAll\('[^']+'\)/);
+    assert.match(html, /rejectAll\('[^']+', this\)/);
+    assert.ok(html.includes('None of these'));
+    // It must not be reachable as a choice: every answerGate call names an id
+    // the agent offered, and there are exactly three of those.
+    const answers = [...html.matchAll(/answerGate\('[^']+', '([^']+)'/g)].map(m => m[1]);
+    assert.deepEqual(answers, ['d1', 'd2', 'd3']);
+    assert.equal(/answerGate\([^)]*none/i.test(html), false);
+  });
+
+  test('the rejection asks for its own reason, separate from the note', () => {
+    const html = gate();
+    assert.match(html, /id="reject-note-[^"]+"[\s\S]*?Why none of these\? \(required\)/);
+    // The optional note still says what it is for, and is a different field.
+    assert.match(html, /id="note-[^"]+"[\s\S]*?not instead of it/);
   });
 
   test('an answered gate shows the label and never the id', () => {

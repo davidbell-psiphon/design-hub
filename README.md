@@ -303,8 +303,29 @@ agent repeating its state and changes nothing.
 
 `PATCH /api/agent/session/:id/reopen` does the same thing deliberately —
 archives the round, increments `gate_round`, clears the decision and sets the
-card back to `waiting`, with an optional `{"note": "…"}` recorded against the
-round that is ending. The agent posts fresh options for the new round.
+card back to `waiting`, with `{"note": "…"}` recorded against the round that is
+ending. The agent posts fresh options for the new round.
+
+**A reopen always leaves a trail**, so the note is required exactly when there
+is no decision to archive. Taking a decision back records the decision;
+rejecting the options outright records nothing but the reason, and a gate that
+reopens with no reason tells the agent only that it reopened — so it re-asks
+the same question. That case is refused with 400.
+
+### Rejecting every option
+
+A gate can be wrong in a way none of its answers can express, so the board
+offers a third action beside choosing and leaving it open: **None of these**,
+with a required reason.
+
+It is deliberately *not* a fourth option. Nothing was chosen, so nothing is
+recorded as chosen — `response_option_id` stays null, and there is no reserved
+id that consumers have to special-case. Mechanically it is the reopen path: the
+round closes with the reason on its `gate_decisions` row, `gate_round`
+increments, the card returns to `waiting`, and the agent posts a fresh set.
+
+So the three things you can do with an open gate are: choose an option (note
+optional), reject all of them (reason required), or leave it open.
 
 `PATCH /api/agent/session/:id/state` carries the two completion levels that had
 nowhere to live: `mockups_url` / `mockups_at` for when something was actually
@@ -344,7 +365,7 @@ Used by the board:
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
 | `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id","response_note"}` where the gate has options, free text where it does not |
-| `PATCH /api/agent/session/:id/reopen` | Send an answered gate back for a new round |
+| `PATCH /api/agent/session/:id/reopen` | Send a gate back for a new round — taking a decision back, or rejecting every option with `{"note"}` |
 | `DELETE /api/agent/session/:id` | Drop a session |
 | `POST /api/read-linear` | Run the reader now |
 | `GET /api/sessions` | Waiting sessions only (legacy shape, kept for the agent) |
