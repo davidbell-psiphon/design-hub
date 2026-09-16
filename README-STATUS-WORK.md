@@ -117,11 +117,35 @@ gate, and that is what `waiting` means here.
 
 ---
 
-## Known gap — not fixed in this pass
+## The gap this pass left, and how it closed
 
-**An errored run that still holds its queue row cannot be retried from the
-board.** `requested_stage` stays set, so the stage button stays disabled, and
-`POST /api/agent/session/:id/trigger` would answer `409 already queued`. An
-error with no queue row (RYV-86) retries fine today. Clearing the queue entry
-needs a route that does not exist yet, so it is written down here rather than
-bolted onto a rendering change.
+**An errored run that still holds its queue row could not be retried from the
+board.** `requested_stage` stayed set, so the stage button stayed disabled, and
+`POST /api/agent/session/:id/trigger` answered `409 already queued`. It was
+written down here rather than bolted onto a rendering change.
+
+It stopped being hypothetical the same day. Four issues — FOR-48, FOR-49,
+FOR-26, MAR-978 — were queued, never picked up, and had no way back: the runner
+takes two issues per dispatch (`DEFAULT_MAX_ISSUES = 2` in the design-ai repo's
+`runner.mjs`, and a blocked issue burns a slot), the Hub dispatches with no
+inputs believing the runner drains the whole queue, and nothing re-dispatches.
+
+Closed by `DELETE /api/agent/session/:id/trigger` and a **Reset** control on
+errored and stalled cards. See **Reset** in the README.
+
+## Still open, and not in this repo
+
+Two things in the sibling `design-ai` repo, which is why they are noted rather
+than fixed:
+
+- **`routing.json` has no `Forge` team.** Its destinations are `Conduit App`,
+  `Ryve App` and `Websites` (conduit / psiphon / forge). FOR-47 blocked on
+  `unmapped-destination`, and FOR-26/48/49 will block identically, as will
+  MAR-978 (team `Marketing`, brand `forge`). `unmappedPairIsBlocking` is true
+  on purpose — the runner will not guess a destination — so resetting those
+  cards and pressing the stage again just reproduces the block.
+- **The two repos disagree about the queue.** The Hub's `startRunner` passes no
+  inputs because "the runner drains the queue itself"; the runner caps at two
+  and logs `DEFERRED reason=max-issues=2` for the rest. Either the Hub should
+  pass `max_issues`, or the workflow default should rise, or the runner should
+  re-dispatch while the queue is not empty.

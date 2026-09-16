@@ -114,6 +114,8 @@
   .status-pill.status-stalled { border-style: dashed; border-color: rgba(224,120,100,.55); color: var(--run-stalled); }
   .status-pill.status-error { border-color: rgba(224,120,100,.5); color: var(--run-error); }
   .status-pill.status-done { border-color: rgba(111,191,139,.35); color: var(--run-done); }
+  .btn-reset { border-color: rgba(224,120,100,.4); color: var(--run-error); }
+  .btn-reset:hover { background: rgba(224,120,100,.1); color: var(--run-error); }
 
   /* WHY IT STOPPED — one line, and the second deliberate exception to "the
      card shows no agent prose" after a gate's options. A card that has
@@ -387,6 +389,13 @@ function sessionCard(r) {
     // actually doing — Working…, Stalled, or Error — rather than always
     // claiming to be working. A queued row keeps its queue entry even when the
     // run has died, so "Working…" was the one thing it reliably was not.
+    // The way out of a run that stopped. Only offered where there is
+    // something to get out of: a card that is quietly working must not carry a
+    // button whose whole job is to interrupt it.
+    const resetBtn = (state === 'error' || state === 'stalled')
+      ? `<button class="btn btn-reset" onclick="resetSession('${esc(id)}', this)"
+                 title="Clear the queued run and the error, so the stage can be pressed again">Reset</button>`
+      : '';
     const action = actionFor(r);
     const stageBtn = action
       ? (working
@@ -395,6 +404,7 @@ function sessionCard(r) {
       : '';
     actionsHtml = `
       ${stageBtn}
+      ${resetBtn}
       <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Applies the no-design label">No design</button>
       ${reassignHtml}
       ${linksHtml}`;
@@ -739,6 +749,30 @@ async function triggerSession(id, stage, btn) {
   } catch (e) {
     toast('Could not request — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
+// Takes a request back out of the queue, and the error with it.
+//
+// This is the one thing the board could not do for itself: requested_stage is
+// cleared by /api/agent/stage-done and nothing else, so a run that failed — or
+// was never picked up — held its queue entry for ever, the stage button stayed
+// disabled, and pressing it again answered 409 already queued.
+//
+// Nothing in Linear moves and no label changes. It clears the queue entry and
+// an error status, and leaves the row, its stage, its brand and its gate
+// exactly as they were. The card goes quiet and its stage button comes back.
+async function resetSession(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/trigger`, { method: 'DELETE' });
+    toast(res && res.cleared
+      ? `Reset \u2014 the queued ${res.cleared} run was cleared, press the stage again`
+      : 'Reset \u2014 the error was cleared');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not reset \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Reset'; }
   }
 }
 

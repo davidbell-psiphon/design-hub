@@ -800,6 +800,49 @@ async function route(request, env) {
       return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason });
     }
 
+    // DELETE /api/agent/session/:id/trigger — take a request back out of the
+    // queue. The exact inverse of the POST above, and the way out of the one
+    // state the board could not get itself out of.
+    //
+    // `requested_stage` is written by the trigger and cleared in exactly one
+    // other place, /api/agent/stage-done — which a run that failed never
+    // reaches. So a run that errored or was never picked up kept its queue
+    // entry for ever: the stage button stayed disabled, and pressing it again
+    // answered 409 already queued. Four issues sat like that for a day because
+    // the runner takes two per dispatch and nothing re-dispatches.
+    //
+    // It touches nothing in Linear and no label. It clears the queue entry, and
+    // an error along with it — a row you have just reset is not still failing,
+    // and leaving `status = 'error'` behind would leave the card shouting about
+    // a run you have already dealt with. The error prose goes with the status
+    // that made it worth showing.
+    //
+    // Deliberately not destructive: the row, its stage labels, its brand, its
+    // gate and its history are all untouched. The worst it can do is let you
+    // press the button again, which is the entire point.
+    if (method === 'DELETE' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
+      const id = await resolveId(env, path.split('/')[4]);
+      const row = await env.DB.prepare(
+        `SELECT requested_stage, status FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!row) return err('not found', 404);
+
+      // Both CASEs read the row as it was, so clearing the prompt keys off the
+      // old status rather than the one being written in the same statement.
+      await env.DB.prepare(
+        `UPDATE agent_sessions
+            SET requested_stage = NULL,
+                requested_at    = NULL,
+                status = CASE WHEN status = 'error' THEN 'waiting' ELSE status END,
+                prompt = CASE WHEN status = 'error' THEN NULL ELSE prompt END,
+                updated_at = datetime('now')
+          WHERE id = ?`
+      ).bind(id).run();
+
+      return json({ ok: true, cleared: row.requested_stage || null,
+                    was: row.status || null });
+    }
+
     // GET /api/agent/queue — what the runner asks for instead of polling
     // Linear. Oldest request first, so a button pressed on Monday is not
     // starved by one pressed this morning.

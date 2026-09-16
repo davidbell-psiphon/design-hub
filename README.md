@@ -87,8 +87,9 @@ the other way round: the pill asked `isWorking` first, and `requested_stage` is
 cleared in exactly one place — `stage-done`, which a run that failed never
 reaches. So a session that had already reported `status: "error"` kept its queue
 row and the board kept painting it **Working…** indefinitely. RYV-84, FOR-47 and
-RYV-86 all sat like that. A queued run is still queued while it is errored — the
-button stays disabled — but it now reads **Error** rather than claiming progress.
+RYV-86 all sat like that. A queued run is still queued while it is errored, so
+the stage button stays disabled — but it reads **Error** rather than claiming
+progress, and the card carries **Reset** beside it.
 
 **Stalled** is the other half: nothing reports a process dying, so a run that
 never comes back would otherwise stay **Working…** for ever. It is derived, not
@@ -106,6 +107,30 @@ a dead run would have been the thing concealing it.
 
 A row whose timestamp will not parse is deliberately *not* stalled: flagging on
 missing data would flag the whole board the first time a column came back null.
+
+### Reset
+
+An errored or stalled card carries **Reset**, and nothing else does — a button
+whose whole job is to interrupt a run has no business on a run that is fine.
+
+It exists because `requested_stage` is written by the trigger and cleared in
+exactly one other place, `stage-done`, which a run that failed never reaches. So
+a run that errored, or was never picked up, held its queue entry for ever: the
+stage button stayed disabled and pressing it again answered `409 already
+queued`. There was no way out of that state from the board. Four issues sat in
+it for a day, because the runner takes two issues per dispatch and nothing
+re-dispatches.
+
+`DELETE /api/agent/session/:id/trigger` is the exact inverse of the POST. It
+clears `requested_stage` and `requested_at`, and an `error` status with them —
+a row you have just reset is not still failing, and leaving the error behind
+would leave the card shouting about a run you have already dealt with. The
+failure prose goes with the status that made it worth showing; a `waiting` row's
+prompt is its gate question and survives untouched.
+
+It is deliberately not destructive. Nothing in Linear moves, no label changes,
+and the row, its stage, its brand, its gate and its history are all left alone.
+The worst it can do is let you press the stage button again, which is the point.
 
 **Needs you is an open gate, not `status = 'waiting'`.** The reader writes that
 status on every row it inserts, so a pill for it would be on all of them and
@@ -528,6 +553,7 @@ Used by the board:
 | `GET /api/brands` | Brand id, name, colour |
 | `GET /api/agent/sessions` | Every session, waiting first |
 | `POST /api/agent/session/:id/trigger` | Queue a stage for the runner (`{"stage":"research"\|"design"}`) |
+| `DELETE /api/agent/session/:id/trigger` | Reset — take the request back out of the queue, and clear an error with it |
 | `GET /api/agent/queue` | What the runner reads — every row with a stage requested |
 | `POST /api/agent/stage-done` | The runner reports a finished stage (`{"linear_id","stage"}`) |
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |

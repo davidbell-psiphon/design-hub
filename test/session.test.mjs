@@ -231,6 +231,95 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(rows(db)[0].requested_stage, 'research');
   });
 
+  test('reset takes the request back out of the queue', async () => {
+    // The state the board could not get itself out of. requested_stage is
+    // cleared by stage-done and nothing else, so a run that failed — or was
+    // never picked up — held its queue entry for ever and the button stayed
+    // disabled behind a 409.
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    const card = '/api/agent/session/' + encodeURIComponent('linear/RYV-84');
+
+    assert.equal((await call(e, 'POST', card + '/trigger', { stage: 'research' })).status, 200);
+    assert.equal((await call(e, 'POST', card + '/trigger', { stage: 'design' })).status, 409);
+
+    const res = await call(e, 'DELETE', card + '/trigger');
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).cleared, 'research');
+    assert.equal(rows(db)[0].requested_stage, null);
+    assert.equal(rows(db)[0].requested_at, null);
+
+    // And the whole point: the stage can be pressed again.
+    assert.equal((await call(e, 'POST', card + '/trigger', { stage: 'research' })).status, 200);
+  });
+
+  test('reset clears an error, and the prose that explained it', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-86' })]);
+    await readLinear(e);
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-86/research', system: 'design-ai', status: 'error',
+        prompt: 'Research blocked — no BCC documents for ryve' },
+      { 'X-Agent-Secret': 's' });
+    assert.equal(rows(db)[0].status, 'error');
+
+    const res = await call(e, 'DELETE',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-86') + '/trigger');
+    assert.equal(res.status, 200);
+    // 'waiting' is what the reader writes on every quiet row, so this is the
+    // card going quiet rather than claiming anything new.
+    assert.equal(rows(db)[0].status, 'waiting');
+    assert.equal(rows(db)[0].prompt, null, 'the failure prose outlived the failure');
+  });
+
+  test('reset leaves everything that is not the request alone', async () => {
+    const db = freshDb();
+    const e = env(db);
+    const mutations = [];
+    stubLinear([issue({ identifier: 'RYV-84', labels: [{ name: 'AI-research done' }] })], mutations);
+    await readLinear(e);
+    const card = '/api/agent/session/' + encodeURIComponent('linear/RYV-84');
+    await call(e, 'POST', card + '/trigger', { stage: 'design' });
+    await call(e, 'DELETE', card + '/trigger');
+
+    const row = rows(db)[0];
+    assert.equal(rows(db).length, 1, 'reset dropped the row — it is not a delete');
+    assert.deepEqual(JSON.parse(row.labels), ['AI-research done'], 'reset moved the stage');
+    assert.equal(row.linear_id, 'RYV-84');
+    assert.equal(row.linear_uuid, 'uuid-RYV-84');
+    assert.equal(mutations.length, 0, 'reset wrote to Linear: ' + mutations.join(', '));
+  });
+
+  test('reset does not wipe the question a waiting card is asking', async () => {
+    // prompt is cleared because an errored row's prompt *is* the error. On any
+    // other status it is the gate, and must survive.
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'waiting',
+        prompt: 'Which direction proceeds?',
+        options: [{ id: 'd1', label: 'One' }, { id: 'd2', label: 'Two' }] },
+      { 'X-Agent-Secret': 's' });
+
+    await call(e, 'DELETE',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger');
+    assert.equal(rows(db)[0].prompt, 'Which direction proceeds?');
+    assert.equal(rows(db)[0].status, 'waiting');
+    assert.equal(JSON.parse(rows(db)[0].options).length, 2);
+  });
+
+  test('reset on an id nothing knows is a 404, not a silent ok', async () => {
+    const db = freshDb();
+    const e = env(db);
+    const res = await call(e, 'DELETE', '/api/agent/session/nope/trigger');
+    assert.equal(res.status, 404);
+  });
+
   test('the reader collects every team, in every open state', async () => {
     // It collected design teams only, and Backlog/Todo only. Both filters
     // went: the first because a brand is derived from the issue rather than

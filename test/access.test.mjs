@@ -97,6 +97,7 @@ const BOARD_ROUTES = [
   ['GET',    '/api/sessions'],
   ['GET',    '/api/agent/session/' + CARD],
   ['POST',   '/api/agent/session/' + CARD + '/trigger',  { stage: 'research' }],
+  ['DELETE', '/api/agent/session/' + CARD + '/trigger'],
   ['PATCH',  '/api/agent/session/' + CARD + '/reassign', { project: 'forge' }],
   ['PATCH',  '/api/agent/session/' + CARD + '/respond',  { response: 'x' }],
   ['PATCH',  '/api/agent/session/' + CARD + '/reopen',   { note: 'x' }],
