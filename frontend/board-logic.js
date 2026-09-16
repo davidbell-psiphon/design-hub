@@ -305,9 +305,26 @@ var RUN_STATE_TEXT = {
   done: 'Done',
 };
 
-// How loud each one is, most urgent first. The activity panel sorts on this;
-// nothing else needs to know the order.
+// How loud each one is, most urgent first. The console sorts on this; nothing
+// else needs to know the order.
 var RUN_STATE_RANK = ['error', 'stalled', 'waiting', 'working', 'done', 'idle'];
+
+// The console's own words. Uppercase, because a console column reads as a
+// level rather than as a sentence — and 'WORKING…' with the ellipsis in it
+// does not line up with anything.
+var RUN_STATE_CONSOLE = {
+  error: 'ERROR',
+  stalled: 'STALLED',
+  working: 'WORKING',
+  waiting: 'NEEDS YOU',
+  done: 'DONE',
+};
+
+// How long a finished run stays news. A row keeps `status = 'done'` until
+// something runs on it again, so without a window the console would carry
+// every stage that has ever finished, for ever, which is a list and not a
+// console.
+var RECENT_DONE_H = 24;
 
 // The pill on the right of the card. Everything that is doing something gets
 // one; a quiet card still shows nothing but its stage.
@@ -326,6 +343,61 @@ function statusPill(r, now) {
 function failureReason(r) {
   if (!r || r.status !== 'error') return '';
   return String(r.prompt || r.detail || '').trim();
+}
+
+// ─── THE CONSOLE ───────────────────────────────────
+// What the right-hand panel prints. Pure, so the ordering and the windowing
+// are testable without a DOM — the panel itself only formats what comes back.
+//
+// There is no event log behind this. Every line is a row's *current* state,
+// stamped with when that row last moved, so the console reads like a log
+// without pretending to be a history of transitions it never recorded.
+
+// The lines to print, in order. Everything that is doing something, plus runs
+// that finished recently enough to still be worth saying.
+//
+// Within a state, whatever moved longest ago comes first: a run stuck for
+// three hours wants attention before one stuck for ten minutes. Finished runs
+// are the exception and sort newest first — "longest stuck" means nothing
+// about something that is no longer running.
+function consoleRows(rows, now) {
+  var t = (now === undefined ? Date.now() : now);
+  var out = [];
+  for (var i = 0; i < (rows || []).length; i++) {
+    var r = rows[i];
+    var state = runState(r, t);
+    if (state === 'idle') continue;
+    if (state === 'done') {
+      var at = stampMs(lastActivity(r));
+      if (isNaN(at) || (t - at) > RECENT_DONE_H * 3600000) continue;
+    }
+    out.push({ r: r, state: state });
+  }
+  out.sort(function (a, b) {
+    var d = RUN_STATE_RANK.indexOf(a.state) - RUN_STATE_RANK.indexOf(b.state);
+    if (d) return d;
+    var ta = stampMs(lastActivity(a.r)), tb = stampMs(lastActivity(b.r));
+    // A row with no usable timestamp sorts last rather than first — it is the
+    // one we know least about, not the one that needs attention most.
+    if (isNaN(ta)) return 1;
+    if (isNaN(tb)) return -1;
+    return a.state === 'done' ? tb - ta : ta - tb;
+  });
+  return out;
+}
+
+// The left column: local wall-clock time, because the console is read against
+// the clock on the wall and not against a UTC stamp in the database.
+function clockTime(ts) {
+  var t = stampMs(ts);
+  if (isNaN(t)) return '--:--';
+  var d = new Date(t);
+  return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+}
+
+// What the console prints in the state column for a line.
+function consoleState(state) {
+  return RUN_STATE_CONSOLE[state] || '';
 }
 
 // Element ids are derived from session ids, which contain '/' and '-'.

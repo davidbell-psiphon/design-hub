@@ -11,138 +11,15 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-// The schema as the live database got it: additive pieces, in order. The gate
-// migration is last because that is the order it was applied in, and applying
-// them in order is half of what this suite checks.
-const PIECES = ['agent-schema.sql', 'reader-schema.sql', 'track-schema.sql',
-                'piece4-schema.sql', 'piece5-schema.sql', 'piece6-schema.sql',
-                'piece7-schema.sql', 'migration-001-gates.sql'];
-
-// Comments first, then split on statement boundaries — that order matters,
-// because one piece4 comment has a semicolon in it. Safe here because none of
-// the pieces put a `--` or a `;` inside a string literal.
-function statements(sql) {
-  return sql.replace(/--[^\n]*/g, '')
-            .split(';')
-            .map(s => s.trim())
-            .filter(Boolean);
-}
-
-function applyPieces(db, pieces) {
-  for (const file of pieces) {
-    for (const stmt of statements(fs.readFileSync(path.join(ROOT, file), 'utf8'))) {
-      db.exec(stmt);
-    }
-  }
-}
-
-// piece4-schema.sql sets the brand colours, so `projects` has to exist for it
-// to apply verbatim — which is worth keeping, since applying every piece in
-// order is half of what this suite checks.
-function freshDb(pieces = PIECES) {
-  const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, color TEXT,
-             section_id TEXT, sort_order INTEGER)`);
-  applyPieces(db, pieces);
-  return db;
-}
-
-// D1's binding surface, over node:sqlite.
-function d1(db) {
-  return {
-    prepare(sql) {
-      const stmt = db.prepare(sql);
-      const run = (args) => {
-        const r = stmt.run(...args);
-        return { success: true, meta: { changes: r.changes } };
-      };
-      const api = (args) => ({
-        bind: (...more) => api([...args, ...more]),
-        first: async () => stmt.get(...args) ?? null,
-        all: async () => ({ results: stmt.all(...args) }),
-        run: async () => run(args),
-      });
-      return api([]);
-    },
-  };
-}
-
-// worker/index.js is ESM with a .js extension, and this repo has no
-// package.json to say so — so load it as a data: URL with its relative imports
-// rewritten to absolute ones. Same source the Worker ships.
-async function loadWorker() {
-  const src = fs.readFileSync(path.join(ROOT, 'worker/index.js'), 'utf8')
-    .replace(/from '\.\.\/lib\/([^']+)'/g,
-             (_, f) => `from '${new URL('lib/' + f, 'file:///' + ROOT.replace(/\\/g, '/') + '/')}'`);
-  return (await import('data:text/javascript,' + encodeURIComponent(src))).default;
-}
-
-const worker = await loadWorker();
-
-// A Linear issue as the reader's GraphQL query returns it.
-const issue = (o) => ({
-  id: o.uuid || 'uuid-' + o.identifier,
-  identifier: o.identifier,
-  title: o.title || o.identifier + ' title',
-  description: o.description || 'A Linear description.',
-  url: 'https://linear.app/x/issue/' + o.identifier,
-  assignee: { name: 'Dave Bell' },
-  project: null,
-  labels: { nodes: o.labels || [] },
-  team: { name: o.team || 'Ryve App' },
-  state: { type: o.state || 'unstarted' },
-});
-
-// Stub Linear: the reader's discovery query gets issues, reconciliation gets
-// the same states back, and label mutations always succeed.
-function stubLinear(issues, mutations) {
-  globalThis.fetch = async (_url, init) => {
-    const body = JSON.parse(init.body);
-    const q = body.query;
-    // Optional recorder, so a test can assert that a route wrote nothing to
-    // Linear — which is the whole contract of the trigger button now.
-    if (mutations && /^\s*mutation/.test(q)) mutations.push(q.trim().split('\n')[0]);
-    if (/DesignReaderIssues/.test(q)) {
-      return { ok: true, json: async () => ({ data: { issues: { nodes: issues } } }) };
-    }
-    if (/Reconcile/.test(q)) {
-      const ids = body.variables.ids;
-      return { ok: true, json: async () => ({ data: { issues: { nodes:
-        issues.filter(i => ids.includes(i.id))
-              .map(i => ({ id: i.id, state: i.state, labels: i.labels })) } } }) };
-    }
-    if (/issueLabels/.test(q)) {
-      return { ok: true, json: async () => ({ data: { issueLabels: { nodes: [{ id: 'label-1' }] } } }) };
-    }
-    return { ok: true, json: async () => ({ data: { issueAddLabel: { success: true },
-                                                    issueRemoveLabel: { success: true } } }) };
-  };
-}
-
-const env = (db) => ({ DB: d1(db), LINEAR_API_KEY: 'k', AGENT_SECRET: 's' });
-
-function call(e, method, path, body, headers = {}) {
-  return worker.fetch(new Request('https://hub.test' + path, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }), e);
-}
-
-const agentPost = (e, body) =>
-  call(e, 'POST', '/api/agent/session', body, { 'X-Agent-Secret': 's' });
-
-const readLinear = (e) => call(e, 'POST', '/api/read-linear');
-
-const rows = (db) => db.prepare(
-  `SELECT * FROM agent_sessions ORDER BY id`).all();
+// The harness these suites share — node:sqlite behind D1's binding surface,
+// the schema pieces in the order the live database got them, and a stubbed
+// Linear. It lives in helpers.mjs so that adding a pieceN-schema.sql is one
+// edit rather than one per suite.
+import {
+  PIECES, applyPieces, freshDb, env, call, agentPost, readLinear,
+  issue, stubLinear, rows,
+} from './helpers.mjs';
 
 // Options as stored (JSON) or as a read hands them back (an array).
 const parseOpts = (raw) => (typeof raw === 'string' ? JSON.parse(raw) : (raw || []));
@@ -354,22 +231,25 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(rows(db)[0].requested_stage, 'research');
   });
 
-  test('the reader collects design teams only', async () => {
-    // Every Backlog/Todo issue assigned to Dave used to reach the board,
-    // Marketing included, which buried the design work under campaign issues.
+  test('the reader collects every team, in every open state', async () => {
+    // It collected design teams only, and Backlog/Todo only. Both filters
+    // went: the first because a brand is derived from the issue rather than
+    // granted by its team, the second because an issue you had started was
+    // invisible unless the board read it before you moved it.
     const db = freshDb();
     const e = env(db);
     stubLinear([
-      issue({ identifier: 'RYV-84' }),                              // Ryve App
+      issue({ identifier: 'RYV-84', state: 'started' }),            // In Progress
       issue({ identifier: 'CON-116', team: 'Conduit App' }),
       issue({ identifier: 'WEB-265', team: 'Websites' }),
-      issue({ identifier: 'MAR-980', team: 'Marketing' }),          // out of scope
-      issue({ identifier: 'STO-421', team: 'Sysadmin' }),           // out of scope
+      issue({ identifier: 'MAR-980', team: 'Marketing' }),
+      issue({ identifier: 'STO-421', team: 'Sysadmin', state: 'triage' }),
+      issue({ identifier: 'OLD-1', state: 'completed' }),           // closed: not discovered
     ]);
     const result = await (await readLinear(e)).json();
     const ids = rows(db).map(r => r.linear_id).sort();
-    assert.deepEqual(ids, ['CON-116', 'RYV-84', 'WEB-265']);
-    assert.equal(result.skipped, 2);
+    assert.deepEqual(ids, ['CON-116', 'MAR-980', 'RYV-84', 'STO-421', 'WEB-265']);
+    assert.equal(result.skipped, 0);
   });
 
   test('the queue is what the runner reads, oldest request first', async () => {

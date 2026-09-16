@@ -293,50 +293,60 @@ describe('a card reports the state it is actually in', () => {
   });
 });
 
-describe('the activity panel watches the whole pipeline', () => {
+describe('the console watches the whole pipeline', () => {
   let panel;
   before(async () => { panel = (await mount(stateRows)).panel; });
 
-  const at = (id) => panel.indexOf('>' + id);
+  const at = (id) => panel.indexOf('>' + id + '<');
 
-  test('it is the activity panel, not the in-flight list', () => {
-    assert.match(panel, /sp-title">Activity</);
+  test('it is a console, not the in-flight list it replaced', () => {
+    assert.match(panel, /cn-title">Activity</);
     assert.equal(panel.includes('In flight'), false, 'the old title is still there');
+    // Column-aligned lines, not cards.
+    assert.match(panel, /class="cn-line"/);
+    assert.match(panel, /cn-t">\d\d:\d\d</, 'no timestamp column');
   });
 
   test('everything that is doing something is listed, most urgent first', () => {
     for (const id of ['RYV-84', 'CON-120', 'RYV-187', 'CON-118']) {
-      assert.ok(at(id) > -1, id + ' is missing from the panel');
+      assert.ok(at(id) > -1, id + ' is missing from the console');
     }
     assert.ok(at('RYV-84') < at('CON-120'), 'errored should sort above stalled');
     assert.ok(at('CON-120') < at('RYV-187'), 'stalled should sort above needs-you');
     assert.ok(at('RYV-187') < at('CON-118'), 'needs-you should sort above running');
   });
 
-  test('a stalled run is named as stalled here too', () => {
-    // The panel and the card read the same derivation, so they cannot
+  test('the state column reads as a level, and matches the card', () => {
+    // The console and the card read the same derivation, so they cannot
     // disagree about a row the way the button and the column once did.
-    assert.match(panel, /sp-state state-stalled">Stalled</);
-    assert.match(panel, /sp-state state-error">Error</);
+    assert.match(panel, /cn-st state-error">ERROR</);
+    assert.match(panel, /cn-st state-stalled">STALLED</);
+    assert.match(panel, /cn-st state-waiting">NEEDS YOU</);
+    assert.match(panel, /cn-st state-working">WORKING</);
   });
 
-  test('the quiet rows are counted, not listed', () => {
-    assert.equal(at('CON-116'), -1, 'a finished row is cluttering the panel');
-    assert.equal(at('CON-117'), -1, 'an idle row is cluttering the panel');
-    assert.match(panel, /sp-quiet">2 of 6 quiet</);
+  test('a line that stopped says why, under itself', () => {
+    assert.match(panel, /cn-msg">The qa stage is not implemented yet</);
+    assert.match(panel, /cn-msg">no activity for \d+[mhd]</);
   });
 
-  test('the summary says how many of each, in the same order', () => {
-    assert.match(panel, /1 errored/);
-    assert.match(panel, /1 stalled/);
-    assert.match(panel, /1 need you/);
-    assert.match(panel, /1 running/);
+  test('a run that finished recently is still news; an idle row is not', () => {
+    assert.ok(at('CON-116') > -1, 'a run that finished a minute ago should be on the console');
+    assert.match(panel, /cn-st state-done">DONE</);
+    assert.equal(at('CON-117'), -1, 'an idle row is cluttering the console');
+  });
+
+  test('live and quiet together account for every open card', () => {
+    // Four live, one recently done, one idle — six open rows, all of them
+    // either counted in the head or counted in the foot.
+    assert.match(panel, /cn-counts">4 live \/ 6 open</);
+    assert.match(panel, />2 quiet</);
   });
 
   test('an all-quiet board says so rather than rendering an empty list', () => {
     return mount([row({ linear_id: 'CON-117' })]).then(m => {
-      assert.match(m.panel, /sp-empty">Nothing is running</);
-      assert.match(m.panel, /sp-quiet">1 of 1 quiet</);
+      assert.match(m.panel, /cn-empty">— nothing is running —</);
+      assert.match(m.panel, /cn-counts">0 live \/ 1 open</);
     });
   });
 });

@@ -70,7 +70,7 @@ row whose status matched no branch fell through to nothing.
 ### What a card says it is doing
 
 One derivation — `runState` in `board-logic.js` — decides this, and the pill,
-the card's outline, the stage button's text and the activity panel all read it.
+the card's outline, the stage button's text and the console all read it.
 They are the same fact rendered four ways, so they cannot contradict each other.
 
 | Pill | Comes from | What it means |
@@ -132,7 +132,7 @@ rather than disappearing; the "Move to…" select on the card is how it gets hom
 Two collapsed sections sit at the foot of the board, each showing a count and
 expanding on one click. Both are collapsed on every load, and rows in either
 one leave the brand buckets, the brand counts, the topbar total, the running
-badges and the activity panel.
+badges and the console.
 
 | Section | What is in it |
 |---|---|
@@ -148,24 +148,72 @@ load and the filter is never persisted — the Hub always opens showing
 everything. On narrow screens the sidebar is a hamburger drawer, the activity
 panel moves below the board, and every control is a 44px tap target.
 
-### The activity panel
+### The console
 
 The right-hand panel used to be **In flight**: the rows with a stage queued,
 split App / Website. That answers "what did I press", not "what is going on" —
 a run that had errored or quietly died was either in that list looking healthy
 or not in it at all.
 
-It is now **Activity**, and it is the one place the whole pipeline is visible.
-Every open card that is doing something — errored, stalled, needing an answer,
-running — most urgent first, each with what it is doing and how long since its
-row last moved. Within a state the one that moved longest ago comes first: a run
-stuck for three hours wants attention before one stuck for ten minutes.
+It is a **console** now, and it is always there: a fixed rail on the right at
+any width that can hold two columns, and a sticky bar at the top of the page
+below that. Monospace and column-aligned, because it is read by scanning down
+one column rather than across a card.
 
-Done and idle rows are not listed. A finished card is not *doing* anything, and
-listing sixty quiet ones would bury the four that matter; the count at the foot
-(`2 of 6 quiet`) is what says they are still there. The App / Website split went
-because the panel cannot group by urgency and by track at once — the track rides
-along on the row instead.
+```
+ACTIVITY                    4 live / 6 open
+20:32 ● RYV-84    design     ERROR
+       The qa stage is not implemented yet
+20:31 ● CON-120   research   STALLED
+       no activity for 1h
+20:30 ● RYV-187   design     NEEDS YOU
+20:44 ● CON-118   research   WORKING
+20:43 ● CON-116   design     DONE
+2 quiet                              20:44
+```
+
+The time is when that row last moved, in local wall-clock. The dot is the
+brand's colour, and clicking a line filters the board to that brand. Errored
+and stalled lines carry their reason underneath, clamped to two lines — the
+whole of it is on the card.
+
+**It is not an event log, and does not pretend to be one.** Nothing in the Hub
+records transitions, so every line is a row's *current* state rather than a
+thing that happened. What makes it read like a log is that the rows carry the
+time they last moved, which is the closest true thing the database holds. A
+real append-only log is a schema change and a set of Worker writes; it is worth
+doing, and it is not what this is.
+
+Ordering is `consoleRows` in `board-logic.js` — pure, so it is tested without a
+DOM. Most urgent first; within a state, whatever moved longest ago comes first,
+because a run stuck for three hours wants attention before one stuck for ten
+minutes. Finished runs are the one exception and sort newest first, since
+"longest stuck" says nothing about something no longer running.
+
+Idle rows are not lines. Finished ones are, for **24 hours** (`RECENT_DONE_H`) —
+a row keeps `status = 'done'` until something runs on it again, so without that
+window the console would carry every stage that has ever finished, for ever,
+which is a list and not a console. The head counts what is live and the foot
+counts what is not, so the two together always account for every open card.
+
+#### It keeps itself current
+
+The board re-reads `/api/agent/sessions` every 30 seconds and re-renders. A
+console that is only ever as fresh as your last click is not showing what is
+going on.
+
+This does not touch rule 1. Nothing here starts anything — it is a GET and a
+re-render, and every run still begins because a human pressed a button.
+
+Two things hold the timer back, and both exist because re-rendering replaces the
+board's `innerHTML` outright:
+
+- **A hidden tab polls nothing**, so a window left open overnight does not
+  quietly ask the Worker for the board 2,880 times. Coming back to the tab
+  refreshes immediately rather than waiting out the interval.
+- **A refresh is skipped while anything on the board is focused or has been
+  typed into.** Wiping a half-written gate note out from under someone is a far
+  worse bug than a console that is thirty seconds stale.
 
 ---
 
@@ -256,12 +304,29 @@ reads them.
 ## The scheduled job
 
 Runs Wednesday and Friday at 8am Toronto (`0 13 * * 3,5`), because design issues
-get created Tuesdays and Thursdays. It pulls every Linear issue assigned to Dave
-Bell, in Backlog or Todo, on a **design team** — Conduit App, Ryve App, Psiphon
-App, Forge or Websites — and upserts one `agent_sessions` row per issue. The
-team filter is what keeps Marketing and campaign work, which the Design AI puts
-explicitly out of scope, off a design board. It is a team filter and not a label
-one: gathering is still not triggering.
+get created Tuesdays and Thursdays. It pulls **every Linear issue assigned to
+Dave Bell, on any team, in any open state** — triage, backlog, todo or in
+progress — and upserts one `agent_sessions` row per issue. No label filter:
+gathering is still not triggering.
+
+Both halves of that used to be narrower, and both cost work its place on the
+board.
+
+There was a **team filter** — Conduit App, Ryve App, Psiphon App, Forge and
+Websites — meant to keep Marketing campaign work off a design board. But a
+brand is derived from the issue itself, by `deriveBrand`, and the board's own
+brand filter is what provides the context of where work lives. Gating on the
+team it happened to be filed under only meant design work filed somewhere
+unexpected was invisible. The assignee is now the only filter.
+
+There was also a **state filter** of `["backlog", "unstarted"]`. An issue you
+had actually started was therefore invisible unless the board read it before
+you moved it — nine were, RYV-189 and PSI2-278 among them. It is now every open
+state.
+
+Widening the states does not touch the budget invariant below, because that
+invariant is about *closed* issues: there are around 66 of those against around
+60 open. Open work is the work the board is for, and all of it fits.
 
 It refreshes only Linear-owned fields, so a re-read never resets an in-flight
 session or undoes a manual brand reassignment. Run it on demand with
@@ -269,7 +334,8 @@ session or undoes a manual brand reassignment. Run it on demand with
 
 The reader runs **two passes**:
 
-1. **Discovery** — backlog and unstarted issues; inserts and updates.
+1. **Discovery** — every open issue: triage, backlog, unstarted, started.
+   Inserts and updates.
 2. **Reconciliation** — the issues already tracked, looked up by their Linear
    ids; update-only, never inserts. This is what fills in completed and
    canceled states, and it picks up `no-design` labels applied directly in
@@ -569,6 +635,51 @@ clears the decision, a changed set of options supersedes an answer while the
 same set re-posted leaves it alone, and a session with no options still answers
 in free text.
 
+**`test/helpers.mjs`** is the harness the Worker-level suites share: `node:sqlite`
+behind D1's binding surface, the schema pieces in the order the live database
+got them, and a stubbed Linear. It defines no tests of its own. Adding a
+`pieceN-schema.sql` is one edit here rather than one per suite. Its Linear stub
+honours the state filter the discovery query actually declares, so a widened
+filter changes what the stub returns rather than being invisible to it.
+
+**`test/dismiss.test.mjs`** holds down the first of the three invariants —
+`dismissed_at = COALESCE(…)`. All three COALESCE sites are covered separately:
+the discovery upsert's, the reconciliation pass's, and the dismiss route's own.
+Remove any one and a named test fails. It also covers the route's ordering
+contract in both directions: a Linear failure must leave the card on the board
+rather than half-dismissed, and a failed label removal must leave it dismissed
+rather than flickering back on and off with each cron read.
+
+**`test/reader.test.mjs`** holds down the second — the two-pass reader. It
+asserts that discovery asks for `backlog` and `unstarted` and nothing closed,
+that the `first: 100` budget is still bounded, that reconciliation is
+update-only and inserts nothing even when Linear volunteers an id the board
+does not track, and that a failed reconciliation does not take the whole read
+down with it. Widening the discovery filter fails two of these.
+
+**`test/proxy.test.mjs`** holds down the third — the same-origin proxy — by
+running `functions/api/[[path]].js` against a stubbed `fetch`. The headers are
+the point: the Access JWT is forwarded, the browser's cookies are not, and
+`X-Agent-Secret` is never sent from a path meant for humans. The last two fail
+silently in production, so they fail loudly here. Also the Access-login-page
+and unreachable-Worker branches, which exist so the board reports a cause
+rather than a parse error.
+
+**`test/access.test.mjs`** covers enforcement at the route level, which is a
+different question from whether `accessIdentity` judges a token correctly.
+Every route the board calls is walked as an anonymous caller and has to answer
+403; `POST /api/agent/session` is exempt from the gate and refused by its own
+secret check instead, with a different error string so the two cannot be
+confused. It also pins the shipped-before-configured property: with either
+`ACCESS_AUD` or `ACCESS_TEAM` unset, every route runs open.
+
+**`test/routes.test.mjs`** covers what was left — `DELETE`, the legacy
+`GET /api/sessions` shape the agent still reads, `/api/brands`, and the CORS
+preflight. One test there is a deliberate record of a known gap: the delete
+route drops the session row and leaves its `gate_decisions` rows behind, and
+that test is written to fail if the cascade is ever added, so whoever adds it
+sees the assertion to flip.
+
 **The run-state suites** hold down the fix this board most recently needed: a
 card that says what it is actually doing. In `test/unit.test.mjs`, `runState`
 is walked through all five states plus idle, the precedence is asserted the way
@@ -578,7 +689,10 @@ there — and `isStalled` is pinned against a fixed clock, including the two
 cases that must *not* flag: nothing queued, and a timestamp that will not parse.
 In `test/render.test.mjs` a fixture of one row per state is mounted and read
 back, so the pill, the card's outline, the disabled button's text and the
-activity panel are each checked to be saying the same thing about the same row.
+console are each checked to be saying the same thing about the same row.
+`consoleRows` is covered separately and without a DOM: the ordering, the
+24-hour window on finished runs, and the two rows that must sort last rather
+than first — the one with no usable timestamp, and the finished run with none.
 `mount()` exists for that: a suite renders its own rows rather than adding them
 to the shared fixture, whose counts three other suites assert on.
 

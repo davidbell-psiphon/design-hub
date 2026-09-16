@@ -275,8 +275,8 @@ async function rowIdForLinearKey(env, key) {
 }
 
 // ─── LINEAR READER ─────────────────────────────────
-// Pulls every issue assigned to Dave Bell, across all teams, sitting in
-// Backlog or Todo. No label filter — gathering is not triggering.
+// Pulls every issue assigned to Dave Bell, across all teams, in any open
+// state. No label filter — gathering is not triggering.
 // Writes one agent_sessions row per new issue with status = 'waiting'.
 // Idempotent: skips issues whose linear_id already has a row.
 //
@@ -287,7 +287,15 @@ async function readLinear(env) {
         first: 100
         filter: {
           assignee: { name: { eq: "Dave Bell" } }
-          state: { type: { in: ["backlog", "unstarted"] } }
+          # Every open state. It was ["backlog", "unstarted"], which meant an
+          # issue you had actually started was invisible here unless the board
+          # happened to read it before you moved it — nine of them were.
+          #
+          # This does not touch the budget invariant, which is about closed
+          # issues: there are ~66 of those against ~60 open, so letting them in
+          # would blow the first: 100 and starve the board of real work. Open
+          # work is the work the board is for, and all of it fits.
+          state: { type: { in: ["triage", "backlog", "unstarted", "started"] } }
         }
       ) {
         nodes {
@@ -350,7 +358,9 @@ async function readLinear(env) {
     // Linear and cannot drift away from it.
     const labelNames = JSON.stringify(
       ((issue.labels && issue.labels.nodes) || []).map((l) => l.name));
-    const linearState = issue.state && issue.state.type; // 'backlog' | 'unstarted'
+    // 'triage' | 'backlog' | 'unstarted' | 'started' from discovery; the
+    // reconciliation pass is what later writes 'completed' or 'canceled'.
+    const linearState = issue.state && issue.state.type;
     // An issue can arrive already labelled no-design, dismissed in Linear
     // before the Hub ever saw it.
     const dismissedAt = hasNoDesign(issue) ? nowStamp() : null;

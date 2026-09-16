@@ -162,25 +162,39 @@
   .gate-reject-row .gate-reject { margin-top: 0; }
 
   /* SIDE PANEL — persistent, all in-flight work across every brand */
-  .side-panel { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: 12px 0; }
-  .side-panel::-webkit-scrollbar { width: 3px; }
-  .side-panel::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
-  .sp-title { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); padding: 0 12px 8px; }
-  .sp-group-label { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); padding: 10px 12px 4px; }
-  .sp-item { display: flex; align-items: center; gap: 7px; padding: 5px 12px; cursor: pointer; border: none; background: none; width: 100%; text-align: left; font-family: var(--font); }
-  .sp-item:hover { background: var(--surface-2); }
-  .sp-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  .sp-text { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sp-empty { padding: 8px 12px; font-size: 11px; color: var(--text-dim); font-style: italic; }
-  .sp-summary { padding: 0 12px 9px; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
-  .sp-count + .sp-count::before { content: " \00b7 "; color: var(--text-dim); }
-  .sp-item { align-items: flex-start; }
-  .sp-dot { margin-top: 4px; }
-  .sp-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .sp-meta { display: flex; align-items: baseline; gap: 6px; }
-  .sp-state { font-size: 10px; font-weight: 600; }
-  .sp-when { font-size: 10px; color: var(--text-dim); }
-  .sp-quiet { margin-top: 10px; padding: 9px 12px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
+  /* THE CONSOLE — always on the right, and the whole point of it is that you
+     never have to go and look for it. Monospace and column-aligned, because
+     it is read by scanning down one column rather than across a card. */
+  .side-panel { width: 268px; flex-shrink: 0; border-left: 1px solid var(--border);
+                background: #0c0c0d; display: flex; flex-direction: column; overflow: hidden; }
+  .cn-head { display: flex; align-items: baseline; gap: 8px; padding: 11px 12px 9px;
+             border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .cn-title { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); }
+  .cn-counts { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .cn-body { flex: 1; overflow-y: auto; padding: 8px 0; font-family: var(--mono); font-size: 11px; line-height: 1.5; }
+  .cn-body::-webkit-scrollbar { width: 3px; }
+  .cn-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+  /* One row, one line. A button, because clicking it filters the board. */
+  .cn-line { display: flex; align-items: baseline; gap: 7px; width: 100%; padding: 2px 12px;
+             border: none; background: none; text-align: left; cursor: pointer;
+             font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+  .cn-line:hover { background: var(--surface-2); }
+  .cn-t { color: var(--text-dim); flex-shrink: 0; }
+  .cn-id { color: var(--text); flex-shrink: 0; min-width: 62px; }
+  .cn-ph { color: var(--text-muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .cn-st { font-weight: 700; flex-shrink: 0; }
+  /* The failure, under the line it belongs to, indented to the id column.
+     Clamped to two lines: the whole of it is on the card. */
+  .cn-msg { padding: 0 12px 4px 54px; color: var(--text-muted); font-size: 10.5px;
+            line-height: 1.4; white-space: normal;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cn-brand { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .cn-empty { padding: 10px 12px; color: var(--text-dim); font-size: 11px; }
+  .cn-foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: 8px 12px;
+             font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+             display: flex; gap: 8px; }
+  .cn-stamp { margin-left: auto; }
   .state-error { color: var(--run-error); }
   .state-stalled { color: var(--run-stalled); }
   .state-working { color: var(--run-working); }
@@ -230,10 +244,12 @@
     .sb-item { min-height: 44px; font-size: 15px; }
     .sb-badge { min-width: 20px; height: 20px; font-size: 11px; }
 
-    /* Below the board, not beside it — "what is running" is worth a scroll,
-       and a 220px rail on a phone is not. */
-    .side-panel { width: auto; overflow: visible; border-left: none;
-                  border-top: 1px solid var(--border); padding: 14px 0 28px; }
+    /* The console stays on the right, narrower. It is the one thing on this
+       page that is meant to be glanceable without going to look for it, so
+       moving it below a scrolling board would defeat it. */
+    .side-panel { width: 208px; }
+    .layout { flex-direction: row; }
+    .side-panel .cn-body { overflow-y: auto; }
 
     /* Tap targets — 44px minimum on everything you press. */
     .session-top, .session-actions { padding-left: 14px; padding-right: 14px; }
@@ -244,6 +260,15 @@
     .session-links { margin-left: 0; }
     .gate-option, .gate-note { min-height: 44px; }
     .sp-item { min-height: 40px; }
+  }
+
+  /* Under a phone's width two columns stop working, so the console goes to
+     the top of the page and sticks there — still the first thing you see,
+     still without scrolling for it. */
+  @media (max-width: 620px) {
+    .layout { flex-direction: column; }
+    .side-panel { width: auto; position: sticky; top: 44px; z-index: 20; max-height: 42vh;
+                  border-left: none; border-bottom: 1px solid var(--border-strong); order: -1; }
   }
 
   @media (max-width: 600px) {
@@ -541,7 +566,7 @@ function renderBoard() {
     drawer('completed', 'Completed', scoped.filter(r => sectionOf(r) === 'completed'));
 
   renderSidebar(unplaced.length);
-  renderActivity();
+  renderConsole();
   renderTopbar();
 }
 
@@ -624,78 +649,66 @@ function closeMenu() {
   document.getElementById('scrim').classList.remove('open');
 }
 
-// ── ACTIVITY — one place to watch the whole pipeline ───────────────────
+// ── THE CONSOLE — always on the right ──────────────────────────────────
 //
-// This panel was "In flight": it listed the rows with a stage queued, split
-// App / Website. That answered "what did I press" and not "what is going on",
-// so a run that had errored or quietly died was either in the list looking
-// healthy or not in it at all.
+// This panel was "In flight": the rows with a stage queued, split App /
+// Website. That answers "what did I press", not "what is going on" — a run
+// that had errored or quietly died was either in that list looking healthy or
+// not in it at all.
 //
-// It now shows every open card that is doing something — errored, stalled,
-// needing an answer, running — most urgent first, with how long since the row
-// last moved. It cannot group by urgency and by track at once, so the track
-// rides along on the row instead of splitting the list in two.
+// It is a console now. One line per row that is doing something, column
+// aligned, stamped with when that row last moved, most urgent first. The
+// ordering and the windowing are `consoleRows` in board-logic.js, so they are
+// testable without a DOM; this function only formats what comes back.
 //
-// Done and idle rows are not listed. A finished card is not *doing* anything,
-// and listing sixty quiet ones would bury the four that matter; the count at
-// the foot is what says they are still there.
+// It is not an event log and does not pretend to be one — nothing records
+// transitions, so every line is a current state rather than a thing that
+// happened. What makes it read like a log is that the rows carry the time
+// they last moved, which is the closest true thing the Hub holds.
 
-function renderActivity() {
-  const live = sessions.filter(isOpen)
-    .map(r => ({ r, state: runState(r) }))
-    .filter(x => x.state !== 'idle' && x.state !== 'done');
+function renderConsole() {
+  const open = sessions.filter(isOpen);
+  const lines = consoleRows(open);
 
-  // Most urgent first, and within a state the one that moved longest ago —
-  // a run stuck for three hours wants attention before one stuck for ten
-  // minutes. A row with no usable timestamp sorts last rather than first.
-  live.sort((a, b) => {
-    const d = RUN_STATE_RANK.indexOf(a.state) - RUN_STATE_RANK.indexOf(b.state);
-    if (d) return d;
-    const ta = stampMs(lastActivity(a.r)), tb = stampMs(lastActivity(b.r));
-    if (isNaN(ta)) return 1;
-    if (isNaN(tb)) return -1;
-    return ta - tb;
-  });
-
-  const counts = RUN_STATE_RANK
-    .map(state => ({ state, n: live.filter(x => x.state === state).length }))
-    .filter(x => x.n);
-
-  const item = ({ r, state }) => {
+  const line = ({ r, state }) => {
     const color = (brandsById[r.project] || {}).color || '#888780';
     const doing = r.requested_stage || r.phase || '';
-    return `<button class="sp-item" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')"
+    const why = state === 'error' ? failureReason(r)
+              : state === 'stalled' ? ('no activity for ' + timeAgo(lastActivity(r))) : '';
+    return `<button class="cn-line" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')"
                     title="${esc(r.title || '')}">
-      <span class="sp-dot" style="background:${color}"></span>
-      <span class="sp-body">
-        <span class="sp-text">${esc(r.linear_id || r.id)}${doing ? ' \u2014 ' + esc(doing) : ''}</span>
-        <span class="sp-meta">
-          <span class="sp-state state-${state}">${esc(RUN_STATE_TEXT[state])}</span>
-          <span class="sp-when">${esc(timeAgo(lastActivity(r)))}</span>
-          ${r.track ? `<span class="sp-when">${esc(r.track)}</span>` : ''}
-        </span>
-      </span>
-    </button>`;
+      <span class="cn-t">${esc(clockTime(lastActivity(r)))}</span>
+      <span class="cn-brand" style="background:${color}"></span>
+      <span class="cn-id">${esc(r.linear_id || r.id)}</span>
+      <span class="cn-ph">${esc(doing)}</span>
+      <span class="cn-st state-${state}">${esc(consoleState(state))}</span>
+    </button>${why ? `<div class="cn-msg">${esc(why)}</div>` : ''}`;
   };
 
-  const open = sessions.filter(isOpen).length;
+  // The head counts what is live; the foot counts what is not, so the two
+  // together always account for every open card on the board.
+  const live = lines.filter(x => x.state !== 'done').length;
   document.getElementById('side-panel').innerHTML = `
-    <div class="sp-title">Activity</div>
-    ${counts.length ? `<div class="sp-summary">${counts.map(c =>
-        `<span class="sp-count state-${c.state}">${c.n} ${esc(ACTIVITY_WORD[c.state])}</span>`).join('')}</div>` : ''}
-    ${live.length ? live.map(item).join('') : '<div class="sp-empty">Nothing is running</div>'}
-    <div class="sp-quiet">${open - live.length} of ${open} quiet</div>
+    <div class="cn-head">
+      <span class="cn-title">Activity</span>
+      <span class="cn-counts">${live} live / ${open.length} open</span>
+    </div>
+    <div class="cn-body">
+      ${lines.length ? lines.map(line).join('')
+                     : '<div class="cn-empty">— nothing is running —</div>'}
+    </div>
+    <div class="cn-foot">
+      <span>${open.length - live} quiet</span>
+      <span class="cn-stamp">${esc(clockTime(nowStamp()))}</span>
+    </div>
   `;
 }
 
-// The summary line reads as a sentence fragment, so the states are named as
-// adjectives there rather than as the pill's own words.
-const ACTIVITY_WORD = {
-  error: 'errored',
-  stalled: 'stalled',
-  waiting: 'need you',
-  working: 'running',
-};
+// The clock the console's foot prints, in the same shape the rows carry, so
+// "last read at" and "last moved at" are read off the same format.
+function nowStamp() {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
 
 // ── ACTIONS ────────────────────────────────────────
 
@@ -878,6 +891,53 @@ async function reassignSession(id, project) {
     toast('Moved to ' + ((brandsById[project] || {}).name || project));
     await loadBoard();
   } catch { toast('Could not move'); }
+}
+
+// ── KEEPING THE CONSOLE CURRENT ────────────────────────────────────────
+//
+// A console showing "what is going on" that is only ever as fresh as your last
+// click is not showing what is going on. So the board re-reads itself on a
+// timer.
+//
+// This does not touch rule 1. Nothing here starts anything: it is a GET of
+// /api/agent/sessions and a re-render, and every run still begins because a
+// human pressed a button.
+//
+// Two things hold it back, and both exist because re-rendering replaces the
+// board's innerHTML outright:
+//
+//   - a hidden tab polls nothing at all, so a window left open overnight is
+//     not quietly asking the Worker for the board 2,880 times;
+//   - a refresh is skipped while anything on the board is being typed into or
+//     focused, because wiping a half-written gate note out from under someone
+//     is a far worse bug than a console that is thirty seconds stale.
+const REFRESH_MS = 30000;
+
+function boardIsBusy() {
+  if (typeof document.querySelectorAll !== 'function') return false;
+  const board = document.getElementById('board');
+  if (!board || !board.querySelectorAll) return false;
+  for (const el of board.querySelectorAll('input, textarea')) {
+    if (el === document.activeElement || (el.value && el.value.trim())) return true;
+  }
+  return false;
+}
+
+function tick() {
+  if (document.hidden) return;
+  if (boardIsBusy()) return;
+  loadBoard();
+}
+
+// Guarded, so the render tests — which run this file against a stub DOM with
+// no timers on it — do not leave an interval behind holding the process open.
+if (typeof window !== 'undefined' && window.setInterval) {
+  window.setInterval(tick, REFRESH_MS);
+}
+if (document.addEventListener) {
+  // Coming back to the tab should not mean waiting out the rest of the
+  // interval to find out what happened while you were away.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 }
 
 // The two global listeners had been pasted inside triggerSession by mistake,

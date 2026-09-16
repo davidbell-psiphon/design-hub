@@ -29,7 +29,8 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
         stageState, stageReached, stageLabel, isSkipped,
         runState, isStalled, lastActivity, stampMs, failureReason,
-        STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK } = board;
+        consoleRows, clockTime, consoleState,
+        STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
 
 // A fixed clock, so "stalled" is a fact about the row and not about when the
 // suite happened to run.
@@ -396,6 +397,86 @@ describe('isStalled — an eternally-working card cannot hide a dead run', () =>
     assert.equal(stampMs('2026-09-16T20:31:47Z'), Date.parse('2026-09-16T20:31:47Z'));
     assert.ok(isNaN(stampMs(null)));
     assert.ok(isNaN(stampMs('')));
+  });
+});
+
+describe('consoleRows — the lines the console prints', () => {
+  // The ordering and the windowing live here rather than in the panel, so
+  // they can be checked without a DOM. The panel only formats what comes back.
+  const at = (n) => ({ updated_at: minsAgo(n) });
+  // Joined rather than deepEqual: the arrays come back from the vm context,
+  // so they are structurally right but never reference-equal to an outer one.
+  const ids = (rows) => consoleRows(rows, NOW).map(x => x.r.linear_id).join(" ");
+
+  const rows = [
+    { linear_id: 'IDLE', status: 'waiting', ...at(5) },
+    { linear_id: 'RUN', requested_stage: 'design', ...at(3) },
+    { linear_id: 'GATE', status: 'waiting', options: [{ id: 'd1', label: 'One' }], ...at(10) },
+    { linear_id: 'STUCK', requested_stage: 'research', ...at(95) },
+    { linear_id: 'DEAD', status: 'error', ...at(200) },
+    { linear_id: 'FRESH', status: 'done', ...at(20) },
+  ];
+
+  test('most urgent first, and idle rows are not lines at all', () => {
+    assert.equal(ids(rows), "DEAD STUCK GATE RUN FRESH");
+  });
+
+  test('within a state, whatever moved longest ago comes first', () => {
+    // A run stuck for three hours wants attention before one stuck for ten
+    // minutes, so the console does not sort live work newest-first.
+    const two = [{ linear_id: 'RECENT', requested_stage: 'design', ...at(2) },
+                 { linear_id: 'OLDER', requested_stage: 'design', ...at(20) }];
+    assert.equal(ids(two), "OLDER RECENT");
+  });
+
+  test('finished runs are the exception, and sort newest first', () => {
+    // "Longest stuck" says nothing about something that is no longer running.
+    const two = [{ linear_id: 'OLDER', status: 'done', ...at(600) },
+                 { linear_id: 'NEWER', status: 'done', ...at(5) }];
+    assert.equal(ids(two), "NEWER OLDER");
+  });
+
+  test('a finished run stops being news after a day', () => {
+    // status stays 'done' until something runs on the row again, so without
+    // the window the console would carry every stage that ever finished.
+    assert.equal(RECENT_DONE_H, 24);
+    const within = [{ linear_id: 'YESTERDAY', status: 'done', ...at(60 * 23) }];
+    const beyond = [{ linear_id: 'LAST-WEEK', status: 'done', ...at(60 * 24 * 7) }];
+    assert.equal(ids(within), "YESTERDAY");
+    assert.equal(ids(beyond), "");
+    // And a finished run with no usable stamp is not news either — there is
+    // nothing to say it happened recently.
+    assert.equal(ids([{ linear_id: 'NOSTAMP', status: 'done' }]), '');
+  });
+
+  test('a row with no usable timestamp sorts last, not first', () => {
+    const two = [{ linear_id: 'NOSTAMP', requested_stage: 'design' },
+                 { linear_id: 'TIMED', requested_stage: 'design', ...at(4) }];
+    assert.equal(ids(two), "TIMED NOSTAMP");
+  });
+
+  test('nothing to print is an empty list, not a throw', () => {
+    assert.equal(consoleRows([], NOW).length, 0);
+    assert.equal(consoleRows(null, NOW).length, 0);
+  });
+});
+
+describe('the console columns', () => {
+  test('the state column is a level, not a sentence', () => {
+    assert.equal(consoleState('error'), 'ERROR');
+    assert.equal(consoleState('waiting'), 'NEEDS YOU');
+    assert.equal(consoleState('working'), 'WORKING');
+    assert.equal(consoleState('idle'), '');
+  });
+
+  test('the time column is wall-clock, and never NaN', () => {
+    assert.match(clockTime('2026-09-16 20:31:47'), /^\d\d:\d\d$/);
+    assert.equal(clockTime(null), '--:--');
+    assert.equal(clockTime('not a date'), '--:--');
+    // Local, not UTC: the console is read against the clock on the wall.
+    const local = new Date(Date.UTC(2026, 8, 16, 20, 31, 47));
+    assert.equal(clockTime('2026-09-16 20:31:47'),
+      ('0' + local.getHours()).slice(-2) + ':' + ('0' + local.getMinutes()).slice(-2));
   });
 });
 
