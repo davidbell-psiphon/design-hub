@@ -279,20 +279,24 @@ describe('a card reports the state it is actually in', () => {
     assert.deepEqual(pill(of('CON-117')), []);
   });
 
-  test('a card that has stopped offers a way out of it', () => {
+  test('a card that has stopped offers Reset', () => {
     // The gap this closes: the stage button is disabled while a request is
     // queued, and only stage-done clears the queue — which a failed run never
     // reaches. Reset is the other way out.
     for (const id of ['RYV-84', 'CON-120']) {
-      assert.match(of(id), /btn-reset[\s\S]*?resetSession/, id + ' offers no reset');
+      assert.match(of(id), /btn-reset[\s\S]*?resetSession[\s\S]*?>Reset</, id + ' offers no reset');
     }
   });
 
-  test('a card that is quietly working does not', () => {
-    // A button whose whole job is to interrupt a run has no business on a run
-    // that is fine.
-    for (const id of ['CON-118', 'RYV-187', 'CON-116', 'CON-117']) {
-      assert.equal(of(id).includes('resetSession'), false, id + ' offers a reset it should not');
+  test('a run that is going offers Stop instead — the same call, said honestly', () => {
+    assert.match(of('CON-118'), /btn-reset[\s\S]*?resetSession[\s\S]*?>Stop</);
+    assert.equal(of('CON-118').includes('>Reset<'), false,
+                 'a live run offered Reset, which is not what it does');
+  });
+
+  test('a card with no run behind it gets neither', () => {
+    for (const id of ['RYV-187', 'CON-116', 'CON-117']) {
+      assert.equal(of(id).includes('resetSession'), false, id + ' offers a control it should not');
     }
   });
 

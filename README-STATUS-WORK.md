@@ -148,6 +148,23 @@ errored and stalled cards. See **Reset** in the README.
   on dispatch, set to the queue depth and capped at `RUNNER_MAX_ISSUES`. See
   **The trigger** in the README.
 
+## The BCC no longer stops research
+
+RYV-86 produced nothing at all because `documents/ryve/` had not been written
+yet, and the research prompt listed *"no BCC for the brand"* among its blocking
+conditions. The design stage had always said the opposite — *"A missing BCC is
+NOT a reason to block — it is a reason to assume loudly and list it"* — so the
+two halves of the same system disagreed about the same fact.
+
+Research now follows the design stage's rule. A missing BCC is declared, not
+blocked: it goes under `sources_unavailable`, every value assumed in its place
+is recorded, and the BCC file that should have held it is named. The label is
+what stops thin research being read as research done against a real brand.
+
+`04-app-research.md` claimed tiers 1–4 were "always available: they are files in
+this repo", which is exactly the assumption RYV-86 fell through. It now says
+tiers 1 and 2 can be missing too, and what to do when they are.
+
 ## Still open, and not a code problem
 
 **MAR-978 is not design work.** It is "BCC — Forge": write brand documents into

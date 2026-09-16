@@ -389,12 +389,15 @@ function sessionCard(r) {
     // actually doing — Working…, Stalled, or Error — rather than always
     // claiming to be working. A queued row keeps its queue entry even when the
     // run has died, so "Working…" was the one thing it reliably was not.
-    // The way out of a run that stopped. Only offered where there is
-    // something to get out of: a card that is quietly working must not carry a
-    // button whose whole job is to interrupt it.
-    const resetBtn = (state === 'error' || state === 'stalled')
-      ? `<button class="btn btn-reset" onclick="resetSession('${esc(id)}', this)"
-                 title="Clear the queued run and the error, so the stage can be pressed again">Reset</button>`
+    // Stop on a run that is going, Reset on one that has stopped — the same
+    // call either way, because both mean "take this out of the queue". A card
+    // with no run behind it gets neither.
+    const clear = clearLabel(r);
+    const clearBtn = clear
+      ? `<button class="btn btn-reset" onclick="resetSession('${esc(id)}', this, '${clear}')"
+                 title="${clear === 'Stop'
+                   ? 'Take this out of the queue. The runner checks before each issue, so it is skipped unless it is the one being worked on right now'
+                   : 'Clear the queued run and the error, so the stage can be pressed again'}">${clear}</button>`
       : '';
     const action = actionFor(r);
     const stageBtn = action
@@ -404,7 +407,7 @@ function sessionCard(r) {
       : '';
     actionsHtml = `
       ${stageBtn}
-      ${resetBtn}
+      ${clearBtn}
       <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Applies the no-design label">No design</button>
       ${reassignHtml}
       ${linksHtml}`;
@@ -762,17 +765,23 @@ async function triggerSession(id, stage, btn) {
 // Nothing in Linear moves and no label changes. It clears the queue entry and
 // an error status, and leaves the row, its stage, its brand and its gate
 // exactly as they were. The card goes quiet and its stage button comes back.
-async function resetSession(id, btn) {
+async function resetSession(id, btn, label) {
+  const word = label || 'Reset';
   if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
   try {
     const res = await api(`/agent/session/${encodeURIComponent(id)}/trigger`, { method: 'DELETE' });
-    toast(res && res.cleared
-      ? `Reset \u2014 the queued ${res.cleared} run was cleared, press the stage again`
-      : 'Reset \u2014 the error was cleared');
+    // Said plainly, because Stop cannot promise more than it does: the runner
+    // checks the queue before each issue, so this is honoured for anything it
+    // has not already begun.
+    toast(word === 'Stop'
+      ? `Stopped \u2014 out of the queue. A run already working this issue finishes it`
+      : (res && res.cleared
+          ? `Reset \u2014 the queued ${res.cleared} run was cleared, press the stage again`
+          : 'Reset \u2014 the error was cleared'));
     await loadBoard();
   } catch (e) {
-    toast('Could not reset \u2014 ' + String(e.message || e).slice(0, 120));
-    if (btn) { btn.disabled = false; btn.textContent = 'Reset'; }
+    toast(`Could not ${word.toLowerCase()} \u2014 ` + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = word; }
   }
 }
 

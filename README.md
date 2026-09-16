@@ -108,10 +108,13 @@ a dead run would have been the thing concealing it.
 A row whose timestamp will not parse is deliberately *not* stalled: flagging on
 missing data would flag the whole board the first time a column came back null.
 
-### Reset
+### Stop, and Reset
 
-An errored or stalled card carries **Reset**, and nothing else does — a button
-whose whole job is to interrupt a run has no business on a run that is fine.
+They are one operation — clearing the queue entry — named for what it means
+where you press it. A run still believed to be going says **Stop**; one that has
+already failed or gone quiet has nothing left to stop, so it says **Reset**. A
+card with no run behind it carries neither, an open gate included: a question is
+not a run.
 
 It exists because `requested_stage` is written by the trigger and cleared in
 exactly one other place, `stage-done`, which a run that failed never reaches. So
@@ -131,6 +134,22 @@ prompt is its gate question and survives untouched.
 It is deliberately not destructive. Nothing in Linear moves, no label changes,
 and the row, its stage, its brand, its gate and its history are all left alone.
 The worst it can do is let you press the stage button again, which is the point.
+
+**What Stop can and cannot do.** Clearing the queue entry is only half of it;
+the other half is the runner honouring it. The runner re-reads
+`GET /api/agent/queue` **before each issue** rather than once at the start, so a
+card called off after a run began is skipped instead of researched. It cannot
+interrupt the issue being worked at that moment — that one finishes, and the
+job's own 60-minute timeout is the only thing above it.
+
+A hard stop would mean cancelling the GitHub run, and since the Hub began
+sending `max_issues` a run covers several issues — so a per-issue Stop would
+take its siblings down with it. Skipping is the honest version, and the toast
+says as much rather than claiming the run died.
+
+That check **fails open**: an unreadable queue means the Hub is unreachable, not
+that every card was stopped. Reading an outage as a stop would silently cancel a
+run's remaining work with nothing to say why.
 
 **Needs you is an open gate, not `status = 'waiting'`.** The reader writes that
 status on every row it inserts, so a pill for it would be on all of them and

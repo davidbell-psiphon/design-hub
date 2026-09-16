@@ -349,6 +349,26 @@ function statusPill(r, now) {
   return { text: RUN_STATE_TEXT[state], kind: state };
 }
 
+// Stop and Reset are one operation — clearing the queue entry — named for what
+// it means where you press it. On a run still believed to be going it is Stop;
+// on one that has already failed or gone quiet there is nothing left to stop,
+// so it is Reset. Everything else gets neither: a button whose whole job is to
+// interrupt a run has no business on a card with no run behind it.
+//
+// What Stop can and cannot do is the runner's half of the contract. It re-reads
+// the queue before each issue, so a card called off after a run started is
+// skipped rather than worked. It cannot interrupt the issue being worked at
+// that moment.
+var CLEAR_LABEL = {
+  working: 'Stop',
+  stalled: 'Reset',
+  error: 'Reset',
+};
+
+function clearLabel(r, now) {
+  return CLEAR_LABEL[runState(r, now)] || '';
+}
+
 // Why it stopped, in the agent's own words. The Hub shows no agent prose as a
 // rule — the research is a comment on the Linear issue and is read there — and
 // this is the second deliberate exception after a gate's options, for the same

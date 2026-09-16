@@ -29,7 +29,7 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
         stageState, stageReached, stageLabel, isSkipped,
         runState, isStalled, lastActivity, queuedSince, stampMs, failureReason,
-        consoleRows, clockTime, consoleState,
+        consoleRows, clockTime, consoleState, clearLabel,
         STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
 
 // A fixed clock, so "stalled" is a fact about the row and not about when the
@@ -491,6 +491,26 @@ describe('the console columns', () => {
     const local = new Date(Date.UTC(2026, 8, 16, 20, 31, 47));
     assert.equal(clockTime('2026-09-16 20:31:47'),
       ('0' + local.getHours()).slice(-2) + ':' + ('0' + local.getMinutes()).slice(-2));
+  });
+});
+
+describe('clearLabel — Stop while it runs, Reset once it has stopped', () => {
+  test('a run that is going says Stop', () => {
+    assert.equal(clearLabel({ requested_stage: 'design', updated_at: minsAgo(2),
+                              requested_at: minsAgo(2) }, NOW), 'Stop');
+  });
+
+  test('a run that has stopped says Reset — there is nothing left to stop', () => {
+    assert.equal(clearLabel({ status: 'error' }, NOW), 'Reset');
+    assert.equal(clearLabel({ requested_stage: 'design', requested_at: minsAgo(90) }, NOW), 'Reset');
+  });
+
+  test('a card with no run behind it gets neither', () => {
+    assert.equal(clearLabel({ status: 'waiting' }, NOW), '');
+    assert.equal(clearLabel({ status: 'done' }, NOW), '');
+    assert.equal(clearLabel({}, NOW), '');
+    // Not even an open gate: a question is not a run.
+    assert.equal(clearLabel({ status: 'waiting', options: [{ id: 'd1', label: 'One' }] }, NOW), '');
   });
 });
 
