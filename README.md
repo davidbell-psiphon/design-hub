@@ -276,9 +276,29 @@ start never looks like one that did. That is also why nothing runs on a
 schedule: there is no cron on either side, and no run happens that a person did
 not ask for.
 
-The dispatch passes **no inputs**. The runner drains the whole queue itself, so
-a press also picks up anything else already sitting there rather than stranding
-it.
+The dispatch passes **one input: `max_issues`, set to the depth of the queue**
+including the row just written. It names no issue — the runner picks its work by
+reading the queue, and naming one here would strand the others.
+
+It used to pass no inputs at all, on the belief that the runner drained the
+whole queue by itself. It does not. Its workflow declares `max_issues` with a
+default of `'2'`, GitHub applies that default to an API dispatch that names no
+inputs, and the runner then logs `DEFERRED reason=max-issues=2` for everything
+past the second — where a *blocked* issue burns one of the two slots exactly as
+a successful one does. Nothing re-dispatches, so the remainder sat in the queue
+until the next press, which took two more.
+
+On 16 September that stranded four issues for a day: RYV-84 and FOR-47 took both
+slots and failed, and FOR-48, FOR-49, FOR-26 and MAR-978 were never looked at.
+Passing the depth is what makes "a press picks up anything else already sitting
+there" true rather than aspirational.
+
+The count is capped by `RUNNER_MAX_ISSUES` (10, overridable as a Worker
+variable), because the runner's own spend guard is **per issue** —
+`--max-budget-usd`, $5 by default — so the number of issues is what bounds a
+run's total cost. It uses the same `WHERE` clause as `/api/agent/queue`: if the
+two disagreed, the Hub would be telling the runner to take a number of issues it
+is not going to be shown.
 
 This used to work the other way round: the button applied a `design-ai:go`
 label and the runner polled Linear looking for it. Linear was the message bus

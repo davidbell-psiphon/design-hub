@@ -200,6 +200,13 @@ const RUNNER_REPO = 'davidbell-psiphon/design-ai';
 const RUNNER_WORKFLOW = 'design-ai.yml';
 const RUNNER_REF = 'main';
 
+// The most issues one dispatch may ask the runner to take. The runner's own
+// spend guard is per issue — `--max-budget-usd`, $5 by default — so this is
+// what bounds a run's total cost, and a queue that somehow grew to fifty
+// cannot turn one button press into fifty research calls. Override with
+// RUNNER_MAX_ISSUES on the Worker rather than editing this.
+const RUNNER_MAX_ISSUES = 10;
+
 
 export default {
   async fetch(request, env) {
@@ -538,7 +545,7 @@ async function addLabelToIssue(env, issueId, labelId) {
 //
 // With no GITHUB_TOKEN set the Hub behaves exactly as it did before: it queues,
 // and says plainly that nothing was started.
-async function startRunner(env) {
+async function startRunner(env, queued) {
   if (!env.GITHUB_TOKEN) {
     return { started: false, reason: 'no GITHUB_TOKEN set on the Hub — the request was queued but nothing was started' };
   }
@@ -547,9 +554,28 @@ async function startRunner(env) {
   const workflow = env.RUNNER_WORKFLOW || RUNNER_WORKFLOW;
   const url = `https://api.github.com/repos/${repo}/actions/workflows/${workflow}/dispatches`;
 
-  // No inputs. The runner drains the queue itself, so a press also picks up
-  // anything else already sitting there — passing this one issue would strand
-  // the rest.
+  // One input, and it is the fix for a real stranding.
+  //
+  // This used to pass no inputs at all, on the belief that "the runner drains
+  // the queue itself, so a press also picks up anything else already sitting
+  // there". It does not. The runner's workflow declares max_issues with a
+  // default of '2', and GitHub applies that default to an API dispatch that
+  // names no inputs; the runner then logs DEFERRED reason=max-issues=2 for
+  // everything past the second — and a *blocked* issue burns one of the two
+  // slots just as a successful one does. Nothing re-dispatches, so the rest sit
+  // in the queue until the next button press, which takes two more.
+  //
+  // Four issues sat like that for a day. Passing the queue depth is what makes
+  // the sentence above true: a press picks up everything that is waiting.
+  //
+  // Still passing no *issue*, which was the right half of that decision — the
+  // runner chooses what to work on by reading the queue, and naming one here
+  // would strand the others.
+  const max = Math.min(
+    Math.max(1, Number(queued) || 1),
+    Math.max(1, Number(env.RUNNER_MAX_ISSUES) || RUNNER_MAX_ISSUES)
+  );
+
   let res;
   try {
     res = await fetch(url, {
@@ -562,7 +588,12 @@ async function startRunner(env) {
         'User-Agent': 'design-hub-worker',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ ref: env.RUNNER_REF || RUNNER_REF }),
+      // max_issues is declared `type: string` on the workflow, so it is sent
+      // as one — GitHub rejects a number against a string input.
+      body: JSON.stringify({
+        ref: env.RUNNER_REF || RUNNER_REF,
+        inputs: { max_issues: String(max) },
+      }),
       signal: AbortSignal.timeout(10000),
     });
   } catch (e) {
@@ -796,7 +827,16 @@ async function route(request, env) {
          WHERE id = ?`
       ).bind(b.stage, id).run();
 
-      const run = await startRunner(env);
+      // What the runner will find when it reads the queue, including the row
+      // just written. Deliberately the same WHERE clause as /api/agent/queue:
+      // if the two ever disagreed, the Hub would be telling the runner to take
+      // a number of issues it is not going to be shown.
+      const queued = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM agent_sessions
+           WHERE requested_stage IS NOT NULL AND dismissed_at IS NULL`
+      ).first();
+
+      const run = await startRunner(env, queued && queued.n);
       return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason });
     }
 

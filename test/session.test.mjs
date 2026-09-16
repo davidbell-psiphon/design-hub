@@ -231,6 +231,87 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(rows(db)[0].requested_stage, 'research');
   });
 
+  // The runner's workflow declares max_issues with a default of '2', and
+  // GitHub applies that default to a dispatch that names no inputs. The Hub
+  // used to send none, believing the runner drained the queue; it does not, it
+  // logs DEFERRED for everything past the second and nothing re-dispatches.
+  // Four issues sat in the queue for a day because of it.
+  const withDispatch = async (e, fn) => {
+    const sent = [];
+    const passthrough = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('api.github.com')) {
+        sent.push(JSON.parse(init.body));
+        return { status: 204, ok: true, text: async () => '' };
+      }
+      return passthrough(url, init);
+    };
+    try { await fn(); } finally { globalThis.fetch = passthrough; }
+    return sent;
+  };
+
+  const trigger = (k) => '/api/agent/session/' + encodeURIComponent('linear/' + k) + '/trigger';
+
+  test('the dispatch tells the runner how much is waiting', async () => {
+    const db = freshDb();
+    const e = env(db, { GITHUB_TOKEN: 'gh' });
+    stubLinear([issue({ identifier: 'RYV-84' }),
+                issue({ identifier: 'CON-116', team: 'Conduit App' })]);
+    await readLinear(e);
+
+    const sent = await withDispatch(e, async () => {
+      await call(e, 'POST', trigger('RYV-84'), { stage: 'research' });
+      await call(e, 'POST', trigger('CON-116'), { stage: 'research' });
+    });
+
+    assert.equal(sent.length, 2, 'the runner was not dispatched');
+    // The depth includes the row just written, and the second press sees both.
+    assert.equal(sent[0].inputs.max_issues, '1');
+    assert.equal(sent[1].inputs.max_issues, '2', 'the second press did not count the first');
+    // The workflow declares the input as `type: string`; GitHub refuses a number.
+    assert.equal(typeof sent[1].inputs.max_issues, 'string');
+    // And still no issue: the runner picks its work by reading the queue, and
+    // naming one here would strand the others. That half was always right.
+    assert.equal(sent[1].inputs.issue, undefined);
+  });
+
+  test('a dismissed row is not counted, because the runner will not be shown it', async () => {
+    // The count has to use the same WHERE clause as /api/agent/queue. If the
+    // two disagreed, the Hub would tell the runner to take a number of issues
+    // it is not going to be given.
+    const db = freshDb();
+    const e = env(db, { GITHUB_TOKEN: 'gh' });
+    stubLinear([issue({ identifier: 'RYV-84' }),
+                issue({ identifier: 'CON-116', team: 'Conduit App' })]);
+    await readLinear(e);
+    await call(e, 'POST', trigger('CON-116'), { stage: 'research' });
+    await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/CON-116') + '/dismiss');
+
+    const sent = await withDispatch(e, async () => {
+      await call(e, 'POST', trigger('RYV-84'), { stage: 'research' });
+    });
+    const queue = await (await call(e, 'GET', '/api/agent/queue')).json();
+    assert.equal(sent[0].inputs.max_issues, String(queue.length));
+    assert.equal(sent[0].inputs.max_issues, '1');
+  });
+
+  test('the dispatch is capped, so one press cannot become a run of fifty', async () => {
+    // The runner's spend guard is per issue, so the count is what bounds a
+    // run's total cost.
+    const db = freshDb();
+    const e = env(db, { GITHUB_TOKEN: 'gh', RUNNER_MAX_ISSUES: '1' });
+    stubLinear([issue({ identifier: 'RYV-84' }),
+                issue({ identifier: 'CON-116', team: 'Conduit App' })]);
+    await readLinear(e);
+
+    const sent = await withDispatch(e, async () => {
+      await call(e, 'POST', trigger('RYV-84'), { stage: 'research' });
+      await call(e, 'POST', trigger('CON-116'), { stage: 'research' });
+    });
+    assert.equal(sent[1].inputs.max_issues, '1', 'the cap was not applied');
+  });
+
   test('reset takes the request back out of the queue', async () => {
     // The state the board could not get itself out of. requested_stage is
     // cleared by stage-done and nothing else, so a run that failed — or was

@@ -133,19 +133,25 @@ inputs believing the runner drains the whole queue, and nothing re-dispatches.
 Closed by `DELETE /api/agent/session/:id/trigger` and a **Reset** control on
 errored and stalled cards. See **Reset** in the README.
 
-## Still open, and not in this repo
+## The two that were not in this repo, and now are fixed
 
-Two things in the sibling `design-ai` repo, which is why they are noted rather
-than fixed:
+- **`routing.json` had no `Forge` team.** Its destinations were `Conduit App`,
+  `Ryve App` and `Websites` (conduit / psiphon / forge / ryve), so FOR-47
+  blocked on `unmapped-destination` and FOR-26/48/49 would have blocked
+  identically. `Forge + forge` now routes to the **Forge App** file
+  (`yAeyC9MEWstRdafKqHRwjA`), which is where the Forge Self-Serve product's
+  designs live. Forge's marketing site is a different destination and stays
+  under `Websites + forge`. The runner test that asserted Forge was unmapped is
+  replaced by two that assert where it goes, and that the two Forge
+  destinations are not the same file.
+- **The two repos disagreed about the queue.** The Hub now passes `max_issues`
+  on dispatch, set to the queue depth and capped at `RUNNER_MAX_ISSUES`. See
+  **The trigger** in the README.
 
-- **`routing.json` has no `Forge` team.** Its destinations are `Conduit App`,
-  `Ryve App` and `Websites` (conduit / psiphon / forge). FOR-47 blocked on
-  `unmapped-destination`, and FOR-26/48/49 will block identically, as will
-  MAR-978 (team `Marketing`, brand `forge`). `unmappedPairIsBlocking` is true
-  on purpose — the runner will not guess a destination — so resetting those
-  cards and pressing the stage again just reproduces the block.
-- **The two repos disagree about the queue.** The Hub's `startRunner` passes no
-  inputs because "the runner drains the queue itself"; the runner caps at two
-  and logs `DEFERRED reason=max-issues=2` for the rest. Either the Hub should
-  pass `max_issues`, or the workflow default should rise, or the runner should
-  re-dispatch while the queue is not empty.
+## Still open, and not a code problem
+
+**MAR-978 is not design work.** It is "BCC — Forge": write brand documents into
+`design-ai-repo/documents/forge/` and push them. It produces no Figma output, so
+there is no destination to map and adding one would send a writing task to a
+design file. It wants **Reset**, then **No design** — which is exactly what that
+label is for.
