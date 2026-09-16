@@ -8,13 +8,18 @@
 // Sessions the reader could not place in a brand.
 var UNASSIGNED = { id: '_unassigned', name: 'Unassigned', color: '#888780' };
 
-// The three labels the system writes when a stage completes. Dave never
-// applies one and nothing triggers off them — they are the record of what has
-// been done, and the board reads them to decide which column a card is in.
+// The labels the system writes when a stage completes. Dave never applies one
+// and nothing triggers off them — they are the record of what has been done,
+// and the board reads them to decide which column a card is in.
+//
+// `AI-QA done` is deliberately absent. QA was a stage the board offered and
+// nothing implemented: pressing Run QA queued a run that failed with "the qa
+// stage is not implemented yet", and the card then sat there claiming to be
+// working on it. An issue still carrying that label from before reads as
+// AI-designed, which is the last stage that actually ran on it.
 var STAGE_LABELS = {
   research: 'AI-research done',
   design: 'AI-design done',
-  qa: 'AI-QA done',
 };
 
 // Where a session belongs on the whole board: one of the collapsed sections
@@ -132,7 +137,7 @@ function chosenLabel(r) {
 // was added.
 
 // Dave's own labels, applied in Linear: "this one needs no research", "this
-// one needs no design". Nothing skips QA, which is why `qa` has no entry.
+// one needs no design". One entry per stage the board still runs.
 var SKIP_LABELS = {
   research: 'no-research',
   design: 'no-design',
@@ -159,7 +164,6 @@ function stageState(r, stage) {
 // it must not do is *look* the same, which is what `how` carries.
 function stageReached(r) {
   var levels = [
-    { stage: 'qa', of: 'qa' },
     { stage: 'designed', of: 'design' },
     { stage: 'researched', of: 'research' },
   ];
@@ -180,7 +184,6 @@ function stageOf(r) {
 function stageName(stage) {
   if (stage === 'researched') return 'Researched';
   if (stage === 'designed') return 'AI-designed';
-  if (stage === 'qa') return "QA'd";
   return 'Backlog';
 }
 
@@ -218,19 +221,111 @@ function isWorking(r) {
 // column and nothing else, and the two cannot drift apart.
 function actionFor(r) {
   var stage = stageOf(r);
-  if (stage === 'qa') return null;
-  if (stage === 'designed') return { stage: 'qa', label: 'Run QA' };
+  if (stage === 'designed') return null;
   if (stage === 'researched') return { stage: 'design', label: 'Run Design' };
   return { stage: 'research', label: 'Run Research' };
 }
 
-// The pill on the right of the card. Only two states are worth a pill —
-// something is running, or the last run failed. Anything else is just the
-// stage, which the card already shows, so it renders no pill at all.
-function statusPill(r) {
-  if (isWorking(r)) return { text: 'Working…', kind: 'working' };
-  if (r && r.status === 'error') return { text: 'Error', kind: 'error' };
-  return null;
+// ─── WHAT A CARD IS ACTUALLY DOING ─────────────────
+// One derivation, read by the pill, the card's tint, the stage button's text
+// and the activity panel — so those four cannot disagree with each other the
+// way the button and the column once did.
+//
+// Everything here is read-side. Nothing is written, no column was added, and
+// there is no heartbeat and no poll: these are the fields the API already
+// returns, compared against the clock.
+
+// How long a queued run may go without its row moving before the board stops
+// believing it. Long enough that an ordinary research or design run never
+// trips it; short enough that a dead process is caught inside the hour.
+var STALL_AFTER_MIN = 30;
+
+// A SQLite `datetime('now')` stamp — "2026-09-16 20:31:47", always UTC — as
+// milliseconds. NaN for anything that will not parse, which every caller
+// treats as "cannot tell" rather than as a value.
+function stampMs(ts) {
+  if (!ts) return NaN;
+  var s = String(ts).replace(' ', 'T');
+  if (!/[Zz]$|[+-]\d\d:?\d\d$/.test(s)) s += 'Z';
+  return new Date(s).getTime();
+}
+
+// When this row last moved. `updated_at` is touched by the trigger route and
+// by every agent post, so it is the closest thing to activity the Hub has;
+// `requested_at` is the fallback for a row that somehow has no updated_at.
+function lastActivity(r) {
+  return (r && (r.updated_at || r.requested_at)) || '';
+}
+
+// Queued, and nothing has touched the row since. This is the check that stops
+// an eternally-"working" card from hiding a process that died: a run reports
+// in as it goes, so silence for half an hour is not progress.
+//
+// A row whose timestamp will not parse is deliberately *not* stalled. Flagging
+// on missing data would flag the whole board the first time a column comes
+// back null, and a board crying wolf is a board nobody reads.
+function isStalled(r, now) {
+  if (!isWorking(r)) return false;
+  var t = stampMs(lastActivity(r));
+  if (isNaN(t)) return false;
+  return ((now === undefined ? Date.now() : now) - t) >= STALL_AFTER_MIN * 60000;
+}
+
+// The card's one true state. First match wins, and the order is the whole fix.
+//
+// `error` outranks `working` because `requested_stage` is cleared in exactly
+// one place — POST /api/agent/stage-done — which a run that failed never
+// reaches. Checking `isWorking` first painted "Working…" on a session that had
+// already reported `status: "error"` and would never move again. RYV-84 sat
+// like that for days, working on a QA stage that does not exist.
+//
+// `waiting` is an open gate, not `status === 'waiting'`. The reader writes
+// that status on every quiet row it inserts, so a pill for it would appear on
+// the entire board. What actually needs a human is a question with no answer.
+//
+// `done` is safe to render because it is written in one place, by the runner
+// reporting a finished stage, and is never a default.
+function runState(r, now) {
+  if (!r) return 'idle';
+  if (r.status === 'error') return 'error';
+  if (isStalled(r, now)) return 'stalled';
+  if (isWorking(r)) return 'working';
+  if (isGateOpen(r)) return 'waiting';
+  if (r.status === 'done') return 'done';
+  return 'idle';
+}
+
+// What each state is called on the board. "Needs you" rather than "Waiting",
+// because the thing being waited on is Dave.
+var RUN_STATE_TEXT = {
+  error: 'Error',
+  stalled: 'Stalled',
+  working: 'Working\u2026',
+  waiting: 'Needs you',
+  done: 'Done',
+};
+
+// How loud each one is, most urgent first. The activity panel sorts on this;
+// nothing else needs to know the order.
+var RUN_STATE_RANK = ['error', 'stalled', 'waiting', 'working', 'done', 'idle'];
+
+// The pill on the right of the card. Everything that is doing something gets
+// one; a quiet card still shows nothing but its stage.
+function statusPill(r, now) {
+  var state = runState(r, now);
+  if (state === 'idle') return null;
+  return { text: RUN_STATE_TEXT[state], kind: state };
+}
+
+// Why it stopped, in the agent's own words. The Hub shows no agent prose as a
+// rule — the research is a comment on the Linear issue and is read there — and
+// this is the second deliberate exception after a gate's options, for the same
+// reason they were the first: a card that has stopped and will not say why is
+// a card you have to go and look up somewhere else, which is precisely the
+// trip the board exists to save.
+function failureReason(r) {
+  if (!r || r.status !== 'error') return '';
+  return String(r.prompt || r.detail || '').trim();
 }
 
 // Element ids are derived from session ids, which contain '/' and '-'.
@@ -242,11 +337,10 @@ function key(id) {
   return (h >>> 0).toString(16);
 }
 
-function timeAgo(ts) {
-  if (!ts) return '';
-  var then = new Date(ts.replace(' ', 'T') + 'Z');
-  var mins = Math.floor((Date.now() - then) / 60000);
-  if (isNaN(mins)) return '';
+function timeAgo(ts, now) {
+  var then = stampMs(ts);
+  if (isNaN(then)) return '';
+  var mins = Math.floor(((now === undefined ? Date.now() : now) - then) / 60000);
   if (mins < 1) return 'now';
   if (mins < 60) return mins + 'm';
   var hrs = Math.floor(mins / 60);

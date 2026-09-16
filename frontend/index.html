@@ -18,6 +18,14 @@
     --radius: 8px;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    /* One colour per run state — see runState() in board-logic.js. The pill,
+       the card's outline and the activity panel all read these, so a state
+       cannot look like one thing in the panel and another on the card. */
+    --run-error: #e8846f;
+    --run-stalled: #e8846f;
+    --run-working: #f0b84a;
+    --run-waiting: #f0b84a;
+    --run-done: #6fbf8b;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -85,7 +93,10 @@
 
   /* SESSION CARD — the card itself carries the brand colour */
   .session-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); border-left-width: 3px; border-left-style: solid; }
-  .session-card.is-working { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
+  .session-card.state-working,
+  .session-card.state-waiting { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
+  .session-card.state-error,
+  .session-card.state-stalled { box-shadow: 0 0 0 1px rgba(224,120,100,.3); }
   .session-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
   .session-id { font-size: 11px; font-family: var(--mono); color: var(--text-muted); }
   .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
@@ -95,8 +106,22 @@
   .stage-pill.is-skipped { background: none; border: 1px dashed var(--border-strong); color: var(--text-dim); }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
   .status-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--border-strong); color: var(--text-muted); white-space: nowrap; }
-  .status-pill.status-working { border-color: rgba(239,159,39,.45); color: #f0b84a; }
-  .status-pill.status-error { border-color: rgba(224,120,100,.5); color: #e8846f; }
+  .status-pill.status-working { border-color: rgba(239,159,39,.45); color: var(--run-working); }
+  /* Needs you is the only one that fills: it is the only one you can act on. */
+  .status-pill.status-waiting { border-color: rgba(239,159,39,.55); background: rgba(240,184,74,.15); color: var(--run-waiting); }
+  /* Dashed, for the same reason a skipped stage is dashed: the card is
+     claiming a state it has stopped earning. */
+  .status-pill.status-stalled { border-style: dashed; border-color: rgba(224,120,100,.55); color: var(--run-stalled); }
+  .status-pill.status-error { border-color: rgba(224,120,100,.5); color: var(--run-error); }
+  .status-pill.status-done { border-color: rgba(111,191,139,.35); color: var(--run-done); }
+
+  /* WHY IT STOPPED — one line, and the second deliberate exception to "the
+     card shows no agent prose" after a gate's options. A card that has
+     stopped and will not say why is a card you have to go and look up
+     somewhere else, which is the trip the board exists to save. */
+  .card-note { padding: 8px 12px 9px; border-top: 1px solid var(--border); font-size: 11px; line-height: 1.45; }
+  .card-note.note-error { background: rgba(224,120,100,.06); color: var(--run-error); }
+  .card-note.note-stalled { background: rgba(224,120,100,.04); color: var(--text-muted); }
   .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .session-links { display: flex; gap: 6px; margin-left: auto; }
   .reassign-select { font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 4px; font-family: var(--font); }
@@ -147,6 +172,20 @@
   .sp-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   .sp-text { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sp-empty { padding: 8px 12px; font-size: 11px; color: var(--text-dim); font-style: italic; }
+  .sp-summary { padding: 0 12px 9px; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+  .sp-count + .sp-count::before { content: " \00b7 "; color: var(--text-dim); }
+  .sp-item { align-items: flex-start; }
+  .sp-dot { margin-top: 4px; }
+  .sp-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .sp-meta { display: flex; align-items: baseline; gap: 6px; }
+  .sp-state { font-size: 10px; font-weight: 600; }
+  .sp-when { font-size: 10px; color: var(--text-dim); }
+  .sp-quiet { margin-top: 10px; padding: 9px 12px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
+  .state-error { color: var(--run-error); }
+  .state-stalled { color: var(--run-stalled); }
+  .state-working { color: var(--run-working); }
+  .state-waiting { color: var(--run-waiting); }
+  .state-done { color: var(--run-done); }
 
   /* COLLAPSED SECTIONS — No design / Completed, at the foot of the board */
   .drawer { border-top: 1px solid var(--border); padding-top: 14px; }
@@ -284,6 +323,10 @@ function esc(s) {
 function sessionCard(r) {
   const color = (brandsById[r.project] || {}).color || '#888780';
   const id = r.id;
+  // One derivation for all of it. The pill, the card's outline and the stage
+  // button's text are the same fact rendered three ways, so none of them can
+  // say "Working…" about a session that reported an error an hour ago.
+  const state = runState(r);
   const working = isWorking(r);
   const pill = statusPill(r);
 
@@ -313,10 +356,15 @@ function sessionCard(r) {
     // One stage button, always rendered. actionFor returns null only at the
     // final stage, and there is deliberately no other path to a card with no
     // actions row — a card that offers nothing is the bug this replaced.
+    // actionFor returns null at AI-designed, which is now the last stage.
+    // While a stage is queued the button is disabled and says what the row is
+    // actually doing — Working…, Stalled, or Error — rather than always
+    // claiming to be working. A queued row keeps its queue entry even when the
+    // run has died, so "Working…" was the one thing it reliably was not.
     const action = actionFor(r);
     const stageBtn = action
       ? (working
-          ? `<button class="btn btn-primary" disabled>Working\u2026</button>`
+          ? `<button class="btn btn-primary" disabled>${esc(RUN_STATE_TEXT[state] || 'Working\u2026')}</button>`
           : `<button class="btn btn-primary" onclick="triggerSession('${esc(id)}', '${action.stage}', this)">${esc(action.label)}</button>`)
       : '';
     actionsHtml = `
@@ -334,6 +382,16 @@ function sessionCard(r) {
   //
   // Sessions with no options render exactly as before, and so do the drawers —
   // a card that is closed in Linear or put aside has no live decision on it.
+  // Why it stopped. Only for a card on the board proper: something closed in
+  // Linear or put aside has no live run to report on.
+  let noteHtml = '';
+  if (section === 'board' && state === 'error' && failureReason(r)) {
+    noteHtml = `<div class="card-note note-error">${esc(failureReason(r))}</div>`;
+  } else if (section === 'board' && state === 'stalled') {
+    noteHtml = `<div class="card-note note-stalled">Queued for ${esc(r.requested_stage || 'a run')},
+      nothing for ${esc(timeAgo(lastActivity(r)))} \u2014 the run may have died.</div>`;
+  }
+
   const gk = key(id);
   let gateHtml = '';
   if (section === 'board' && isGateOpen(r)) {
@@ -385,7 +443,7 @@ function sessionCard(r) {
   // whether anything is running, and the one thing you can do about it. The
   // agent's research is a comment on the Linear issue and is read there — the
   // Hub deliberately shows none of its prose.
-  return `<div class="session-card ${working ? 'is-working' : ''}" style="border-left-color:${color}">
+  return `<div class="session-card state-${state}" style="border-left-color:${color}">
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || '')}</span>
@@ -394,6 +452,7 @@ function sessionCard(r) {
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
+    ${noteHtml}
     ${gateHtml}
     <div class="session-actions">${actionsHtml}</div>
   </div>`;
@@ -407,13 +466,18 @@ function bucketsFor(rows) {
       <div class="bucket-label">${label}</div>
       ${list.length ? list.map(sessionCard).join('') : '<div class="empty-bucket">Nothing here</div>'}
     </div>`;
-  // Four columns, in the order the work moves through them. Which one a card
+  // Three columns, in the order the work moves through them. Which one a card
   // is in comes from what the agent has finished, never from when you clicked.
+  //
+  // There was a fourth, QA'd, and a Run QA button that fed it. Nothing
+  // implemented the stage: the run failed with "the qa stage is not
+  // implemented yet" and the card then sat in AI-designed claiming to be
+  // working on it. AI-designed is the end of the board until something
+  // actually does QA.
   return `<div class="buckets">
     ${section('Backlog',     rows.filter(r => stageOf(r) === 'backlog'))}
     ${section('Researched',  rows.filter(r => stageOf(r) === 'researched'))}
     ${section('AI-designed', rows.filter(r => stageOf(r) === 'designed'))}
-    ${section("QA'd",        rows.filter(r => stageOf(r) === 'qa'))}
   </div>`;
 }
 
@@ -477,7 +541,7 @@ function renderBoard() {
     drawer('completed', 'Completed', scoped.filter(r => sectionOf(r) === 'completed'));
 
   renderSidebar(unplaced.length);
-  renderSidePanel();
+  renderActivity();
   renderTopbar();
 }
 
@@ -560,27 +624,78 @@ function closeMenu() {
   document.getElementById('scrim').classList.remove('open');
 }
 
-// ── SIDE PANEL — all in-flight work across every brand, App / Website ──
+// ── ACTIVITY — one place to watch the whole pipeline ───────────────────
+//
+// This panel was "In flight": it listed the rows with a stage queued, split
+// App / Website. That answered "what did I press" and not "what is going on",
+// so a run that had errored or quietly died was either in the list looking
+// healthy or not in it at all.
+//
+// It now shows every open card that is doing something — errored, stalled,
+// needing an answer, running — most urgent first, with how long since the row
+// last moved. It cannot group by urgency and by track at once, so the track
+// rides along on the row instead of splitting the list in two.
+//
+// Done and idle rows are not listed. A finished card is not *doing* anything,
+// and listing sixty quiet ones would bury the four that matter; the count at
+// the foot is what says they are still there.
 
-function renderSidePanel() {
-  const inFlight = sessions.filter(r => isOpen(r) && isWorking(r));
-  const item = r => {
+function renderActivity() {
+  const live = sessions.filter(isOpen)
+    .map(r => ({ r, state: runState(r) }))
+    .filter(x => x.state !== 'idle' && x.state !== 'done');
+
+  // Most urgent first, and within a state the one that moved longest ago —
+  // a run stuck for three hours wants attention before one stuck for ten
+  // minutes. A row with no usable timestamp sorts last rather than first.
+  live.sort((a, b) => {
+    const d = RUN_STATE_RANK.indexOf(a.state) - RUN_STATE_RANK.indexOf(b.state);
+    if (d) return d;
+    const ta = stampMs(lastActivity(a.r)), tb = stampMs(lastActivity(b.r));
+    if (isNaN(ta)) return 1;
+    if (isNaN(tb)) return -1;
+    return ta - tb;
+  });
+
+  const counts = RUN_STATE_RANK
+    .map(state => ({ state, n: live.filter(x => x.state === state).length }))
+    .filter(x => x.n);
+
+  const item = ({ r, state }) => {
     const color = (brandsById[r.project] || {}).color || '#888780';
-    return `<button class="sp-item" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')">
+    const doing = r.requested_stage || r.phase || '';
+    return `<button class="sp-item" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')"
+                    title="${esc(r.title || '')}">
       <span class="sp-dot" style="background:${color}"></span>
-      <span class="sp-text">${esc(r.linear_id || r.id)} \u2014 ${esc(r.requested_stage || '')}</span>
+      <span class="sp-body">
+        <span class="sp-text">${esc(r.linear_id || r.id)}${doing ? ' \u2014 ' + esc(doing) : ''}</span>
+        <span class="sp-meta">
+          <span class="sp-state state-${state}">${esc(RUN_STATE_TEXT[state])}</span>
+          <span class="sp-when">${esc(timeAgo(lastActivity(r)))}</span>
+          ${r.track ? `<span class="sp-when">${esc(r.track)}</span>` : ''}
+        </span>
+      </span>
     </button>`;
   };
-  const app = inFlight.filter(r => r.track === 'app');
-  const web = inFlight.filter(r => r.track !== 'app');
+
+  const open = sessions.filter(isOpen).length;
   document.getElementById('side-panel').innerHTML = `
-    <div class="sp-title">In flight</div>
-    <div class="sp-group-label">App</div>
-    ${app.length ? app.map(item).join('') : '<div class="sp-empty">Nothing running</div>'}
-    <div class="sp-group-label">Website</div>
-    ${web.length ? web.map(item).join('') : '<div class="sp-empty">Nothing running</div>'}
+    <div class="sp-title">Activity</div>
+    ${counts.length ? `<div class="sp-summary">${counts.map(c =>
+        `<span class="sp-count state-${c.state}">${c.n} ${esc(ACTIVITY_WORD[c.state])}</span>`).join('')}</div>` : ''}
+    ${live.length ? live.map(item).join('') : '<div class="sp-empty">Nothing is running</div>'}
+    <div class="sp-quiet">${open - live.length} of ${open} quiet</div>
   `;
 }
+
+// The summary line reads as a sentence fragment, so the states are named as
+// adjectives there rather than as the pill's own words.
+const ACTIVITY_WORD = {
+  error: 'errored',
+  stalled: 'stalled',
+  waiting: 'need you',
+  working: 'running',
+};
 
 // ── ACTIONS ────────────────────────────────────────
 
@@ -589,7 +704,6 @@ function renderSidePanel() {
 const STAGE_TOAST = {
   research: 'Research requested',
   design: 'Design requested',
-  qa: 'QA requested',
 };
 
 async function triggerSession(id, stage, btn) {

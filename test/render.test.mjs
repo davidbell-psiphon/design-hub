@@ -18,8 +18,10 @@ const brandRows = [
 
 const row = (o) => ({
   id: 'linear/' + o.linear_id, linear_id: o.linear_id, system: 'design-ai',
-  project: o.project || 'conduit', track: 'app', phase: 'research',
+  project: o.project || 'conduit', track: 'app', phase: o.phase || 'research',
   status: o.status || 'waiting', title: o.title || o.linear_id,
+  updated_at: o.updated_at || null, prompt: o.prompt || null,
+  options: o.options ? JSON.stringify(o.options) : null,
   linear_state: o.linear_state === undefined ? 'backlog' : o.linear_state,
   labels: JSON.stringify(o.labels || []),
   requested_stage: o.requested_stage || null,
@@ -51,9 +53,11 @@ function stubEl() {
   };
 }
 
-let board, sidebar, topbar, drawers, sessionCard;
-
-before(async () => {
+// Mount the board against a stub DOM and one set of rows, and hand back what
+// it rendered. Extracted so that a suite can render a fixture of its own — the
+// run-state suites need errored and stalled rows, and putting those in the
+// shared fixture would move every count the suites above assert on.
+async function mount(rows) {
   const html = fs.readFileSync(path.join(ROOT, 'frontend/index.html'), 'utf8');
   const logic = fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8');
   const inline = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
@@ -65,22 +69,32 @@ before(async () => {
   };
   globalThis.fetch = async (url) => ({
     ok: true,
-    json: async () => (url.endsWith('/brands') ? brandRows : sessions),
+    json: async () => (url.endsWith('/brands') ? brandRows : rows),
   });
 
   const run = new Function(logic + '\n' + inline + '\n;return { loadBoard, sessionCard };');
   const api = run();
-  sessionCard = api.sessionCard;
   await api.loadBoard();
 
-  board = nodes['board'].innerHTML;
-  sidebar = nodes['sidebar'].innerHTML;
-  topbar = nodes['topbar-sub'].textContent;
-  drawers = {
-    nodesign: (board.match(/id="drawer-nodesign"[\s\S]*?<\/details>/) || [''])[0],
-    completed: (board.match(/id="drawer-completed"[\s\S]*?<\/details>/) || [''])[0],
-    above: board.slice(0, board.indexOf('<details')),
+  const board = nodes['board'].innerHTML;
+  return {
+    sessionCard: api.sessionCard,
+    board,
+    sidebar: nodes['sidebar'].innerHTML,
+    topbar: nodes['topbar-sub'].textContent,
+    panel: nodes['side-panel'].innerHTML,
+    drawers: {
+      nodesign: (board.match(/id="drawer-nodesign"[\s\S]*?<\/details>/) || [''])[0],
+      completed: (board.match(/id="drawer-completed"[\s\S]*?<\/details>/) || [''])[0],
+      above: board.slice(0, board.indexOf('<details')),
+    },
   };
+}
+
+let board, sidebar, topbar, drawers, sessionCard;
+
+before(async () => {
+  ({ board, sidebar, topbar, drawers, sessionCard } = await mount(sessions));
 });
 
 const cards = html => (html.match(/class="session-card/g) || []).length;
@@ -164,15 +178,14 @@ describe('the card shows no agent prose', () => {
   });
 });
 
-describe('the four stage columns', () => {
-  const heading = (name) => new RegExp('bucket-label">' + name + '<');
-
-  test('all four render, in order', () => {
-    const order = ['Backlog', 'Researched', 'AI-designed', 'QA&#39;d'];
+describe('the three stage columns', () => {
+  test('all three render, in order, and QA is not among them', () => {
     const labels = [...drawers.above.matchAll(/bucket-label">([^<]+)</g)].map(m => m[1]);
-    // One set per brand section; every set is the same four in the same order.
-    assert.ok(labels.length >= 4, 'no buckets rendered');
-    assert.deepEqual(labels.slice(0, 4), ['Backlog', 'Researched', 'AI-designed', "QA'd"]);
+    // One set per brand section; every set is the same three in the same order.
+    assert.ok(labels.length >= 3, 'no buckets rendered');
+    assert.deepEqual(labels.slice(0, 3), ['Backlog', 'Researched', 'AI-designed']);
+    assert.equal(drawers.above.includes("QA&#39;d"), false, "the QA'd column came back");
+    assert.equal(board.includes('Run QA'), false, 'the Run QA button came back');
   });
 
   test('a card sits in the column its labels say', () => {
@@ -193,6 +206,138 @@ describe('the four stage columns', () => {
     assert.match(html, /btn btn-primary" disabled>Working/);
     assert.equal(html.includes("triggerSession('linear/CON-120'"), false,
                  'a running card must not be clickable');
+  });
+});
+
+// ── WHAT THE CARD SAYS IT IS DOING ────────────────────────────────────
+// The bug these pin: statusPill checked isWorking before status, and
+// requested_stage is cleared only by /api/agent/stage-done, which a run that
+// failed never reaches. So an errored session kept its queue entry and the
+// board kept painting it "Working…" — for days, in RYV-84's case.
+
+const MIN = 60000;
+const stamp = (msAgo) =>
+  new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace('T', ' ');
+
+const GATE = [{ id: 'd1', label: 'Icon-only corner button' }];
+
+// One row per run state, and one for each of the two quiet ones.
+const stateRows = [
+  row({ linear_id: 'RYV-84', project: 'ryve', status: 'error', requested_stage: 'design',
+        labels: ['AI-research done'], phase: 'design', updated_at: stamp(200 * MIN),
+        prompt: 'The qa stage is not implemented yet' }),
+  row({ linear_id: 'CON-120', requested_stage: 'research', updated_at: stamp(95 * MIN) }),
+  row({ linear_id: 'CON-118', requested_stage: 'research', updated_at: stamp(2 * MIN) }),
+  row({ linear_id: 'RYV-187', project: 'ryve', options: GATE, updated_at: stamp(30 * MIN) }),
+  row({ linear_id: 'CON-116', status: 'done', labels: ['AI-design done'], updated_at: stamp(MIN) }),
+  row({ linear_id: 'CON-117', updated_at: stamp(MIN) }),
+];
+
+describe('a card reports the state it is actually in', () => {
+  let card;
+  before(async () => { card = (await mount(stateRows)).sessionCard; });
+
+  const of = (id) => card(stateRows.find(r => r.linear_id === id));
+  const pill = (html) => (html.match(/status-pill status-(\w+)">([^<]+)</) || []).slice(1);
+
+  test('an errored card says Error, not Working, while still holding its queue entry', () => {
+    const html = of('RYV-84');
+    assert.deepEqual(pill(html), ['error', 'Error']);
+    assert.ok(html.includes('session-card state-error'), 'the card is not outlined as errored');
+    // Still queued, so still not clickable — but the button no longer lies
+    // about what the row is doing.
+    assert.match(html, /btn btn-primary" disabled>Error</);
+    assert.equal(html.includes('>Working'), false, 'the card still claims to be working');
+  });
+
+  test('an errored card says why it stopped, in the words the agent used', () => {
+    assert.match(of('RYV-84'),
+      /card-note note-error">The qa stage is not implemented yet</);
+  });
+
+  test('a queued run with no activity for half an hour reads Stalled', () => {
+    const html = of('CON-120');
+    assert.deepEqual(pill(html), ['stalled', 'Stalled']);
+    assert.match(html, /card-note note-stalled[\s\S]*?the run may have died/);
+    assert.match(html, /btn btn-primary" disabled>Stalled</);
+  });
+
+  test('a run that reported in two minutes ago is still Working', () => {
+    const html = of('CON-118');
+    assert.deepEqual(pill(html), ['working', 'Working\u2026']);
+    assert.equal(html.includes('note-stalled'), false, 'a live run was flagged as stalled');
+  });
+
+  test('an open gate reads Needs you', () => {
+    assert.deepEqual(pill(of('RYV-187')), ['waiting', 'Needs you']);
+  });
+
+  test('a finished stage reads Done, and a quiet row gets no pill', () => {
+    assert.deepEqual(pill(of('CON-116')), ['done', 'Done']);
+    assert.deepEqual(pill(of('CON-117')), []);
+  });
+
+  test('no agent prose reaches a card that has not errored', () => {
+    // failureReason is the second exception to the rule, after a gate's
+    // options — and it is only that one exception.
+    const quiet = card(row({ linear_id: 'CON-119', prompt: 'Run design research on CON-119?' }));
+    assert.equal(quiet.includes('Run design research'), false, 'the prompt is on a quiet card');
+    assert.equal(quiet.includes('card-note'), false);
+  });
+
+  test('a card in a drawer reports no live run at all', () => {
+    const put_aside = card(row({ linear_id: 'RYV-84', status: 'error', requested_stage: 'design',
+                                 prompt: 'The qa stage is not implemented yet',
+                                 dismissed_at: '2026-09-05 02:00:00' }));
+    assert.equal(put_aside.includes('card-note'), false, 'a put-aside card reported a failure');
+  });
+});
+
+describe('the activity panel watches the whole pipeline', () => {
+  let panel;
+  before(async () => { panel = (await mount(stateRows)).panel; });
+
+  const at = (id) => panel.indexOf('>' + id);
+
+  test('it is the activity panel, not the in-flight list', () => {
+    assert.match(panel, /sp-title">Activity</);
+    assert.equal(panel.includes('In flight'), false, 'the old title is still there');
+  });
+
+  test('everything that is doing something is listed, most urgent first', () => {
+    for (const id of ['RYV-84', 'CON-120', 'RYV-187', 'CON-118']) {
+      assert.ok(at(id) > -1, id + ' is missing from the panel');
+    }
+    assert.ok(at('RYV-84') < at('CON-120'), 'errored should sort above stalled');
+    assert.ok(at('CON-120') < at('RYV-187'), 'stalled should sort above needs-you');
+    assert.ok(at('RYV-187') < at('CON-118'), 'needs-you should sort above running');
+  });
+
+  test('a stalled run is named as stalled here too', () => {
+    // The panel and the card read the same derivation, so they cannot
+    // disagree about a row the way the button and the column once did.
+    assert.match(panel, /sp-state state-stalled">Stalled</);
+    assert.match(panel, /sp-state state-error">Error</);
+  });
+
+  test('the quiet rows are counted, not listed', () => {
+    assert.equal(at('CON-116'), -1, 'a finished row is cluttering the panel');
+    assert.equal(at('CON-117'), -1, 'an idle row is cluttering the panel');
+    assert.match(panel, /sp-quiet">2 of 6 quiet</);
+  });
+
+  test('the summary says how many of each, in the same order', () => {
+    assert.match(panel, /1 errored/);
+    assert.match(panel, /1 stalled/);
+    assert.match(panel, /1 need you/);
+    assert.match(panel, /1 running/);
+  });
+
+  test('an all-quiet board says so rather than rendering an empty list', () => {
+    return mount([row({ linear_id: 'CON-117' })]).then(m => {
+      assert.match(m.panel, /sp-empty">Nothing is running</);
+      assert.match(m.panel, /sp-quiet">1 of 1 quiet</);
+    });
   });
 });
 

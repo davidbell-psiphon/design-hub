@@ -35,14 +35,23 @@ repo. The Hub links out to both and owns neither.
 ## The board
 
 One scrolling surface. Every brand, stacked, always — that is the point. Within
-each brand, four columns, in the order work moves through them:
+each brand, three columns, in the order work moves through them:
 
 | Column | What is in it | The card's button |
 |---|---|---|
 | **Backlog** | Nothing has been run yet | **Run Research** |
 | **Researched** | The research agent has finished | **Run Design** |
-| **AI-designed** | The design agent has finished | **Run QA** |
-| **QA'd** | Checked | — |
+| **AI-designed** | The design agent has finished | — |
+
+There was a fourth, **QA'd**, fed by a **Run QA** button. Nothing implemented
+the stage. Pressing it queued a run that failed with *"the qa stage is not
+implemented yet"*, and because `requested_stage` is cleared only by
+`POST /api/agent/stage-done` — which a failed run never reaches — the card was
+left holding a queue entry for ever, reading as **Working…** on a stage that
+does not exist. A stage the Hub will queue has to be one something runs, so QA
+is out of `STAGES`, out of the ladder and out of the columns until something
+does it. An issue still carrying `AI-QA done` from before renders as
+AI-designed, which is the last stage that actually ran on it.
 
 **Which column a card is in comes from what the agent finished, never from when
 you clicked.** It is read from the Linear labels the system writes at the end of
@@ -58,14 +67,51 @@ last stage has one.** A card that renders no action at all was the old board's
 other failure: actions were picked by a chain of conditions on `status`, and a
 row whose status matched no branch fell through to nothing.
 
-While a run is in flight the same button is disabled and reads "Working…", and
-a small amber pill says so. Those are the only two pills a card shows — running,
-and errored. Everything quiet shows just its stage.
+### What a card says it is doing
+
+One derivation — `runState` in `board-logic.js` — decides this, and the pill,
+the card's outline, the stage button's text and the activity panel all read it.
+They are the same fact rendered four ways, so they cannot contradict each other.
+
+| Pill | Comes from | What it means |
+|---|---|---|
+| **Error** | `status = 'error'` | the run stopped, and the card says why |
+| **Stalled** | queued, and nothing has touched the row for 30 minutes | the run may have died |
+| **Working…** | `requested_stage` is set | a run is in flight |
+| **Needs you** | a gate is open — options posted, nothing chosen | it is waiting on a decision |
+| **Done** | `status = 'done'` | the last stage finished |
+| *(none)* | anything else | quiet; the card shows just its stage |
+
+**Error outranks a queue entry, and that ordering is the point.** It used to be
+the other way round: the pill asked `isWorking` first, and `requested_stage` is
+cleared in exactly one place — `stage-done`, which a run that failed never
+reaches. So a session that had already reported `status: "error"` kept its queue
+row and the board kept painting it **Working…** indefinitely. RYV-84, FOR-47 and
+RYV-86 all sat like that. A queued run is still queued while it is errored — the
+button stays disabled — but it now reads **Error** rather than claiming progress.
+
+**Stalled** is the other half: nothing reports a process dying, so a run that
+never comes back would otherwise stay **Working…** for ever. It is derived, not
+observed — `updated_at` against the clock, threshold `STALL_AFTER_MIN`, 30
+minutes. There is no heartbeat and nothing new is written. A row whose timestamp
+will not parse is deliberately *not* stalled: flagging on missing data would
+flag the whole board the first time a column came back null.
+
+**Needs you is an open gate, not `status = 'waiting'`.** The reader writes that
+status on every row it inserts, so a pill for it would be on all of them and
+would mean nothing. What actually needs a human is a question with no answer.
 
 **The card shows no agent prose.** No prompt, no detail, no answer. The agent's
 research is a comment on the Linear issue and is read there; the Hub is a
 launcher and a status board, not a place to have a conversation. Pressing the
 next stage's button *is* how you say "proceed" — there is no typed reply.
+
+There are exactly two exceptions, and they are the same exception twice: a
+**gate's options**, and an **errored card's one-line reason**, taken from the
+row's own `prompt`. A question you cannot see from the board is a card that
+just sits there; so is a card that has stopped and will not say why. Both are
+the difference between a board you can read and a board that sends you
+somewhere else to find out what happened.
 
 **One Linear issue is one card.** Whatever the agent is doing to it shows as
 state on that card; a new phase never adds a row. See
@@ -86,7 +132,7 @@ rather than disappearing; the "Move to…" select on the card is how it gets hom
 Two collapsed sections sit at the foot of the board, each showing a count and
 expanding on one click. Both are collapsed on every load, and rows in either
 one leave the brand buckets, the brand counts, the topbar total, the running
-badges and the in-flight panel.
+badges and the activity panel.
 
 | Section | What is in it |
 |---|---|
@@ -99,8 +145,27 @@ instead of Run Research.
 
 The sidebar filters the board to one brand. "All brands" is the default on every
 load and the filter is never persisted — the Hub always opens showing
-everything. On narrow screens the sidebar is a hamburger drawer, the in-flight
+everything. On narrow screens the sidebar is a hamburger drawer, the activity
 panel moves below the board, and every control is a 44px tap target.
+
+### The activity panel
+
+The right-hand panel used to be **In flight**: the rows with a stage queued,
+split App / Website. That answers "what did I press", not "what is going on" —
+a run that had errored or quietly died was either in that list looking healthy
+or not in it at all.
+
+It is now **Activity**, and it is the one place the whole pipeline is visible.
+Every open card that is doing something — errored, stalled, needing an answer,
+running — most urgent first, each with what it is doing and how long since its
+row last moved. Within a state the one that moved longest ago comes first: a run
+stuck for three hours wants attention before one stuck for ten minutes.
+
+Done and idle rows are not listed. A finished card is not *doing* anything, and
+listing sixty quiet ones would bury the four that matter; the count at the foot
+(`2 of 6 quiet`) is what says they are still there. The App / Website split went
+because the panel cannot group by urgency and by track at once — the track rides
+along on the row instead.
 
 ---
 
@@ -148,7 +213,6 @@ been done. Dave never applies one and nothing triggers off them:
 |---|---|
 | `AI-research done` | the research agent finishes |
 | `AI-design done` | the design agent finishes |
-| `AI-QA done` | QA finishes |
 
 Keeping the stage in Linear rather than in a Hub-only column means the board
 cannot drift out of sync with the issue, and rebuilds itself correctly from a
@@ -381,7 +445,7 @@ Used by the board:
 |---|---|
 | `GET /api/brands` | Brand id, name, colour |
 | `GET /api/agent/sessions` | Every session, waiting first |
-| `POST /api/agent/session/:id/trigger` | Queue a stage for the runner (`{"stage":"research"\|"design"\|"qa"}`) |
+| `POST /api/agent/session/:id/trigger` | Queue a stage for the runner (`{"stage":"research"\|"design"}`) |
 | `GET /api/agent/queue` | What the runner reads — every row with a stage requested |
 | `POST /api/agent/stage-done` | The runner reports a finished stage (`{"linear_id","stage"}`) |
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
@@ -504,6 +568,24 @@ id is accepted and comes back as its label, reopening archives the round and
 clears the decision, a changed set of options supersedes an answer while the
 same set re-posted leaves it alone, and a session with no options still answers
 in free text.
+
+**The run-state suites** hold down the fix this board most recently needed: a
+card that says what it is actually doing. In `test/unit.test.mjs`, `runState`
+is walked through all five states plus idle, the precedence is asserted the way
+round it should always have been — *"an error outranks a queue entry, because
+nothing will ever clear it"*, which is the inverse of the test that used to be
+there — and `isStalled` is pinned against a fixed clock, including the two
+cases that must *not* flag: nothing queued, and a timestamp that will not parse.
+In `test/render.test.mjs` a fixture of one row per state is mounted and read
+back, so the pill, the card's outline, the disabled button's text and the
+activity panel are each checked to be saying the same thing about the same row.
+`mount()` exists for that: a suite renders its own rows rather than adding them
+to the shared fixture, whose counts three other suites assert on.
+
+QA's removal is pinned at both ends — `POST .../trigger` and
+`POST /api/agent/stage-done` each answer 400 for `{"stage":"qa"}` and neither
+touches the row — and on the board, where the column and the button are asserted
+gone and `AI-QA done` is asserted to be no rung on the ladder.
 
 **`test/smoke.test.mjs`** hits production and is read-only. Its one non-GET
 case sends a deliberately invalid `action`, which the Worker rejects before it

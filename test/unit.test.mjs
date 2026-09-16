@@ -27,7 +27,15 @@ vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf
 const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         sectionOf, isOpen, key, timeAgo,
         optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
-        stageState, stageReached, stageLabel, isSkipped } = board;
+        stageState, stageReached, stageLabel, isSkipped,
+        runState, isStalled, lastActivity, stampMs, failureReason,
+        STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK } = board;
+
+// A fixed clock, so "stalled" is a fact about the row and not about when the
+// suite happened to run.
+const NOW = Date.parse('2026-09-16T21:00:00Z');
+const minsAgo = (n) =>
+  new Date(NOW - n * 60000).toISOString().slice(0, 19).replace('T', ' ');
 
 // A row as the reader writes it. `labels` is the JSON array the board reads to
 // decide a card's column.
@@ -133,13 +141,17 @@ describe('stageOf — which column a card is in', () => {
   test('each done-label moves the card on', () => {
     assert.equal(stageOf(rowWith('AI-research done')), 'researched');
     assert.equal(stageOf(rowWith('AI-design done')), 'designed');
-    assert.equal(stageOf(rowWith('AI-QA done')), 'qa');
+  });
+
+  test('AI-QA done is no longer a level', () => {
+    // QA was a stage the board offered and nothing implemented. An issue that
+    // still carries the label from before reads as whatever actually ran on
+    // it — never as a column of its own.
+    assert.equal(stageOf(rowWith('AI-QA done')), 'backlog');
+    assert.equal(stageOf(rowWith('AI-design done', 'AI-QA done')), 'designed');
   });
 
   test('the most advanced label wins', () => {
-    // An issue that has been all the way through carries all three.
-    assert.equal(
-      stageOf(rowWith('AI-research done', 'AI-design done', 'AI-QA done')), 'qa');
     assert.equal(stageOf(rowWith('AI-research done', 'AI-design done')), 'designed');
   });
 
@@ -164,7 +176,8 @@ describe('stageOf — which column a card is in', () => {
     assert.equal(stageName('backlog'), 'Backlog');
     assert.equal(stageName('researched'), 'Researched');
     assert.equal(stageName('designed'), 'AI-designed');
-    assert.equal(stageName('qa'), "QA'd");
+    // Nothing answers to 'qa' any more, heading included.
+    assert.equal(stageName('qa'), 'Backlog');
   });
 
   test('hasLabel', () => {
@@ -187,9 +200,12 @@ describe('stage completion — done, skipped, or not started', () => {
     assert.equal(stageState(rowWith('no-design'), 'design'), 'skipped');
   });
 
-  test('nothing skips QA', () => {
-    assert.equal(stageState(rowWith('AI-QA done'), 'qa'), 'done');
-    assert.equal(stageState(rowWith('no-research', 'no-design'), 'qa'), null);
+  test('the Hub knows two stages, and QA is not one of them', () => {
+    // Removed end to end rather than hidden: there is no label for it to read
+    // and no rung on the ladder for it to land on.
+    assert.equal(stageState(rowWith('AI-QA done'), 'qa'), null);
+    assert.equal(stageState(rowWith('AI-QA done'), 'design'), null);
+    assert.equal(stageReached(rowWith('AI-QA done')).stage, 'backlog');
   });
 
   test('done outranks skipped — the run happened in the end', () => {
@@ -202,7 +218,7 @@ describe('stage completion — done, skipped, or not started', () => {
     assert.equal(stageLabel(rowWith('AI-research done')), 'Researched');
     assert.equal(stageLabel(rowWith('no-research')), 'Research skipped');
     assert.equal(stageLabel(rowWith('no-design')), 'Design skipped');
-    assert.equal(stageLabel(rowWith('AI-QA done')), "QA'd");
+    assert.equal(stageLabel(rowWith('AI-QA done')), 'Backlog');
   });
 
   test('isSkipped tracks the stage that put the card where it is', () => {
@@ -221,7 +237,10 @@ describe('stage completion — done, skipped, or not started', () => {
     const act = (r) => { const a = actionFor(r); return a && a.stage + '/' + a.label; };
     assert.equal(stageOf(rowWith('no-research')), 'researched');
     assert.equal(act(rowWith('no-research')), 'design/Run Design');
-    assert.equal(act(rowWith('no-design')), 'qa/Run QA');
+    // Skipping design lands the card at the end of the board, so there is no
+    // next stage to be eligible for — which is a column, not a missing button.
+    assert.equal(stageOf(rowWith('no-design')), 'designed');
+    assert.equal(act(rowWith('no-design')), null);
   });
 });
 
@@ -246,19 +265,17 @@ describe('actionFor — the one button a card offers', () => {
     assert.equal(act(rowWith('AI-research done')), 'design/Run Design');
   });
 
-  test('designed offers QA', () => {
-    assert.equal(act(rowWith('AI-design done')), 'qa/Run QA');
-  });
-
-  test('the final stage offers nothing', () => {
-    assert.equal(actionFor(rowWith('AI-QA done')), null);
+  test('AI-designed is the end of the board', () => {
+    // It offered Run QA, and nothing implemented QA: the run failed and the
+    // card was left holding a queue entry that only stage-done ever clears.
+    assert.equal(actionFor(rowWith('AI-design done')), null);
+    assert.equal(actionFor(rowWith('AI-design done', 'AI-QA done')), null);
   });
 
   test('every stage short of the last offers a button — no card renders empty', () => {
-    // This is the bug the four-column board replaced: a card whose status did
-    // not match any branch fell through and rendered with no actions at all.
-    for (const r of [rowWith(), rowWith('no-research'), rowWith('AI-research done'),
-                     rowWith('AI-design done')]) {
+    // This is the bug the column board replaced: a card whose status did not
+    // match any branch fell through and rendered with no actions at all.
+    for (const r of [rowWith(), rowWith('no-research'), rowWith('AI-research done')]) {
       assert.ok(actionFor(r), 'expected an action for ' + r.labels);
     }
   });
@@ -275,23 +292,127 @@ describe('isWorking and statusPill', () => {
   });
 
   test('the pill shows a run in progress', () => {
-    assert.equal(statusPill({ requested_stage: 'design' }).kind, 'working');
+    assert.equal(statusPill({ requested_stage: 'design' }, NOW).kind, 'working');
   });
 
   test('the pill shows an error', () => {
-    assert.equal(statusPill({ status: 'error' }).kind, 'error');
+    assert.equal(statusPill({ status: 'error' }, NOW).kind, 'error');
   });
 
   test('a quiet card gets no pill at all', () => {
-    // The stage is already on the card; repeating "Waiting" on every row was
-    // noise, and untriggered rows are all written 'waiting' by the reader.
-    assert.equal(statusPill({ status: 'waiting' }), null);
-    assert.equal(statusPill({ status: 'done' }), null);
-    assert.equal(statusPill({}), null);
+    // The stage is already on the card, and the reader writes 'waiting' on
+    // every row it inserts — so a pill for that status would be on all of them.
+    assert.equal(statusPill({ status: 'waiting' }, NOW), null);
+    assert.equal(statusPill({}, NOW), null);
   });
 
-  test('working outranks a stale error', () => {
-    assert.equal(statusPill({ status: 'error', requested_stage: 'qa' }).kind, 'working');
+  test('an error outranks a queue entry, because nothing will ever clear it', () => {
+    // The bug. `requested_stage` is cleared in one place — stage-done — which
+    // a run that failed never reaches, so isWorking stays true for ever. This
+    // assertion used to read the other way round, and RYV-84 sat on the board
+    // saying "Working…" about a QA stage that does not exist.
+    assert.equal(statusPill({ status: 'error', requested_stage: 'design' }, NOW).kind, 'error');
+    assert.equal(runState({ status: 'error', requested_stage: 'design' }, NOW), 'error');
+  });
+});
+
+describe('runState — what a card is actually doing', () => {
+  // One derivation behind the pill, the card's outline, the stage button's
+  // text and the activity panel, so those four cannot contradict each other.
+  const gate = { status: 'waiting', options: [{ id: 'd1', label: 'One' }] };
+
+  test('the five states, from their own fields', () => {
+    assert.equal(runState({ status: 'error' }, NOW), 'error');
+    assert.equal(runState({ requested_stage: 'design', updated_at: minsAgo(90) }, NOW), 'stalled');
+    assert.equal(runState({ requested_stage: 'design', updated_at: minsAgo(2) }, NOW), 'working');
+    assert.equal(runState(gate, NOW), 'waiting');
+    assert.equal(runState({ status: 'done' }, NOW), 'done');
+  });
+
+  test('a quiet row is idle, and idle gets no pill', () => {
+    assert.equal(runState({ status: 'waiting' }, NOW), 'idle');
+    assert.equal(runState({}, NOW), 'idle');
+    assert.equal(runState(null, NOW), 'idle');
+    assert.equal(statusPill({ status: 'waiting' }, NOW), null);
+  });
+
+  test('waiting means an open gate, not the status the reader writes', () => {
+    // Every row the reader inserts is status 'waiting'. If that were the
+    // test, the pill would be on the whole board and would mean nothing.
+    assert.equal(runState({ status: 'waiting' }, NOW), 'idle');
+    assert.equal(runState(gate, NOW), 'waiting');
+    // Answered — the agent has what it needs and is no longer held up.
+    assert.equal(runState({ ...gate, response_option_id: 'd1' }, NOW), 'idle');
+  });
+
+  test('a queued run outranks an open gate', () => {
+    // Both are true of a re-triggered gate. The run is the more recent fact
+    // and the one the button is about.
+    assert.equal(runState({ ...gate, requested_stage: 'design' }, NOW), 'working');
+  });
+
+  test('every state has a word, and a place in the order', () => {
+    for (const state of ['error', 'stalled', 'working', 'waiting', 'done']) {
+      assert.ok(RUN_STATE_TEXT[state], 'no text for ' + state);
+      assert.ok(RUN_STATE_RANK.indexOf(state) !== -1, 'no rank for ' + state);
+    }
+    // Most urgent first — this is the activity panel's sort order.
+    assert.ok(RUN_STATE_RANK.indexOf('error') < RUN_STATE_RANK.indexOf('working'));
+    assert.ok(RUN_STATE_RANK.indexOf('stalled') < RUN_STATE_RANK.indexOf('working'));
+    assert.ok(RUN_STATE_RANK.indexOf('idle') === RUN_STATE_RANK.length - 1);
+  });
+});
+
+describe('isStalled — an eternally-working card cannot hide a dead run', () => {
+  test('nothing queued is never stalled, however old the row', () => {
+    assert.equal(isStalled({ updated_at: minsAgo(600) }, NOW), false);
+  });
+
+  test('the threshold is the one named constant', () => {
+    assert.equal(STALL_AFTER_MIN, 30);
+    const at = (n) => isStalled({ requested_stage: 'design', updated_at: minsAgo(n) }, NOW);
+    assert.equal(at(STALL_AFTER_MIN - 1), false);
+    assert.equal(at(STALL_AFTER_MIN), true);
+    assert.equal(at(STALL_AFTER_MIN + 120), true);
+  });
+
+  test('a row with no usable timestamp is not stalled', () => {
+    // Flagging on missing data would flag the whole board the first time a
+    // column came back null, and a board crying wolf is one nobody reads.
+    assert.equal(isStalled({ requested_stage: 'design' }, NOW), false);
+    assert.equal(isStalled({ requested_stage: 'design', updated_at: 'not a date' }, NOW), false);
+  });
+
+  test('requested_at stands in where updated_at is missing', () => {
+    assert.equal(lastActivity({ requested_at: minsAgo(90) }), minsAgo(90));
+    assert.equal(lastActivity({ updated_at: minsAgo(1), requested_at: minsAgo(90) }), minsAgo(1));
+    assert.equal(isStalled({ requested_stage: 'design', requested_at: minsAgo(90) }, NOW), true);
+  });
+
+  test('the stamps the Hub actually stores parse', () => {
+    // SQLite datetime('now') — space-separated, no zone, always UTC.
+    assert.equal(stampMs('2026-09-16 20:31:47'), Date.parse('2026-09-16T20:31:47Z'));
+    // And an ISO stamp is not given a second Z.
+    assert.equal(stampMs('2026-09-16T20:31:47Z'), Date.parse('2026-09-16T20:31:47Z'));
+    assert.ok(isNaN(stampMs(null)));
+    assert.ok(isNaN(stampMs('')));
+  });
+});
+
+describe('failureReason — the card says why it stopped', () => {
+  test('the agent puts the failure in the prompt, and that is what shows', () => {
+    assert.equal(failureReason({ status: 'error', prompt: 'The qa stage is not implemented yet' }),
+                 'The qa stage is not implemented yet');
+    assert.equal(failureReason({ status: 'error', detail: 'unmapped-destination' }),
+                 'unmapped-destination');
+  });
+
+  test('nothing is shown for a card that has not errored', () => {
+    // The one exception is an errored card. A row that is merely waiting still
+    // shows no agent prose at all — that is the whole rule, not half of it.
+    assert.equal(failureReason({ status: 'waiting', prompt: 'Run design research on FOR-26?' }), '');
+    assert.equal(failureReason({ status: 'error' }), '');
+    assert.equal(failureReason(null), '');
   });
 });
 

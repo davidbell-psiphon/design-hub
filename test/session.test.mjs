@@ -319,6 +319,30 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(res.status, 400);
   });
 
+  test('qa is not a stage the Hub will queue', async () => {
+    // It was, and nothing implemented it: the run failed with "the qa stage is
+    // not implemented yet" and left the card holding a queue entry that only
+    // stage-done ever clears, so the board read it as working on QA for as
+    // long as it sat there. A stage the Hub queues has to be one something
+    // runs. Both ends refuse it, and neither touches the row.
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+
+    const trigger = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger', { stage: 'qa' });
+    assert.equal(trigger.status, 400);
+    assert.match((await trigger.json()).error, /research, design/);
+    assert.equal(rows(db)[0].requested_stage, null, 'a refused stage was still queued');
+
+    const done = await call(e, 'POST', '/api/agent/stage-done',
+      { linear_id: 'RYV-84', stage: 'qa' }, { 'X-Agent-Secret': 's' });
+    assert.equal(done.status, 400);
+    assert.equal(String(rows(db)[0].labels).includes('QA'), false,
+                 'a refused stage still wrote a label');
+  });
+
   test('a card already queued is not queued twice', async () => {
     const db = freshDb();
     const e = env(db);

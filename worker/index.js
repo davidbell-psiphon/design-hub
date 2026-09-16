@@ -176,15 +176,22 @@ async function closeRound(env, id, row, note) {
   return round + 1;
 }
 
-// The three stages the Hub can request, and the label the system writes when
-// one completes. Dave never applies these labels and nothing triggers off
-// them — they are the record of what has been done, and the board reads them
-// to decide which column a card is in.
-const STAGES = ['research', 'design', 'qa'];
+// The stages the Hub can request, and the label the system writes when one
+// completes. Dave never applies these labels and nothing triggers off them —
+// they are the record of what has been done, and the board reads them to
+// decide which column a card is in.
+//
+// There was a third, . Nothing implemented it: the board offered a Run QA
+// button, the trigger route accepted the stage, the runner failed with "the qa
+// stage is not implemented yet", and the card was left holding a queue entry
+// that only /api/agent/stage-done ever clears — so it read as working on QA
+// for as long as it sat there. A stage the Hub will queue is a stage something
+// has to run, so it is out of this list until something does. Requesting it
+// now answers 400, which is the honest response and the one the board can show.
+const STAGES = ['research', 'design'];
 const STAGE_LABEL = {
   research: 'AI-research done',
   design: 'AI-design done',
-  qa: 'AI-QA done',
 };
 
 // Where the runner lives. Overridable by env vars so a fork or a rename does
