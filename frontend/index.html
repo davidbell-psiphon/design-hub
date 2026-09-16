@@ -287,6 +287,7 @@
   <div class="topbar-sub" id="topbar-sub">Loading…</div>
   <div class="topbar-actions">
     <button class="filter-chip" id="filter-chip" style="display:none" onclick="setFilter(null)"></button>
+    <button class="btn" id="btn-read" onclick="runReader(this)" title="Pull issues from Linear now">Read Linear</button>
     <button class="btn" id="btn-refresh" onclick="loadBoard()">Refresh</button>
   </div>
 </div>
@@ -737,6 +738,27 @@ async function triggerSession(id, stage, btn) {
   } catch (e) {
     toast('Could not request — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
+// Runs the reader now, instead of waiting for Wednesday or Friday. The route
+// has always existed — this is the control for it, reached through the Pages
+// proxy on your own Access session rather than with the agent's secret.
+//
+// Gathering is still not triggering: this reads Linear and upserts rows, and
+// starts nothing. It is the same work the cron does, on demand.
+async function runReader(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Reading\u2026'; }
+  try {
+    const res = await api('/read-linear', { method: 'POST' });
+    const n = (k) => (res && typeof res[k] === 'number' ? res[k] : 0);
+    toast(`Linear read \u2014 ${n('inserted')} new, ${n('updated')} refreshed, ` +
+          `${n('reconciled')} reconciled`);
+    await loadBoard();
+  } catch (e) {
+    toast('Could not read Linear \u2014 ' + String(e.message || e).slice(0, 120));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Read Linear'; }
   }
 }
 

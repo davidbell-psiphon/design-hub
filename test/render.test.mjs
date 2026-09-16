@@ -293,6 +293,26 @@ describe('a card reports the state it is actually in', () => {
   });
 });
 
+describe('the reader can be run from the board', () => {
+  // The route has always existed; without a control the only way to pull a
+  // newly-assigned issue in was to wait for Wednesday or Friday.
+  const html = fs.readFileSync(path.join(ROOT, 'frontend/index.html'), 'utf8');
+
+  test('the control is in the topbar and calls the reader route', () => {
+    assert.match(html, /id="btn-read"[^>]*onclick="runReader\(this\)"/);
+    assert.match(html, /api\('\/read-linear', \{ method: 'POST' \}\)/);
+  });
+
+  test('it starts nothing — gathering is not triggering', () => {
+    // The whole rule in one assertion: the reader control must not reach the
+    // trigger route, and must not dispatch a run by any other name.
+    const fn = html.slice(html.indexOf('async function runReader'),
+                          html.indexOf('async function dismissSession'));
+    assert.equal(fn.includes('/trigger'), false, 'the reader control triggers a stage');
+    assert.equal(fn.includes('stage'), false, 'the reader control names a stage');
+  });
+});
+
 describe('the console watches the whole pipeline', () => {
   let panel;
   before(async () => { panel = (await mount(stateRows)).panel; });

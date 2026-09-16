@@ -329,8 +329,14 @@ invariant is about *closed* issues: there are around 66 of those against around
 60 open. Open work is the work the board is for, and all of it fits.
 
 It refreshes only Linear-owned fields, so a re-read never resets an in-flight
-session or undoes a manual brand reassignment. Run it on demand with
-`POST /api/read-linear` (which now needs `X-Agent-Secret`, since Access is on).
+session or undoes a manual brand reassignment.
+
+**Read Linear** in the topbar runs it now. The route always existed, but with
+no control for it the only way to pull in an issue assigned to you on a Tuesday
+was to wait until Wednesday. The button reaches `POST /api/read-linear` through
+the Pages proxy on your own Access session, so it needs no secret; the agent
+and any script still call the same route with `X-Agent-Secret`. It gathers and
+starts nothing, exactly as the cron does.
 
 The reader runs **two passes**:
 
