@@ -279,6 +279,7 @@ async function readLinear(env) {
       issues(
         first: 100
         filter: {
+          assignee: { name: { eq: "Dave Bell" } }
           state: { type: { in: ["backlog", "unstarted"] } }
         }
       ) {
@@ -328,12 +329,12 @@ async function readLinear(env) {
 
     const teamName = issue.team && issue.team.name;
 
-    // Design teams only. This is a TEAM filter, not a label one — gathering is
-    // still not triggering, and no label decides whether an issue reaches the
-    // board. But the Design AI's own CLAUDE.md puts social, marketing and
-    // campaign work explicitly out of scope, and without this the reader drags
-    // every Marketing issue assigned to Dave onto a design board.
-    if (!TEAM_TRACK[teamName]) { skipped++; continue; }
+        // No team filter. Anything assigned to Dave Bell belongs in the Hub,
+          // whatever team it sits on. Brand is derived from the issue by
+          // deriveBrand (team map first, then keyword fallback on project name,
+          // labels and title), and the board's brand filter is what provides the
+          // context of where the work lives — so a project's team no longer gates
+          // whether it reaches the board.
     const track = deriveTrack(teamName);
     const brand = deriveBrand(issue);
 
