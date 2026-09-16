@@ -20,7 +20,8 @@ const row = (o) => ({
   id: 'linear/' + o.linear_id, linear_id: o.linear_id, system: 'design-ai',
   project: o.project || 'conduit', track: 'app', phase: o.phase || 'research',
   status: o.status || 'waiting', title: o.title || o.linear_id,
-  updated_at: o.updated_at || null, prompt: o.prompt || null,
+  updated_at: o.updated_at || null, requested_at: o.requested_at || null,
+  prompt: o.prompt || null,
   options: o.options ? JSON.stringify(o.options) : null,
   linear_state: o.linear_state === undefined ? 'backlog' : o.linear_state,
   labels: JSON.stringify(o.labels || []),
@@ -226,7 +227,8 @@ const stateRows = [
   row({ linear_id: 'RYV-84', project: 'ryve', status: 'error', requested_stage: 'design',
         labels: ['AI-research done'], phase: 'design', updated_at: stamp(200 * MIN),
         prompt: 'The qa stage is not implemented yet' }),
-  row({ linear_id: 'CON-120', requested_stage: 'research', updated_at: stamp(95 * MIN) }),
+  row({ linear_id: 'CON-120', requested_stage: 'research', updated_at: stamp(95 * MIN),
+        requested_at: stamp(95 * MIN) }),
   row({ linear_id: 'CON-118', requested_stage: 'research', updated_at: stamp(2 * MIN) }),
   row({ linear_id: 'RYV-187', project: 'ryve', options: GATE, updated_at: stamp(30 * MIN) }),
   row({ linear_id: 'CON-116', status: 'done', labels: ['AI-design done'], updated_at: stamp(MIN) }),
@@ -258,7 +260,7 @@ describe('a card reports the state it is actually in', () => {
   test('a queued run with no activity for half an hour reads Stalled', () => {
     const html = of('CON-120');
     assert.deepEqual(pill(html), ['stalled', 'Stalled']);
-    assert.match(html, /card-note note-stalled[\s\S]*?the run may have died/);
+    assert.match(html, /card-note note-stalled[\s\S]*?never came back/);
     assert.match(html, /btn btn-primary" disabled>Stalled</);
   });
 
@@ -347,7 +349,7 @@ describe('the console watches the whole pipeline', () => {
 
   test('a line that stopped says why, under itself', () => {
     assert.match(panel, /cn-msg">The qa stage is not implemented yet</);
-    assert.match(panel, /cn-msg">no activity for \d+[mhd]</);
+    assert.match(panel, /cn-msg">queued \d+[mhd] ago, never came back</);
   });
 
   test('a run that finished recently is still news; an idle row is not', () => {

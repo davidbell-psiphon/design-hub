@@ -28,7 +28,7 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         sectionOf, isOpen, key, timeAgo,
         optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
         stageState, stageReached, stageLabel, isSkipped,
-        runState, isStalled, lastActivity, stampMs, failureReason,
+        runState, isStalled, lastActivity, queuedSince, stampMs, failureReason,
         consoleRows, clockTime, consoleState,
         STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
 
@@ -384,10 +384,24 @@ describe('isStalled — an eternally-working card cannot hide a dead run', () =>
     assert.equal(isStalled({ requested_stage: 'design', updated_at: 'not a date' }, NOW), false);
   });
 
-  test('requested_at stands in where updated_at is missing', () => {
-    assert.equal(lastActivity({ requested_at: minsAgo(90) }), minsAgo(90));
+  test('the two clocks answer two different questions', () => {
+    // When the row last moved, for the console's clock column...
     assert.equal(lastActivity({ updated_at: minsAgo(1), requested_at: minsAgo(90) }), minsAgo(1));
-    assert.equal(isStalled({ requested_stage: 'design', requested_at: minsAgo(90) }, NOW), true);
+    // ...and how long the request has been outstanding, for the stall clock.
+    assert.equal(queuedSince({ updated_at: minsAgo(1), requested_at: minsAgo(90) }), minsAgo(90));
+    // Each falls back to the other where its own field is missing.
+    assert.equal(lastActivity({ requested_at: minsAgo(90) }), minsAgo(90));
+    assert.equal(queuedSince({ updated_at: minsAgo(1) }), minsAgo(1));
+  });
+
+  test('a Linear read does not clear a stall', () => {
+    // The reader's upsert sets updated_at = datetime('now') on every row it
+    // refreshes. Running the stall clock on updated_at meant a cron read — or
+    // anyone pressing Read Linear — reset it on a run that died hours ago and
+    // hid it again for another half hour. requested_at is written once by the
+    // trigger and cleared only by stage-done, so nothing else can move it.
+    const justRead = { requested_stage: 'design', requested_at: minsAgo(180), updated_at: minsAgo(0) };
+    assert.equal(isStalled(justRead, NOW), true, 'a read un-stalled a dead run');
   });
 
   test('the stamps the Hub actually stores parse', () => {

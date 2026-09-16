@@ -414,8 +414,9 @@ function sessionCard(r) {
   if (section === 'board' && state === 'error' && failureReason(r)) {
     noteHtml = `<div class="card-note note-error">${esc(failureReason(r))}</div>`;
   } else if (section === 'board' && state === 'stalled') {
-    noteHtml = `<div class="card-note note-stalled">Queued for ${esc(r.requested_stage || 'a run')},
-      nothing for ${esc(timeAgo(lastActivity(r)))} \u2014 the run may have died.</div>`;
+    noteHtml = `<div class="card-note note-stalled">Queued for ${esc(r.requested_stage || 'a run')}
+      ${esc(timeAgo(queuedSince(r)))} ago and still queued \u2014 the run never came back,
+      or was never picked up.</div>`;
   }
 
   const gk = key(id);
@@ -675,7 +676,7 @@ function renderConsole() {
     const color = (brandsById[r.project] || {}).color || '#888780';
     const doing = r.requested_stage || r.phase || '';
     const why = state === 'error' ? failureReason(r)
-              : state === 'stalled' ? ('no activity for ' + timeAgo(lastActivity(r))) : '';
+              : state === 'stalled' ? ('queued ' + timeAgo(queuedSince(r)) + ' ago, never came back') : '';
     return `<button class="cn-line" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')"
                     title="${esc(r.title || '')}">
       <span class="cn-t">${esc(clockTime(lastActivity(r)))}</span>

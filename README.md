@@ -76,7 +76,7 @@ They are the same fact rendered four ways, so they cannot contradict each other.
 | Pill | Comes from | What it means |
 |---|---|---|
 | **Error** | `status = 'error'` | the run stopped, and the card says why |
-| **Stalled** | queued, and nothing has touched the row for 30 minutes | the run may have died |
+| **Stalled** | queued, and still queued 30 minutes later | the run never came back, or was never picked up |
 | **Working…** | `requested_stage` is set | a run is in flight |
 | **Needs you** | a gate is open — options posted, nothing chosen | it is waiting on a decision |
 | **Done** | `status = 'done'` | the last stage finished |
@@ -92,10 +92,20 @@ button stays disabled — but it now reads **Error** rather than claiming progre
 
 **Stalled** is the other half: nothing reports a process dying, so a run that
 never comes back would otherwise stay **Working…** for ever. It is derived, not
-observed — `updated_at` against the clock, threshold `STALL_AFTER_MIN`, 30
-minutes. There is no heartbeat and nothing new is written. A row whose timestamp
-will not parse is deliberately *not* stalled: flagging on missing data would
-flag the whole board the first time a column came back null.
+observed — threshold `STALL_AFTER_MIN`, 30 minutes — and there is no heartbeat
+and nothing new is written.
+
+**The clock runs on `requested_at`, not `updated_at`, and that distinction is
+load-bearing.** `requested_at` is written once by the trigger route and cleared
+in exactly one place, `stage-done`; nothing else touches it. `updated_at` looks
+like the better field and is not, because the reader's upsert sets
+`updated_at = datetime('now')` on every row it refreshes — so a cron read, or
+anyone pressing **Read Linear**, would reset the stall clock on a run that died
+hours ago and hide it again for another half hour. The control meant to surface
+a dead run would have been the thing concealing it.
+
+A row whose timestamp will not parse is deliberately *not* stalled: flagging on
+missing data would flag the whole board the first time a column came back null.
 
 **Needs you is an open gate, not `status = 'waiting'`.** The reader writes that
 status on every row it inserts, so a pill for it would be on all of them and

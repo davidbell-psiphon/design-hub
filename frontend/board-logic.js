@@ -250,23 +250,38 @@ function stampMs(ts) {
   return new Date(s).getTime();
 }
 
-// When this row last moved. `updated_at` is touched by the trigger route and
-// by every agent post, so it is the closest thing to activity the Hub has;
-// `requested_at` is the fallback for a row that somehow has no updated_at.
+// When this row last moved, for the console's clock column. `updated_at` is
+// touched by the trigger route, by every agent post — and by the Linear
+// reader, which is why it is not what the stall clock runs on. See
+// `queuedSince`.
 function lastActivity(r) {
   return (r && (r.updated_at || r.requested_at)) || '';
 }
 
-// Queued, and nothing has touched the row since. This is the check that stops
-// an eternally-"working" card from hiding a process that died: a run reports
-// in as it goes, so silence for half an hour is not progress.
+// How long this request has been outstanding, which is a different question
+// from when the row last moved.
+//
+// `requested_at` is written once, by the trigger route, and cleared in one
+// place — /api/agent/stage-done. Nothing else touches it. `updated_at` looked
+// like the better field and is not: the reader's upsert sets
+// `updated_at = datetime('now')` on every row it refreshes, so a cron read, or
+// anyone pressing Read Linear, would reset the stall clock on a run that died
+// hours ago and quietly hide it again for another half hour.
+function queuedSince(r) {
+  return (r && (r.requested_at || r.updated_at)) || '';
+}
+
+// Queued, and still queued half an hour later. This is the check that stops an
+// eternally-"working" card from hiding a process that died: the queue entry is
+// cleared when the stage reports done, so a request still sitting there is a
+// request nothing has finished.
 //
 // A row whose timestamp will not parse is deliberately *not* stalled. Flagging
 // on missing data would flag the whole board the first time a column comes
 // back null, and a board crying wolf is a board nobody reads.
 function isStalled(r, now) {
   if (!isWorking(r)) return false;
-  var t = stampMs(lastActivity(r));
+  var t = stampMs(queuedSince(r));
   if (isNaN(t)) return false;
   return ((now === undefined ? Date.now() : now) - t) >= STALL_AFTER_MIN * 60000;
 }
