@@ -265,6 +265,27 @@ being closed.
 straight to mockup", and a Backlog card carrying it offers **Run Design**
 instead of Run Research.
 
+### "Move to…" moves the card, not the work
+
+The reassign select corrects which brand section a card sits in. That is all it
+does, and the control says so.
+
+The runner derives a brand from the Linear issue with `deriveBrand` — the same
+function the reader uses, vendored into the design-ai repo so the two agree —
+and never reads the Hub row's `project`. So moving a card here changes the
+board and changes nothing about where its work would land in Figma.
+
+That is worth knowing rather than worth fixing, at least today: every open card
+on the board derives its brand correctly, so the control has no victim. Making
+it reach the runner would mean recording that a brand was set by hand (the Hub
+derives one on every read, so the column alone cannot say), exposing that on
+`/api/agent/queue`, and teaching the runner to prefer it — a schema piece and a
+change in both repos, for a correction nothing currently needs.
+
+If a card ever does derive the wrong brand, the fix that actually works is in
+Linear: a brand word in the issue's title, its project name, or a label, which
+is where `detectBrand` looks.
+
 ### The sidebar filters by team
 
 Brand is still the container the board is built from — every brand, stacked,
@@ -810,7 +831,7 @@ Used by the board:
 | `POST /api/agent/session/:id/complete` | Mark done — set the Linear issue to its team's finished state |
 | `GET /api/reader/teams` | What the reader reads, and every team it could read |
 | `PUT /api/reader/teams` | Replace that set (`{"teams":[…]}`; `[]` means every team) |
-| `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
+| `PATCH /api/agent/session/:id/reassign` | Correct brand or track **on the board only** — see below |
 | `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id"}` or `{"response_section"}` where the gate has options, free text where it does not |
 | `PATCH /api/agent/session/:id/reopen` | Send a gate back for a new round — taking a decision back, or rejecting every option with `{"note"}` |
 | `DELETE /api/agent/session/:id` | Drop a session |

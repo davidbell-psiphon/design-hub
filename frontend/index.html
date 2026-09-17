@@ -418,7 +418,14 @@ function sessionCard(r) {
     ${r.figma_url ? `<a class="agent-link" href="${esc(r.figma_url)}" target="_blank" rel="noopener">Figma \u2197</a>` : ''}
   </div>`;
 
-  const reassignHtml = `<select class="reassign-select" onchange="reassignSession('${esc(id)}', this.value)">
+  // Moves the card, and only the card. The runner derives a brand from the
+  // Linear issue itself and never reads this column, so correcting a card here
+  // fixes where it sits on the board and does not change where its work would
+  // land in Figma. The title says so, because a control that looks like it does
+  // more than it does is worse than one that does less.
+  const reassignHtml = `<select class="reassign-select"
+      title="Moves this card to another brand section on the board. It does not change the brand the runner derives from Linear."
+      onchange="reassignSession('${esc(id)}', this.value)">
     <option value="">Move to\u2026</option>
     ${brands.filter(b => b.id !== r.project).map(b =>
       `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}
