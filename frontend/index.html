@@ -407,9 +407,11 @@ function sessionCard(r) {
   // One derivation for all of it. The pill, the card's outline and the stage
   // button's text are the same fact rendered three ways, so none of them can
   // say "Working…" about a session that reported an error an hour ago.
-  const state = runState(r);
+  // `sessions` is passed through because a card's place in the queue is not a
+  // fact about the card — it is a fact about the queue it is in.
+  const state = runState(r, undefined, sessions);
   const working = isWorking(r);
-  const pill = statusPill(r);
+  const pill = statusPill(r, undefined, sessions);
 
   const linksHtml = `<div class="session-links">
     ${r.url ? `<a class="agent-link" href="${esc(r.url)}" target="_blank" rel="noopener">Linear \u2197</a>` : ''}
@@ -451,7 +453,7 @@ function sessionCard(r) {
     // Stop on a run that is going, Reset on one that has stopped — the same
     // call either way, because both mean "take this out of the queue". A card
     // with no run behind it gets neither.
-    const clear = clearLabel(r);
+    const clear = clearLabel(r, undefined, sessions);
     const clearBtn = clear
       ? `<button class="btn btn-reset" onclick="resetSession('${esc(id)}', this, '${clear}')"
                  title="${clear === 'Stop'
@@ -461,7 +463,7 @@ function sessionCard(r) {
     const action = actionFor(r);
     const stageBtn = action
       ? (working
-          ? `<button class="btn btn-primary" disabled>${esc(RUN_STATE_TEXT[state] || 'Working\u2026')}</button>`
+          ? `<button class="btn btn-primary" disabled>${esc((pill && pill.text) || RUN_STATE_TEXT[state] || 'Working\u2026')}</button>`
           : `<button class="btn btn-primary" onclick="triggerSession('${esc(id)}', '${action.stage}', this)">${esc(action.label)}</button>`)
       : '';
     actionsHtml = `
@@ -775,7 +777,10 @@ function renderSidebar() {
 
   const item = (name) => {
     const rows = open.filter(r => groupOf(r) === name);
-    const live = rows.filter(r => { const st = runState(r); return st !== 'idle' && st !== 'done'; }).length;
+    const live = rows.filter(r => {
+      const st = runState(r, undefined, sessions);
+      return st !== 'idle' && st !== 'done';
+    }).length;
     const active = filterTeam === name ? ' active' : '';
     return `<button class="sb-item${active}" onclick="setFilter('${jsq(name)}')">
       <div class="sb-dot" style="background:${esc(dotFor(rows))}"></div>
@@ -847,7 +852,7 @@ function renderConsole() {
       <span class="cn-brand" style="background:${color}"></span>
       <span class="cn-id">${esc(r.linear_id || r.id)}</span>
       <span class="cn-ph">${esc(doing)}</span>
-      <span class="cn-st state-${state}">${esc(consoleState(state))}</span>
+      <span class="cn-st state-${state}">${esc(consoleLabel(r, state, sessions))}</span>
       ${(state === 'working' || state === 'stalled')
         ? `<span class="cn-el" data-since="${esc(queuedSince(r))}">${esc(elapsed(queuedSince(r)))}</span>`
         : ''}

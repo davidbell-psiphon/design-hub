@@ -326,11 +326,13 @@ describe('the three stage columns', () => {
     assert.equal(buttons, 4, 'expected one primary button per open card');
   });
 
-  test('a card with a run in flight shows a disabled Working button', () => {
+  test('a card with a run queued shows a disabled button saying so', () => {
+    // It says Queued rather than Working: the runner works one issue at a
+    // time, so of everything with a queue entry at most one is being worked.
     const html = sessionCard(row({ linear_id: 'CON-120', requested_stage: 'research' }));
-    assert.match(html, /btn btn-primary" disabled>Working/);
+    assert.match(html, /btn btn-primary" disabled>Queued</);
     assert.equal(html.includes("triggerSession('linear/CON-120'"), false,
-                 'a running card must not be clickable');
+                 'a queued card must not be clickable');
   });
 });
 
@@ -350,10 +352,14 @@ const GATE = [{ id: 'd1', label: 'Icon-only corner button' }];
 const stateRows = [
   row({ linear_id: 'RYV-84', project: 'ryve', status: 'error', requested_stage: 'design',
         labels: ['AI-research done'], phase: 'design', updated_at: stamp(200 * MIN),
+        requested_at: stamp(200 * MIN),
         prompt: 'The qa stage is not implemented yet' }),
   row({ linear_id: 'CON-120', requested_stage: 'research', updated_at: stamp(95 * MIN),
         requested_at: stamp(95 * MIN) }),
-  row({ linear_id: 'CON-118', requested_stage: 'research', updated_at: stamp(2 * MIN) }),
+  // Queued and not started — nothing in this fixture is running, which is what
+  // lets CON-120 above be stalled rather than merely waiting its turn.
+  row({ linear_id: 'CON-118', requested_stage: 'research',
+        requested_at: stamp(2 * MIN), updated_at: stamp(2 * MIN) }),
   row({ linear_id: 'RYV-187', project: 'ryve', options: GATE, updated_at: stamp(30 * MIN) }),
   row({ linear_id: 'CON-116', status: 'done', labels: ['AI-design done'], updated_at: stamp(MIN) }),
   row({ linear_id: 'CON-117', updated_at: stamp(MIN) }),
@@ -405,10 +411,12 @@ describe('a card reports the state it is actually in', () => {
     }
   });
 
-  test('a run that reported in two minutes ago is still Working', () => {
+  test('a recently queued run says its place, not that it is working', () => {
+    // Nothing in this fixture is running, so none of the three queued rows may
+    // claim to be. CON-118 was asked for last, so it is third of the three.
     const html = of('CON-118');
-    assert.deepEqual(pill(html), ['working', 'Working\u2026']);
-    assert.equal(html.includes('note-stalled'), false, 'a live run was flagged as stalled');
+    assert.deepEqual(pill(html), ['working', '3rd of 3']);
+    assert.equal(html.includes('note-stalled'), false, 'a fresh request was flagged as stalled');
   });
 
   test('an open gate reads Needs you', () => {
@@ -510,6 +518,89 @@ describe('the reader can be run from the board', () => {
   });
 });
 
+describe('the queue says where each card is in it', () => {
+  // Runs are serialised — GitHub's concurrency group lets exactly one happen
+  // at a time — so most cards with a queue entry have not started. They all
+  // said "Working…", which was true of at most one of them.
+  const queued = [
+    // Running: asked for at 6m, reported in at 5m.
+    row({ linear_id: 'QUE-1', status: 'active', requested_stage: 'research',
+          requested_at: stamp(6 * MIN), updated_at: stamp(5 * MIN) }),
+    row({ linear_id: 'QUE-2', requested_stage: 'research',
+          requested_at: stamp(4 * MIN), updated_at: stamp(4 * MIN) }),
+    row({ linear_id: 'QUE-3', requested_stage: 'design',
+          requested_at: stamp(2 * MIN), updated_at: stamp(2 * MIN) }),
+    row({ linear_id: 'QUE-4' }),
+  ];
+  let m;
+  before(async () => { m = await mount(queued); });
+  const of = (id) => m.sessionCard(queued.find(r => r.linear_id === id));
+
+  test('the one being worked says Working, and it is the only one that does', () => {
+    assert.match(of('QUE-1'), /status-pill status-working">Working/);
+    assert.equal(of('QUE-2').includes('>Working'), false, 'a waiting card claims to be working');
+  });
+
+  test('the rest say their place, oldest request first', () => {
+    assert.match(of('QUE-2'), /status-pill status-working">2nd of 3</);
+    assert.match(of('QUE-3'), /status-pill status-working">3rd of 3</);
+  });
+
+  test('the disabled button says the same thing as the pill', () => {
+    assert.match(of('QUE-2'), /btn btn-primary" disabled>2nd of 3</);
+  });
+
+  test('the console says it in its own column', () => {
+    assert.match(m.panel, /cn-st state-working">WORKING</);
+    assert.match(m.panel, /cn-st state-working">QUEUED 2\/3</);
+    assert.match(m.panel, /cn-st state-working">QUEUED 3\/3</);
+  });
+
+  test('a card with no run behind it is in no queue', () => {
+    assert.equal(of('QUE-4').includes('status-pill'), false);
+  });
+
+  test('alone in the queue, a card does not say "1st of 1"', () => {
+    const solo = row({ linear_id: 'ONE', requested_stage: 'research',
+                       requested_at: stamp(MIN), updated_at: stamp(MIN) });
+    return mount([solo]).then(one => {
+      assert.match(one.sessionCard(solo), /status-pill status-working">Queued</);
+    });
+  });
+});
+
+describe('waiting your turn is not stalling', () => {
+  // A queue of four ten-minute runs leaves the last one waiting forty minutes
+  // entirely correctly. Flagging that as a dead process is the board crying
+  // wolf about its own design — the flag is for the case where nothing is
+  // coming at all.
+  test('an old queued card is not stalled while something is running', () => {
+    const moving = [
+      row({ linear_id: 'MOV-1', status: 'active', requested_stage: 'research',
+            requested_at: stamp(90 * MIN), updated_at: stamp(MIN) }),
+      row({ linear_id: 'MOV-2', requested_stage: 'research',
+            requested_at: stamp(80 * MIN), updated_at: stamp(80 * MIN) }),
+    ];
+    return mount(moving).then(m => {
+      const card = m.sessionCard(moving[1]);
+      assert.equal(card.includes('Stalled'), false, 'a card waiting its turn was flagged stalled');
+      assert.match(card, /status-pill status-working">2nd of 2</);
+    });
+  });
+
+  test('with nothing running, the same card is stalled', () => {
+    const stuck = [
+      row({ linear_id: 'STK-1', requested_stage: 'research',
+            requested_at: stamp(90 * MIN), updated_at: stamp(90 * MIN) }),
+      row({ linear_id: 'STK-2', requested_stage: 'research',
+            requested_at: stamp(80 * MIN), updated_at: stamp(80 * MIN) }),
+    ];
+    return mount(stuck).then(m => {
+      assert.match(m.sessionCard(stuck[1]), /status-pill status-stalled">Stalled</);
+    });
+  });
+});
+
 describe('the console watches the whole pipeline', () => {
   let panel;
   before(async () => { panel = (await mount(stateRows)).panel; });
@@ -554,7 +645,8 @@ describe('the console watches the whole pipeline', () => {
     assert.match(panel, /cn-st state-error">ERROR</);
     assert.match(panel, /cn-st state-stalled">STALLED</);
     assert.match(panel, /cn-st state-waiting">NEEDS YOU</);
-    assert.match(panel, /cn-st state-working">WORKING</);
+    // Queued rather than WORKING: nothing in this fixture has been started.
+    assert.match(panel, /cn-st state-working">QUEUED 3\/3</);
   });
 
   test('a line that stopped says why, under itself', () => {

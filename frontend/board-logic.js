@@ -320,6 +320,77 @@ function queuedSince(r) {
   return (r && (r.requested_at || r.updated_at)) || '';
 }
 
+// ─── THE QUEUE ─────────────────────────────────────
+// `requested_stage` says a run was asked for. It does not say the run has
+// started, and with runs strictly serialised — GitHub's concurrency group lets
+// exactly one happen at a time — most queued cards have not. They all read
+// "Working…", so the one actually being worked looked identical to the one
+// fourth in line.
+//
+// The Hub can tell them apart without anything new being sent. The runner
+// posts `status: 'active'` as it picks an issue up, and that post moves
+// `updated_at`. So a row whose `updated_at` is later than its `requested_at`
+// has been started; one where they are still equal has only been asked for.
+//
+// Comparing the two timestamps rather than trusting `status` alone is what
+// makes it safe: a row left `active` by a previous run and then re-triggered
+// would otherwise claim to be running the moment you pressed the button.
+function isRunning(r) {
+  if (!isWorking(r) || !r || r.status !== 'active') return false;
+  var at = stampMs(lastActivity(r));
+  var asked = stampMs(r.requested_at);
+  if (isNaN(at) || isNaN(asked)) return false;
+  return at > asked;
+}
+
+// Everything waiting on the runner, oldest request first.
+//
+// Deliberately the same order and the same exclusions as GET /api/agent/queue:
+// a position shown on a card has to be the position the runner will actually
+// work in, or it is worse than showing nothing.
+function queuedRows(rows) {
+  var out = [];
+  for (var i = 0; i < (rows || []).length; i++) {
+    var r = rows[i];
+    if (r && isWorking(r) && isOpen(r)) out.push(r);
+  }
+  out.sort(function (a, b) {
+    var ta = stampMs(a.requested_at), tb = stampMs(b.requested_at);
+    if (isNaN(ta)) return 1;
+    if (isNaN(tb)) return -1;
+    return ta - tb;
+  });
+  return out;
+}
+
+// Where this card sits in that queue, 1-based. 0 for a card that is not in it.
+function queuePosition(r, rows) {
+  var q = queuedRows(rows);
+  for (var i = 0; i < q.length; i++) {
+    if (q[i] === r || (r && q[i].id && q[i].id === r.id)) return i + 1;
+  }
+  return 0;
+}
+
+// 1st, 2nd, 3rd, 4th — and 11th rather than 11st.
+function ordinal(n) {
+  var suffix = ['th', 'st', 'nd', 'rd'];
+  var v = n % 100;
+  return n + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+}
+
+// What a queued card says instead of "Working…", which was true of at most one
+// of them at a time.
+function queueLabel(r, rows) {
+  if (isRunning(r)) return RUN_STATE_TEXT.working;
+  var pos = queuePosition(r, rows);
+  var total = queuedRows(rows).length;
+  if (!pos) return RUN_STATE_TEXT.working;
+  // Alone in the queue and not yet started: "1st of 1" says nothing useful.
+  if (total < 2) return 'Queued';
+  return ordinal(pos) + ' of ' + total;
+}
+
 // Queued, and still queued half an hour later. This is the check that stops an
 // eternally-"working" card from hiding a process that died: the queue entry is
 // cleared when the stage reports done, so a request still sitting there is a
@@ -328,11 +399,28 @@ function queuedSince(r) {
 // A row whose timestamp will not parse is deliberately *not* stalled. Flagging
 // on missing data would flag the whole board the first time a column comes
 // back null, and a board crying wolf is a board nobody reads.
-function isStalled(r, now) {
+function isStalled(r, now, rows) {
   if (!isWorking(r)) return false;
   var t = stampMs(queuedSince(r));
   if (isNaN(t)) return false;
-  return ((now === undefined ? Date.now() : now) - t) >= STALL_AFTER_MIN * 60000;
+  if (((now === undefined ? Date.now() : now) - t) < STALL_AFTER_MIN * 60000) return false;
+
+  // Waiting your turn is not stalling. Runs are serialised, so a queue of four
+  // ten-minute runs leaves the last one waiting forty minutes entirely
+  // correctly — and flagging that as a dead process is the board crying wolf
+  // about its own design.
+  //
+  // What the flag is actually for is the case where nothing is coming: the
+  // runner took its two issues, deferred the rest, and nothing re-dispatched.
+  // So a queued card is stalled once it is old AND nothing in the queue is
+  // running. The card being worked is judged on its own silence, as before.
+  if (rows && !isRunning(r)) {
+    var q = queuedRows(rows);
+    for (var i = 0; i < q.length; i++) {
+      if (isRunning(q[i])) return false;
+    }
+  }
+  return true;
 }
 
 // The card's one true state. First match wins, and the order is the whole fix.
@@ -349,10 +437,10 @@ function isStalled(r, now) {
 //
 // `done` is safe to render because it is written in one place, by the runner
 // reporting a finished stage, and is never a default.
-function runState(r, now) {
+function runState(r, now, rows) {
   if (!r) return 'idle';
   if (r.status === 'error') return 'error';
-  if (isStalled(r, now)) return 'stalled';
+  if (isStalled(r, now, rows)) return 'stalled';
   if (isWorking(r)) return 'working';
   if (isGateOpen(r)) return 'waiting';
   if (r.status === 'done') return 'done';
@@ -392,9 +480,12 @@ var RECENT_DONE_H = 24;
 
 // The pill on the right of the card. Everything that is doing something gets
 // one; a quiet card still shows nothing but its stage.
-function statusPill(r, now) {
-  var state = runState(r, now);
+function statusPill(r, now, rows) {
+  var state = runState(r, now, rows);
   if (state === 'idle') return null;
+  // A queued card says where it is in the queue rather than claiming to be
+  // working, which was only ever true of one of them at a time.
+  if (state === 'working') return { text: queueLabel(r, rows), kind: 'working' };
   return { text: RUN_STATE_TEXT[state], kind: state };
 }
 
@@ -414,8 +505,8 @@ var CLEAR_LABEL = {
   error: 'Reset',
 };
 
-function clearLabel(r, now) {
-  return CLEAR_LABEL[runState(r, now)] || '';
+function clearLabel(r, now, rows) {
+  return CLEAR_LABEL[runState(r, now, rows)] || '';
 }
 
 // Why it stopped, in the agent's own words. The Hub shows no agent prose as a
@@ -449,7 +540,7 @@ function consoleRows(rows, now) {
   var out = [];
   for (var i = 0; i < (rows || []).length; i++) {
     var r = rows[i];
-    var state = runState(r, t);
+    var state = runState(r, t, rows);
     if (state === 'idle') continue;
     if (state === 'done') {
       var at = stampMs(lastActivity(r));
@@ -505,6 +596,17 @@ function clockTime(ts) {
 // What the console prints in the state column for a line.
 function consoleState(state) {
   return RUN_STATE_CONSOLE[state] || '';
+}
+
+// The same, but a queued line says where in the queue it is rather than
+// claiming to be working. Short form, because it is a column: QUEUED 3/4.
+function consoleLabel(r, state, rows) {
+  if (state !== 'working') return consoleState(state);
+  if (isRunning(r)) return RUN_STATE_CONSOLE.working;
+  var pos = queuePosition(r, rows);
+  var total = queuedRows(rows).length;
+  if (!pos || total < 2) return 'QUEUED';
+  return 'QUEUED ' + pos + '/' + total;
 }
 
 // Element ids are derived from session ids, which contain '/' and '-'.

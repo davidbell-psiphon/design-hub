@@ -77,7 +77,8 @@ They are the same fact rendered four ways, so they cannot contradict each other.
 |---|---|---|
 | **Error** | `status = 'error'` | the run stopped, and the card says why |
 | **Stalled** | queued, and still queued 30 minutes later | the run never came back, or was never picked up |
-| **Working…** | `requested_stage` is set | a run is in flight |
+| **Working…** | queued, and the runner has started it | a run is in flight |
+| **2nd of 4** | queued, waiting its turn | the runner is busy with an earlier one |
 | **Needs you** | a gate is open — options posted, nothing chosen | it is waiting on a decision |
 | **Done** | `status = 'done'` | the last stage finished |
 | *(none)* | anything else | quiet; the card shows just its stage |
@@ -351,6 +352,37 @@ a row keeps `status = 'done'` until something runs on it again, so without that
 window the console would carry every stage that has ever finished, for ever,
 which is a list and not a console. The head counts what is live and the foot
 counts what is not, so the two together always account for every open card.
+
+#### Where a card is in the queue
+
+Runs are serialised — GitHub's `concurrency` group lets exactly one happen at a
+time — so of everything carrying a queue entry, at most one is being worked.
+They all said **Working…**, which was true of one of them and a guess about the
+rest.
+
+The Hub can tell them apart without anything new being sent. The runner posts
+`status: 'active'` as it picks an issue up, and that post moves `updated_at`.
+So a row whose `updated_at` is later than its `requested_at` has been started;
+one where they are still equal has only been asked for. Comparing the two
+rather than trusting `status` alone is what makes it safe — a row left `active`
+by a previous run and then re-triggered would otherwise claim to be running the
+instant you pressed the button.
+
+So the one being worked says **Working…** and the rest say **2nd of 4**,
+**3rd of 4**, ordered by `requested_at` — the same order and the same
+exclusions as `GET /api/agent/queue`, because a position shown on a card has to
+be the position the runner will actually work in. The console says `QUEUED 2/4`
+in its state column, and the disabled stage button says the same thing the pill
+does. Alone in the queue a card just says **Queued**, since *1st of 1* tells you
+nothing.
+
+**Waiting your turn is not stalling.** A queue of four ten-minute runs leaves
+the last one waiting forty minutes entirely correctly, and flagging that as a
+dead process is the board crying wolf about its own design. So a queued card
+goes **Stalled** once it is past the threshold *and* nothing in the queue is
+running — which is the case the flag exists for: the runner took what it would
+take, deferred the rest, and nothing re-dispatched. The card actually being
+worked is still judged on its own silence.
 
 #### A clock that moves
 
