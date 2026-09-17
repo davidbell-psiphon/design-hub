@@ -82,6 +82,8 @@ async function mount(rows, readerCfg = ALL_TEAMS) {
     json: async () => {
       if (url.endsWith('/brands')) return brandRows;
       if (url.endsWith('/reader/teams')) return readerCfg;
+      if (url.endsWith('/runner')) return { repo: 'x/design-ai', workflow: 'design-ai.yml',
+        url: 'https://github.com/x/design-ai/actions/workflows/design-ai.yml' };
       return rows;
     },
   });
@@ -386,6 +388,23 @@ describe('a card reports the state it is actually in', () => {
     assert.match(html, /btn btn-primary" disabled>Stalled</);
   });
 
+  test('a running card carries a clock that ticks', () => {
+    // The assurance the board could not give: "Working…" with a frozen
+    // timestamp is identical whether the run started ten seconds or nine
+    // minutes ago, and the runner says nothing at all in between.
+    assert.match(of('CON-118'), /session-elapsed" data-since="[^"]+">\d+m\d\ds</);
+  });
+
+  test('a stalled card keeps its clock — that is how you see how long', () => {
+    assert.match(of('CON-120'), /session-elapsed" data-since=/);
+  });
+
+  test('a card with no run behind it has no clock to show', () => {
+    for (const id of ['RYV-187', 'CON-116', 'CON-117']) {
+      assert.equal(of(id).includes('session-elapsed'), false, id + ' shows a run clock');
+    }
+  });
+
   test('a run that reported in two minutes ago is still Working', () => {
     const html = of('CON-118');
     assert.deepEqual(pill(html), ['working', 'Working\u2026']);
@@ -512,6 +531,21 @@ describe('the console watches the whole pipeline', () => {
     assert.ok(at('RYV-84') < at('CON-120'), 'errored should sort above stalled');
     assert.ok(at('CON-120') < at('RYV-187'), 'stalled should sort above needs-you');
     assert.ok(at('RYV-187') < at('CON-118'), 'needs-you should sort above running');
+  });
+
+  test('the console carries the same clocks, on the same rows', () => {
+    // One derivation, so the console and the card cannot disagree about how
+    // long something has been going.
+    assert.match(panel, /cn-el" data-since="[^"]+">\d+m\d\ds</);
+  });
+
+  test('it links out to the runner log, which is the only live view', () => {
+    // The Hub sees a run start and sees it finish and nothing in between,
+    // because the Claude call blocks for minutes. So it links rather than
+    // pretending to know more than it does.
+    assert.match(panel, /class="cn-log"/);
+    assert.ok(panel.includes('/actions/workflows/'),
+              'the log link does not point at the runner workflow');
   });
 
   test('the state column reads as a level, and matches the card', () => {

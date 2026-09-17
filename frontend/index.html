@@ -117,6 +117,16 @@
   /* The Linear project, shown only where the brand section is not
      self-evident — see projectLabel(). On a Conduit App card it would say
      nothing the heading above it has not already said. */
+  /* The only thing on a card that moves by itself. Tabular figures so the
+     seconds ticking over do not shuffle what sits beside them. */
+  .session-elapsed { font-size: 10px; font-family: var(--mono); color: var(--run-working);
+                     font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .session-card.state-stalled .session-elapsed { color: var(--run-stalled); }
+  .cn-el { font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+           font-variant-numeric: tabular-nums; }
+  .cn-log { margin-left: auto; font-size: 10px; color: var(--text-muted);
+            text-decoration: none; white-space: nowrap; }
+  .cn-log:hover { color: var(--text); }
   .session-project { font-size: 10px; color: var(--text-muted); background: var(--surface-2);
                      border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
                      white-space: nowrap; }
@@ -342,6 +352,12 @@ let sessions = [];
 // implying nothing is being read.
 let readerConfig = null;
 
+// Where the runner's own log lives. The only genuinely live view of a job in
+// flight — the Hub sees a run start and sees it finish and nothing in between,
+// because the Claude call blocks for minutes — so the board links out to it
+// rather than pretending it knows more than it does.
+let runnerUrl = null;
+
 // null = all teams. Deliberately not persisted: the board opens showing
 // everything, every time. Filtering is something you opt into for a moment,
 // not a state you get stuck in.
@@ -535,6 +551,9 @@ function sessionCard(r) {
       ${projectLabel(r) ? `<span class="session-project">${esc(projectLabel(r))}</span>` : ''}
       <span class="stage-pill${isSkipped(r) ? ' is-skipped' : ''}">${esc(stageLabel(r))}</span>
       ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
+      ${(state === 'working' || state === 'stalled')
+        ? `<span class="session-elapsed" data-since="${esc(queuedSince(r))}">${esc(elapsed(queuedSince(r)))}</span>`
+        : ''}
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
@@ -610,6 +629,12 @@ async function loadSources() {
     readerConfig = cfg && Array.isArray(cfg.available) ? cfg : null;
   } catch (e) {
     readerConfig = null;
+  }
+  try {
+    const runner = await api('/runner');
+    runnerUrl = (runner && runner.url) || null;
+  } catch (e) {
+    runnerUrl = null;
   }
 }
 
@@ -823,6 +848,9 @@ function renderConsole() {
       <span class="cn-id">${esc(r.linear_id || r.id)}</span>
       <span class="cn-ph">${esc(doing)}</span>
       <span class="cn-st state-${state}">${esc(consoleState(state))}</span>
+      ${(state === 'working' || state === 'stalled')
+        ? `<span class="cn-el" data-since="${esc(queuedSince(r))}">${esc(elapsed(queuedSince(r)))}</span>`
+        : ''}
     </button>${why ? `<div class="cn-msg">${esc(why)}</div>` : ''}`;
   };
 
@@ -833,6 +861,7 @@ function renderConsole() {
     <div class="cn-head">
       <span class="cn-title">Activity</span>
       <span class="cn-counts">${live} live / ${open.length} open</span>
+      ${runnerUrl ? `<a class="cn-log" href="${esc(runnerUrl)}" target="_blank" rel="noopener">log \u2197</a>` : ''}
     </div>
     <div class="cn-body">
       ${lines.length ? lines.map(line).join('')
@@ -1215,6 +1244,21 @@ async function reassignSession(id, project) {
 //     is a far worse bug than a console that is thirty seconds stale.
 const REFRESH_MS = 30000;
 
+// The elapsed clocks tick every second, and only they do. A full re-render at
+// 1Hz would be wasteful and would fight anything being typed into the board,
+// so this walks the [data-since] spans and rewrites their text, leaving the
+// rest of the DOM exactly as it was.
+const TICK_MS = 1000;
+
+function tickElapsed() {
+  if (typeof document.querySelectorAll !== 'function') return;
+  if (document.hidden) return;
+  const now = Date.now();
+  for (const el of document.querySelectorAll('[data-since]')) {
+    el.textContent = elapsed(el.getAttribute('data-since'), now);
+  }
+}
+
 function boardIsBusy() {
   if (typeof document.querySelectorAll !== 'function') return false;
   const board = document.getElementById('board');
@@ -1235,6 +1279,7 @@ function tick() {
 // no timers on it — do not leave an interval behind holding the process open.
 if (typeof window !== 'undefined' && window.setInterval) {
   window.setInterval(tick, REFRESH_MS);
+  window.setInterval(tickElapsed, TICK_MS);
 }
 if (document.addEventListener) {
   // Coming back to the tab should not mean waiting out the rest of the

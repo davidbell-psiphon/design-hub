@@ -352,6 +352,28 @@ window the console would carry every stage that has ever finished, for ever,
 which is a list and not a console. The head counts what is live and the foot
 counts what is not, so the two together always account for every open card.
 
+#### A clock that moves
+
+A run reports in **twice**: the runner posts `active` before it starts and
+`done` or `error` when it finishes, and the Claude call between them is a
+blocking `spawnSync` that takes minutes. So the Hub genuinely has no new
+information during a run, and a card was identical at second one and at minute
+nine. **Working…** was a claim with nothing behind it.
+
+So a working or stalled card carries an elapsed clock — `4m12s` — counting up
+every second, on the card and on its console line. It is honest about what it
+is: elapsed time, not progress. But it moves, which is the difference between
+a board that looks alive and one you have to refresh to trust.
+
+It ticks on its own 1-second interval that rewrites only the `[data-since]`
+spans. A full re-render at 1Hz would be wasteful and would fight anything being
+typed into the board.
+
+**And the console links to `log ↗`** — the runner's GitHub Actions workflow,
+from `GET /api/runner`. That log is the only truly live view of a job, because
+it is the only place the work is actually narrating itself. The Hub does not
+pretend to know more than it does; it points at what does.
+
 #### It keeps itself current
 
 The board re-reads `/api/agent/sessions` every 30 seconds and re-renders. A

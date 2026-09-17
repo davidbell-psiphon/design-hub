@@ -470,6 +470,29 @@ function consoleRows(rows, now) {
   return out;
 }
 
+// How long a run has been going, counted in seconds.
+//
+// The one thing on this board that moves on its own, and it exists because
+// nothing else does: the runner posts `active` once before it starts and does
+// not post again until it is done or has failed, often many minutes later. So
+// the card is otherwise *identical* at second one and at minute nine, and
+// "Working…" is a claim with no evidence behind it.
+//
+// timeAgo is no use here — it says "4m" for everything between four and five
+// minutes, which is exactly the stillness being fixed. This counts seconds,
+// because the whole point is that it is visibly moving.
+function elapsed(ts, now) {
+  var t = stampMs(ts);
+  if (isNaN(t)) return '';
+  var secs = Math.floor(((now === undefined ? Date.now() : now) - t) / 1000);
+  if (secs < 0) secs = 0;
+  var h = Math.floor(secs / 3600);
+  var m = Math.floor((secs % 3600) / 60);
+  var s = secs % 60;
+  if (h) return h + 'h' + ('0' + m).slice(-2) + 'm';
+  return m + 'm' + ('0' + s).slice(-2) + 's';
+}
+
 // The left column: local wall-clock time, because the console is read against
 // the clock on the wall and not against a UTC stamp in the database.
 function clockTime(ts) {

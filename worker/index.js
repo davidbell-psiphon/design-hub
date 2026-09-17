@@ -1180,6 +1180,19 @@ async function route(request, env) {
       return json({ ok: true, state: found.state.name, already: !!found.already });
     }
 
+    // GET /api/runner — where the work actually happens, so the board can link
+    // to it. The run's own log is the only truly live view of a job: the runner
+    // reports `active` once and then nothing until it is done, because the
+    // Claude call blocks for minutes. One link beats guessing.
+    if (method === 'GET' && path === '/api/runner') {
+      const repo = env.RUNNER_REPO || RUNNER_REPO;
+      const workflow = env.RUNNER_WORKFLOW || RUNNER_WORKFLOW;
+      return json({
+        repo, workflow,
+        url: `https://github.com/${repo}/actions/workflows/${workflow}`,
+      });
+    }
+
     // GET /api/reader/teams — what the reader reads, and what it could read.
     if (method === 'GET' && path === '/api/reader/teams') {
       const [selected, available] = await Promise.all([

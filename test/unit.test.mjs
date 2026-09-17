@@ -29,7 +29,7 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
         stageState, stageReached, stageLabel, isSkipped,
         runState, isStalled, lastActivity, queuedSince, stampMs, failureReason,
-        consoleRows, clockTime, consoleState, clearLabel, groupOf, projectLabel,
+        consoleRows, clockTime, consoleState, clearLabel, groupOf, projectLabel, elapsed,
         STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
 
 // A fixed clock, so "stalled" is a fact about the row and not about when the
@@ -511,6 +511,40 @@ describe('clearLabel — Stop while it runs, Reset once it has stopped', () => {
     assert.equal(clearLabel({}, NOW), '');
     // Not even an open gate: a question is not a run.
     assert.equal(clearLabel({ status: 'waiting', options: [{ id: 'd1', label: 'One' }] }, NOW), '');
+  });
+});
+
+describe('elapsed — the one thing on the board that moves by itself', () => {
+  // It exists because nothing else does: the runner posts 'active' once before
+  // it starts and nothing again until it is done, so the card is otherwise
+  // identical at second one and at minute nine.
+  const at = (secs) => NOW - secs * 1000;
+
+  test('it counts seconds, because the point is that it is moving', () => {
+    // timeAgo says "4m" for everything between four and five minutes, which is
+    // exactly the stillness this is fixing.
+    assert.equal(elapsed(new Date(at(0)).toISOString(), NOW), '0m00s');
+    assert.equal(elapsed(new Date(at(9)).toISOString(), NOW), '0m09s');
+    assert.equal(elapsed(new Date(at(65)).toISOString(), NOW), '1m05s');
+    assert.equal(elapsed(new Date(at(599)).toISOString(), NOW), '9m59s');
+  });
+
+  test('past an hour it stops counting seconds nobody is reading', () => {
+    assert.equal(elapsed(new Date(at(3600)).toISOString(), NOW), '1h00m');
+    assert.equal(elapsed(new Date(at(3600 * 2 + 300)).toISOString(), NOW), '2h05m');
+  });
+
+  test('a clock skew does not render a negative run', () => {
+    assert.equal(elapsed(new Date(NOW + 5000).toISOString(), NOW), '0m00s');
+  });
+
+  test('nothing to count is empty, not NaN', () => {
+    assert.equal(elapsed(null, NOW), '');
+    assert.equal(elapsed('not a date', NOW), '');
+  });
+
+  test('it reads the SQLite stamps the Hub actually stores', () => {
+    assert.equal(elapsed(minsAgo(3), NOW), '3m00s');
   });
 });
 
