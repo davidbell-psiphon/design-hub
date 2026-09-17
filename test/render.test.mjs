@@ -440,48 +440,33 @@ describe('a card reports the state it is actually in', () => {
 
 describe('where Linear issues are read from', () => {
   // It was a constant in the Worker that only a deploy could change, and it
-  // has been both "design teams only" and "every team" inside a fortnight.
-  // Neither is a decision that belongs in a deploy.
-  test('the console names its sources, and offers every team as one', () => {
-    const panel = mounted.panel;
-    assert.match(panel, /cn-sources/);
-    for (const team of ALL_TEAMS.available) {
-      assert.ok(panel.includes('>' + team + '<'), team + ' is not offered as a source');
-    }
-  });
-
-  test('nothing selected says so in words, because the ticks read backwards', () => {
-    // Unticking the last team widens rather than narrows, which is the
-    // opposite of what a list of checkboxes implies — so the state is spelled
-    // out underneath every time rather than inferred from the ticks.
-    assert.match(mounted.panel, /cn-src-where">all teams</);
-    assert.match(mounted.panel, /Nothing selected, so every team is read/);
-  });
-
-  test('a narrowed reader says which teams, and ticks them', () => {
-    return mount(sessions, { selected: ['Ryve App'], available: ALL_TEAMS.available,
-                             source: 'linear', all: false }).then(m => {
-      assert.match(m.panel, /cn-src-where">1 teams</);
-      assert.match(m.panel, /cn-src on"[\s\S]*?>Ryve App</);
-      assert.match(m.panel, /Reading 1 of 3 teams/);
-      // And the way back out is stated, since unticking is how you widen.
-      assert.match(m.panel, /Untick them all to read every team/);
+  // has been both "design teams only" and "every team" inside a fortnight —
+  // so the board could not answer "why is that not on my board".
+  test('the console says where it is scraping from, in a line', () => {
+    return mount(sessions, { selected: ['Conduit App', 'Ryve App'],
+                             available: ALL_TEAMS.available, all: false }).then(m => {
+      assert.match(m.panel, /cn-from/);
+      assert.match(m.panel, /Conduit App \u00b7 Ryve App/);
     });
   });
 
-  test('toggling sends the whole set, not the one that changed', () => {
-    assert.match(mounted.panel, /toggleSource\('Conduit App'/);
+  test('an empty set means every team, and says so rather than rendering blank', () => {
+    assert.match(mounted.panel, /cn-from[\s\S]*?every team/);
   });
 
-  test('it survives the re-render, like the drawers', () => {
-    assert.match(mounted.panel, /ontoggle="rememberSection\('sources'/);
+  test('it is a statement and not a control', () => {
+    // The set changes rarely and on purpose. A console you can misclick into
+    // reading the wrong half of Linear is worse than one you change elsewhere.
+    for (const gone of ['toggleSource', 'cn-src-box', 'cn-sources']) {
+      assert.equal(mounted.panel.includes(gone), false, gone + ' is still in the console');
+    }
   });
 
-  test('a board that could not read the config renders no source list at all', () => {
-    // Rather than an empty one, which would read as "nothing is being read" —
+  test('a board that could not read the config says nothing at all', () => {
+    // Rather than an empty line, which would read as "nothing is being read" —
     // the exact opposite of what an empty selection means.
     return mount(sessions, null).then(m => {
-      assert.equal(m.panel.includes('cn-sources'), false);
+      assert.equal(m.panel.includes('cn-from'), false);
     });
   });
 });

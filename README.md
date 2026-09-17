@@ -495,20 +495,28 @@ next quarter. Neither is a decision that belongs in a deploy, so it is a table �
 `reader_teams`, [`piece9-schema.sql`](./piece9-schema.sql) — and the board
 edits it.
 
-**The console's foot is where you edit it.** A collapsed **Reading from** list
-at the bottom of the right-hand rail, one line per team in the workspace, ticked
-where it is being read. It sits there because "why is that not on my board" is a
-question always asked while looking at the board.
+**The console's foot says what it is reading**, in one quiet line:
+
+```
+from Conduit App · Forge · Psiphon App · Ryve App · Websites
+```
+
+It sits there because "why is that not on my board" is a question always asked
+while looking at the board, and the answer used to be invisible — a constant in
+the Worker that only a deploy could change.
+
+**It is a statement, not a control.** The set changes rarely and on purpose, so
+it is edited through `PUT /api/reader/teams` rather than by clicking around a
+status panel: a console you can misclick into reading the wrong half of Linear
+is worse than one you have to go and change deliberately.
 
 **Nothing selected means every team.** That is the setting and not a fallback,
-so applying the schema changes nothing on its own. It also reads backwards for a
-list of ticks — unticking the last team *widens* the reader — so the note under
-the list says which of the two states it is in, in words, every time.
+so applying the schema changes nothing on its own, and the line says "every
+team" in words rather than rendering blank.
 
-The available teams come from Linear itself, so a team with no issue assigned to
-Dave yet can still be chosen. If that call fails the list falls back to the teams
-the Hub has actually seen: an outage should narrow the list rather than empty the
-screen.
+`GET /api/reader/teams` also reports every team in the workspace, so whatever
+edits the set can offer the full list. If Linear cannot be reached it falls back
+to the teams the Hub has actually seen.
 
 Configured teams narrow the **query**, not the rows it returns. Filtering after
 the fact would let teams nobody reads eat the `first: 100` budget, which is the
@@ -521,6 +529,12 @@ which teams it was scoped to, or `all`.
 Turning a team off stops it being *discovered*. Cards already on the board stay:
 reconciliation still tracks them, and nothing is deleted. Dismiss or No design is
 how a card leaves.
+
+The live set is the five teams that have a track in
+[`lib/derive.mjs`](./lib/derive.mjs) — Conduit App, Forge, Psiphon App, Ryve App
+and Websites. Every other team blocks the runner on `unresolved-track` before it
+reaches a destination, so reading them only ever filled the board with cards
+nothing could act on: 33 Marketing ones, at the point this was set.
 
 Both halves of that used to be narrower, and both cost work its place on the
 board.
