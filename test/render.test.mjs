@@ -58,11 +58,16 @@ function stubEl() {
   };
 }
 
+// What GET /api/reader/teams answers with, unless a suite says otherwise.
+// Empty `selected` is the unconfigured reader: every team is read.
+const ALL_TEAMS = { selected: [], available: ['Conduit App', 'Marketing', 'Ryve App'],
+                    source: 'linear', all: true };
+
 // Mount the board against a stub DOM and one set of rows, and hand back what
 // it rendered. Extracted so that a suite can render a fixture of its own — the
 // run-state suites need errored and stalled rows, and putting those in the
 // shared fixture would move every count the suites above assert on.
-async function mount(rows) {
+async function mount(rows, readerCfg = ALL_TEAMS) {
   const html = fs.readFileSync(path.join(ROOT, 'frontend/index.html'), 'utf8');
   const logic = fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8');
   const inline = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
@@ -74,7 +79,11 @@ async function mount(rows) {
   };
   globalThis.fetch = async (url) => ({
     ok: true,
-    json: async () => (url.endsWith('/brands') ? brandRows : rows),
+    json: async () => {
+      if (url.endsWith('/brands')) return brandRows;
+      if (url.endsWith('/reader/teams')) return readerCfg;
+      return rows;
+    },
   });
 
   const run = new Function(logic + '\n' + inline + '\n;return { loadBoard, sessionCard };');
@@ -96,10 +105,11 @@ async function mount(rows) {
   };
 }
 
-let board, sidebar, topbar, drawers, sessionCard;
+let board, sidebar, topbar, drawers, sessionCard, mounted;
 
 before(async () => {
-  ({ board, sidebar, topbar, drawers, sessionCard } = await mount(sessions));
+  mounted = await mount(sessions);
+  ({ board, sidebar, topbar, drawers, sessionCard } = mounted);
 });
 
 const cards = html => (html.match(/class="session-card/g) || []).length;
@@ -113,7 +123,17 @@ describe('collapsed sections', () => {
   });
 
   test('collapsed by default', () => {
-    assert.equal(/<details class="drawer"[^>]*\bopen\b/.test(board), false);
+    // Matched as an attribute — \bopen\b also finds `this.open` in the
+    // ontoggle handler that remembers which drawers are open across a
+    // re-render, which every drawer now carries whether or not it is open.
+    assert.equal(/<details class="drawer"[^>]*\sopen[\s>]/.test(board), false);
+  });
+
+  test('but an open drawer survives the thirty-second re-render', () => {
+    // The board re-renders itself on a timer now, and innerHTML replacement
+    // loses <details> state — so a drawer opened would close under you inside
+    // half a minute without the handler that records it.
+    assert.match(board, /<details class="drawer"[^>]*ontoggle="rememberSection\(/);
   });
 
   test('a canceled row that was also dismissed files under Completed', () => {
@@ -415,6 +435,54 @@ describe('a card reports the state it is actually in', () => {
                                  prompt: 'The qa stage is not implemented yet',
                                  dismissed_at: '2026-09-05 02:00:00' }));
     assert.equal(put_aside.includes('card-note'), false, 'a put-aside card reported a failure');
+  });
+});
+
+describe('where Linear issues are read from', () => {
+  // It was a constant in the Worker that only a deploy could change, and it
+  // has been both "design teams only" and "every team" inside a fortnight.
+  // Neither is a decision that belongs in a deploy.
+  test('the console names its sources, and offers every team as one', () => {
+    const panel = mounted.panel;
+    assert.match(panel, /cn-sources/);
+    for (const team of ALL_TEAMS.available) {
+      assert.ok(panel.includes('>' + team + '<'), team + ' is not offered as a source');
+    }
+  });
+
+  test('nothing selected says so in words, because the ticks read backwards', () => {
+    // Unticking the last team widens rather than narrows, which is the
+    // opposite of what a list of checkboxes implies — so the state is spelled
+    // out underneath every time rather than inferred from the ticks.
+    assert.match(mounted.panel, /cn-src-where">all teams</);
+    assert.match(mounted.panel, /Nothing selected, so every team is read/);
+  });
+
+  test('a narrowed reader says which teams, and ticks them', () => {
+    return mount(sessions, { selected: ['Ryve App'], available: ALL_TEAMS.available,
+                             source: 'linear', all: false }).then(m => {
+      assert.match(m.panel, /cn-src-where">1 teams</);
+      assert.match(m.panel, /cn-src on"[\s\S]*?>Ryve App</);
+      assert.match(m.panel, /Reading 1 of 3 teams/);
+      // And the way back out is stated, since unticking is how you widen.
+      assert.match(m.panel, /Untick them all to read every team/);
+    });
+  });
+
+  test('toggling sends the whole set, not the one that changed', () => {
+    assert.match(mounted.panel, /toggleSource\('Conduit App'/);
+  });
+
+  test('it survives the re-render, like the drawers', () => {
+    assert.match(mounted.panel, /ontoggle="rememberSection\('sources'/);
+  });
+
+  test('a board that could not read the config renders no source list at all', () => {
+    // Rather than an empty one, which would read as "nothing is being read" —
+    // the exact opposite of what an empty selection means.
+    return mount(sessions, null).then(m => {
+      assert.equal(m.panel.includes('cn-sources'), false);
+    });
   });
 });
 

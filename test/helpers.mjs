@@ -22,7 +22,7 @@ export const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..'
 export const PIECES = ['agent-schema.sql', 'reader-schema.sql', 'track-schema.sql',
                       'piece4-schema.sql', 'piece5-schema.sql', 'piece6-schema.sql',
                       'piece7-schema.sql', 'migration-001-gates.sql',
-                      'piece8-schema.sql'];
+                      'piece8-schema.sql', 'piece9-schema.sql'];
 
 // Comments first, then split on statement boundaries — that order matters,
 // because one piece4 comment has a semicolon in it. Safe here because none of
@@ -148,6 +148,10 @@ export function stubLinear(issues, mutations, opts = {}) {
     // A team's workflow states, for the complete route. Two completed states,
     // deliberately out of position order in the array, so "the earliest by
     // position wins" is a real assertion rather than a coincidence of ordering.
+    if (/ReaderTeams/.test(q)) {
+      return gql({ teams: { nodes: (opts.teams || ['Conduit App', 'Marketing', 'Ryve App'])
+        .map((name) => ({ name })) } });
+    }
     if (/IssueStates/.test(q)) {
       const found = issues.find((i) => i.id === body.variables.id);
       if (!found) return gql({ issue: null });

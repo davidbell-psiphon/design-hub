@@ -55,6 +55,7 @@ npx wrangler d1 execute design-hub --remote --file=./piece5-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece6-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece7-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece8-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece9-schema.sql
 ```
 
 **If `--file` answers `Authentication error [code: 10000]`,** run the piece one

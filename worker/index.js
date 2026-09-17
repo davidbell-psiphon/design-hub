@@ -281,6 +281,47 @@ async function rowIdForLinearKey(env, key) {
   return row ? row.id : null;
 }
 
+// ─── WHERE ISSUES ARE READ FROM ────────────────────
+// The team filter used to be a constant in this file, so changing it meant a
+// deploy. It is a table now (piece9-schema.sql) and the board edits it.
+//
+// **Empty means every team.** That is not a fallback, it is the setting: the
+// reader with no configured teams behaves exactly as it does today, so applying
+// the schema changes nothing until someone chooses.
+//
+// The try/catch is for the window between deploying this and applying piece9 —
+// no table, no configuration, read everything. A configuration question is not
+// worth a 500 on the cron.
+async function readerTeams(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM reader_teams ORDER BY name`
+    ).all();
+    return (results || []).map((r) => r.name).filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+
+// Every team in the workspace, so the board can offer one that has no issue
+// assigned to Dave yet. Falls back to the teams the Hub has actually seen: a
+// Linear outage should narrow the list rather than empty the screen.
+const READER_TEAMS_QUERY = `query ReaderTeams { teams(first: 100) { nodes { name } } }`;
+
+async function availableTeams(env) {
+  try {
+    const data = await linearGraphQL(env, READER_TEAMS_QUERY, {});
+    const nodes = (data && data.data && data.data.teams && data.data.teams.nodes) || [];
+    const names = nodes.map((t) => t && t.name).filter(Boolean);
+    if (names.length) return { teams: names.sort(), from: 'linear' };
+  } catch (e) { /* fall through to what we have seen */ }
+
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT team AS name FROM agent_sessions WHERE team IS NOT NULL ORDER BY team`
+  ).all();
+  return { teams: (results || []).map((r) => r.name).filter(Boolean), from: 'seen' };
+}
+
 // ─── LINEAR READER ─────────────────────────────────
 // Pulls every issue assigned to Dave Bell, across all teams, in any open
 // state. No label filter — gathering is not triggering.
@@ -288,6 +329,14 @@ async function rowIdForLinearKey(env, key) {
 // Idempotent: skips issues whose linear_id already has a row.
 //
 async function readLinear(env) {
+  // Configured teams narrow the query itself rather than the rows it returns.
+  // Filtering after the fact would let teams nobody reads eat the first: 100
+  // budget, which is the same trap the two-pass reader exists to avoid.
+  const teams = await readerTeams(env);
+  const teamFilter = teams.length
+    ? `\n          team: { name: { in: [${teams.map((t) => JSON.stringify(t)).join(', ')}] } }`
+    : '';
+
   const query = `
     query DesignReaderIssues {
       issues(
@@ -302,7 +351,7 @@ async function readLinear(env) {
           # issues: there are ~66 of those against ~60 open, so letting them in
           # would blow the first: 100 and starve the board of real work. Open
           # work is the work the board is for, and all of it fits.
-          state: { type: { in: ["triage", "backlog", "unstarted", "started"] } }
+          state: { type: { in: ["triage", "backlog", "unstarted", "started"] } }${teamFilter}
         }
       ) {
         nodes {
@@ -450,7 +499,7 @@ async function readLinear(env) {
   }
 
   const reconciled = await reconcileTracked(env);
-  return { inserted, updated, skipped, reconciled };
+  return { inserted, updated, skipped, reconciled, teams: teams.length ? teams : 'all' };
 }
 
 // ─── RECONCILIATION PASS ───────────────────────────
@@ -1129,6 +1178,39 @@ async function route(request, env) {
           WHERE id = ?`
       ).bind(id).run();
       return json({ ok: true, state: found.state.name, already: !!found.already });
+    }
+
+    // GET /api/reader/teams — what the reader reads, and what it could read.
+    if (method === 'GET' && path === '/api/reader/teams') {
+      const [selected, available] = await Promise.all([
+        readerTeams(env), availableTeams(env),
+      ]);
+      // `all: true` is the honest way to say "nothing is selected", because an
+      // empty list means every team rather than no teams, and a board that
+      // showed an empty list as "reading nothing" would have it backwards.
+      return json({ selected, available: available.teams, source: available.from,
+                    all: selected.length === 0 });
+    }
+
+    // PUT /api/reader/teams — replace the set. `{"teams": []}` means every
+    // team, which is the setting and not a refusal to choose.
+    if (method === 'PUT' && path === '/api/reader/teams') {
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      if (!Array.isArray(b.teams)) return err('teams must be an array');
+      const names = [...new Set(b.teams.map((t) => String(t || '').trim()).filter(Boolean))];
+      if (names.length > 100) return err('too many teams', 413);
+      if (names.some((n) => n.length > 200)) return err('team name too long');
+
+      // Replaced rather than merged: the board sends the whole set it is
+      // showing, so what is stored is what you were looking at.
+      await env.DB.prepare(`DELETE FROM reader_teams`).run();
+      for (const name of names) {
+        await env.DB.prepare(
+          `INSERT INTO reader_teams (name) VALUES (?) ON CONFLICT(name) DO NOTHING`
+        ).bind(name).run();
+      }
+      return json({ ok: true, selected: names, all: names.length === 0 });
     }
 
     // POST /api/agent/sessions/setaside — dismiss a list of cards at once.

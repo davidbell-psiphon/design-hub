@@ -110,6 +110,8 @@ const BOARD_ROUTES = [
   ['DELETE', '/api/agent/session/' + CARD + '/dismiss'],
   ['DELETE', '/api/agent/session/' + CARD],
   ['POST',   '/api/read-linear'],
+  ['GET',    '/api/reader/teams'],
+  ['PUT',    '/api/reader/teams', { teams: ['Ryve App'] }],
   ['POST',   '/api/agent/stage-done', { linear_id: 'RYV-84', stage: 'research' }],
 ];
 

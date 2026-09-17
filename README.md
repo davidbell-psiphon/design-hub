@@ -481,9 +481,46 @@ reads them.
 
 Runs Wednesday and Friday at 8am Toronto (`0 13 * * 3,5`), because design issues
 get created Tuesdays and Thursdays. It pulls **every Linear issue assigned to
-Dave Bell, on any team, in any open state** — triage, backlog, todo or in
-progress — and upserts one `agent_sessions` row per issue. No label filter:
-gathering is still not triggering.
+Dave Bell, in any open state** — triage, backlog, todo or in progress —
+**from the teams the board is set to read**, and upserts one `agent_sessions`
+row per issue. No label filter: gathering is still not triggering.
+
+### Where issues are read from
+
+The team filter has been a constant in `worker/index.js` twice: first "design
+teams only", then, when that hid design work filed on the wrong team, nothing at
+all. Removing it put 57 cards on the board, 33 of them Marketing work the Design
+AI cannot place. Putting it back would mean guessing today which teams matter
+next quarter. Neither is a decision that belongs in a deploy, so it is a table —
+`reader_teams`, [`piece9-schema.sql`](./piece9-schema.sql) — and the board
+edits it.
+
+**The console's foot is where you edit it.** A collapsed **Reading from** list
+at the bottom of the right-hand rail, one line per team in the workspace, ticked
+where it is being read. It sits there because "why is that not on my board" is a
+question always asked while looking at the board.
+
+**Nothing selected means every team.** That is the setting and not a fallback,
+so applying the schema changes nothing on its own. It also reads backwards for a
+list of ticks — unticking the last team *widens* the reader — so the note under
+the list says which of the two states it is in, in words, every time.
+
+The available teams come from Linear itself, so a team with no issue assigned to
+Dave yet can still be chosen. If that call fails the list falls back to the teams
+the Hub has actually seen: an outage should narrow the list rather than empty the
+screen.
+
+Configured teams narrow the **query**, not the rows it returns. Filtering after
+the fact would let teams nobody reads eat the `first: 100` budget, which is the
+trap the two-pass reader exists to avoid.
+
+Changing the list does not run a read — where issues come from and going to get
+them are two decisions, and **Read Linear** is the second one. A read reports
+which teams it was scoped to, or `all`.
+
+Turning a team off stops it being *discovered*. Cards already on the board stay:
+reconciliation still tracks them, and nothing is deleted. Dismiss or No design is
+how a card leaves.
 
 Both halves of that used to be narrower, and both cost work its place on the
 board.
@@ -703,6 +740,8 @@ Used by the board:
 | `DELETE /api/agent/session/:id/setaside` | Put it back on the board |
 | `POST /api/agent/sessions/setaside` | Dismiss a list of cards at once (`{"ids":[…]}`) |
 | `POST /api/agent/session/:id/complete` | Mark done — set the Linear issue to its team's finished state |
+| `GET /api/reader/teams` | What the reader reads, and every team it could read |
+| `PUT /api/reader/teams` | Replace that set (`{"teams":[…]}`; `[]` means every team) |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
 | `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id"}` or `{"response_section"}` where the gate has options, free text where it does not |
 | `PATCH /api/agent/session/:id/reopen` | Send a gate back for a new round — taking a decision back, or rejecting every option with `{"note"}` |
@@ -919,6 +958,7 @@ piece5-schema.sql              dismissed_at (no-design)
 piece6-schema.sql              agent_session_id + the duplicate-row merge
 piece7-schema.sql              requested_stage / requested_at (the queue) + labels
 piece8-schema.sql              set_aside_at (Dismissed) + linear_project
+piece9-schema.sql              reader_teams — where Linear issues are read from
 migration-001-gates.sql        options, the constrained decision, gate_round,
                                mockups/handoff, and the gate_decisions table
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL

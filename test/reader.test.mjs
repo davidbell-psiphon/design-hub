@@ -46,8 +46,11 @@ describe('the two passes are two passes', () => {
     assert.ok(reconcile(queries), 'no reconciliation pass ran');
     assert.ok(queries.indexOf(discovery(queries)) < queries.indexOf(reconcile(queries)),
               'reconciliation ran before discovery');
+    // `teams` says which teams the read was scoped to, or 'all' where the
+    // reader_teams table is empty — so a read that quietly narrowed says so.
     assert.deepEqual(Object.keys(result).sort(),
-                     ['inserted', 'reconciled', 'skipped', 'updated']);
+                     ['inserted', 'reconciled', 'skipped', 'teams', 'updated']);
+    assert.equal(result.teams, 'all', 'an unconfigured reader should read every team');
   });
 
   test('with nothing tracked yet there is nothing to reconcile', async () => {

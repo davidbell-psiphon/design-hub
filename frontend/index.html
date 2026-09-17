@@ -201,6 +201,29 @@
             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .cn-brand { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
   .cn-empty { padding: 10px 12px; color: var(--text-dim); font-size: 11px; }
+  /* WHERE ISSUES COME FROM — at the foot of the console, because it is the
+     answer to "why is that not on my board" and that question is always asked
+     while looking at the board. */
+  .cn-sources { border-top: 1px solid var(--border); flex-shrink: 0; }
+  .cn-sources > summary { display: flex; align-items: center; gap: 6px; cursor: pointer;
+                          padding: 8px 12px; font-family: var(--mono); font-size: 10px;
+                          color: var(--text-muted); list-style: none; }
+  .cn-sources > summary::-webkit-details-marker { display: none; }
+  .cn-sources > summary:hover { color: var(--text); }
+  .cn-sources .chev { display: inline-block; transition: transform .15s; font-size: 9px; }
+  .cn-sources[open] .chev { transform: rotate(90deg); }
+  .cn-src-where { margin-left: auto; color: var(--text-dim); }
+  .cn-src-body { max-height: 32vh; overflow-y: auto; padding-bottom: 6px; }
+  .cn-src-body::-webkit-scrollbar { width: 3px; }
+  .cn-src-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+  .cn-src { display: flex; align-items: center; gap: 7px; width: 100%; padding: 3px 12px;
+            border: none; background: none; text-align: left; cursor: pointer;
+            font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .cn-src:hover { background: var(--surface-2); color: var(--text); }
+  .cn-src.on { color: var(--text); }
+  .cn-src-box { width: 10px; flex-shrink: 0; color: var(--run-done); }
+  .cn-src-note { padding: 7px 12px 0; font-family: var(--mono); font-size: 10px;
+                 color: var(--text-dim); line-height: 1.45; }
   .cn-foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: 8px 12px;
              font-family: var(--mono); font-size: 10px; color: var(--text-dim);
              display: flex; gap: 8px; }
@@ -328,6 +351,12 @@ const API = '/api';
 let brands = [];
 let brandsById = {};
 let sessions = [];
+
+// What the reader is scoped to, as the Worker reports it: { selected,
+// available, all }. Null until the first load, and left null if that fetch
+// fails — the console then renders no Sources block rather than an empty one
+// implying nothing is being read.
+let readerConfig = null;
 
 // null = all teams. Deliberately not persisted: the board opens showing
 // everything, every time. Filtering is something you opt into for a moment,
@@ -588,6 +617,18 @@ function rowsFor(brandId) {
   return inBrand.filter(inScope);
 }
 
+// Fetched once and after every edit, not on the thirty-second poll: where
+// issues are read from changes when you change it, and asking twice a minute
+// would be two requests an hour apart from anything actually happening.
+async function loadSources() {
+  try {
+    const cfg = await api('/reader/teams');
+    readerConfig = cfg && Array.isArray(cfg.available) ? cfg : null;
+  } catch (e) {
+    readerConfig = null;
+  }
+}
+
 async function loadBoard() {
   const btn = document.getElementById('btn-refresh');
   if (btn) btn.disabled = true;
@@ -596,6 +637,7 @@ async function loadBoard() {
     brands = brandRows.map(b => ({ id: b.id, name: b.name, color: b.color }));
     brandsById = Object.fromEntries(brands.map(b => [b.id, b]));
     sessions = rows;
+    if (readerConfig === null) await loadSources();
     renderBoard();
   } catch (e) {
     document.getElementById('board').innerHTML =
@@ -637,12 +679,28 @@ function renderBoard() {
   renderTopbar();
 }
 
-// Collapsed by default on every load, like the brand filter: the board opens
-// showing the work, and the put-aside piles stay put aside until asked for.
+// Which <details> are open right now.
+//
+// A <details> loses its state when innerHTML is replaced, and the board
+// re-renders itself every thirty seconds now — so without this a drawer you
+// opened closes under you within half a minute, and the Sources list closes
+// while you are reading it.
+//
+// This is not persistence. It lives for the life of the page, so the drawers
+// are still collapsed on every load, which is the property the board wants: it
+// opens showing the work, and the put-aside piles stay put aside until asked
+// for.
+const openSections = new Set();
+
+function rememberSection(id, open) {
+  if (open) openSections.add(id); else openSections.delete(id);
+}
+
 // <details> rather than a JS toggle — keyboard-accessible and free.
 function drawer(id, label, rows) {
   if (!rows.length) return '';
-  return `<details class="drawer" id="drawer-${id}">
+  return `<details class="drawer" id="drawer-${id}"${openSections.has(id) ? ' open' : ''}
+                   ontoggle="rememberSection('${esc(id)}', this.open)">
     <summary>
       <span class="chev">▶</span>
       <span>${label}</span>
@@ -800,7 +858,73 @@ function renderConsole() {
       <span>${open.length - live} quiet</span>
       <span class="cn-stamp">${esc(clockTime(nowStamp()))}</span>
     </div>
+    ${sourcesBlock()}
   `;
+}
+
+// Where the Linear issues on this board came from, and the place to change it.
+//
+// It sits at the foot of the console because "why is that not on my board" is
+// a question always asked while looking at the board, and the answer used to
+// be a constant in the Worker that only a deploy could change.
+//
+// Nothing selected means every team. That reads backwards for a list of
+// checkboxes — unticking the last one widens rather than narrows — so the note
+// under the list says which of the two it currently is, in words, every time.
+function sourcesBlock() {
+  if (!readerConfig) return '';
+  const selected = readerConfig.selected || [];
+  const available = readerConfig.available || [];
+  const on = (t) => selected.indexOf(t) !== -1;
+
+  const row = (t) => `<button class="cn-src${on(t) ? ' on' : ''}"
+          onclick="toggleSource('${jsq(t)}', this)">
+      <span class="cn-src-box">${on(t) ? '\u2713' : ''}</span>
+      <span class="cn-src-name">${esc(t)}</span>
+    </button>`;
+
+  const note = selected.length
+    ? `Reading ${selected.length} of ${available.length} teams. Untick them all to read every team.`
+    : 'Nothing selected, so every team is read. Tick a team to narrow it.';
+
+  return `<details class="cn-sources"${openSections.has('sources') ? ' open' : ''}
+                   ontoggle="rememberSection('sources', this.open)">
+    <summary>
+      <span class="chev">\u25b6</span>
+      <span>Reading from</span>
+      <span class="cn-src-where">${selected.length ? selected.length + ' teams' : 'all teams'}</span>
+    </summary>
+    <div class="cn-src-body">
+      ${available.map(row).join('')}
+      <div class="cn-src-note">${esc(note)}</div>
+    </div>
+  </details>`;
+}
+
+// Ticking a team narrows the reader to the ticked set; unticking the last one
+// widens it back to every team. The whole set is sent, not the one that
+// changed, so what is stored is what the list in front of you shows.
+//
+// It does not run a read. Changing where issues come from and going and
+// getting them are two decisions, and Read Linear is the second one.
+async function toggleSource(name, btn) {
+  if (!readerConfig) return;
+  const selected = readerConfig.selected || [];
+  const next = selected.indexOf(name) !== -1
+    ? selected.filter((t) => t !== name)
+    : selected.concat([name]);
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/reader/teams', { method: 'PUT', body: { teams: next } });
+    readerConfig = { ...readerConfig, selected: res.selected || [], all: !!res.all };
+    toast(next.length
+      ? `Reading from ${next.length} team${next.length === 1 ? '' : 's'} \u2014 press Read Linear to pull them`
+      : 'Reading from every team \u2014 press Read Linear to pull them');
+    renderConsole();
+  } catch (e) {
+    toast('Could not change the sources \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) btn.disabled = false;
+  }
 }
 
 // The clock the console's foot prints, in the same shape the rows carry, so
@@ -879,6 +1003,7 @@ async function runReader(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Reading\u2026'; }
   try {
     const res = await api('/read-linear', { method: 'POST' });
+    await loadSources();
     const n = (k) => (res && typeof res[k] === 'number' ? res[k] : 0);
     toast(`Linear read \u2014 ${n('inserted')} new, ${n('updated')} refreshed, ` +
           `${n('reconciled')} reconciled`);
