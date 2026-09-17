@@ -30,6 +30,7 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         stageState, stageReached, stageLabel, isSkipped,
         runState, isStalled, lastActivity, queuedSince, stampMs, failureReason,
         consoleRows, clockTime, consoleState, clearLabel, groupOf, projectLabel, elapsed,
+        clockFrom, isRunning, queuePosition, queuedRows, ordinal, queueLabel,
         STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
 
 // A fixed clock, so "stalled" is a fact about the row and not about when the
@@ -545,6 +546,86 @@ describe('elapsed — the one thing on the board that moves by itself', () => {
 
   test('it reads the SQLite stamps the Hub actually stores', () => {
     assert.equal(elapsed(minsAgo(3), NOW), '3m00s');
+  });
+});
+
+describe('clockFrom — a queued card and a running one count different things', () => {
+  test('a queued card counts from the press', () => {
+    // How long you have been waiting is the only thing there is to say about
+    // a run that has not started.
+    const queued = { requested_stage: 'research', requested_at: minsAgo(40), updated_at: minsAgo(40) };
+    assert.equal(clockFrom(queued), minsAgo(40));
+    assert.equal(elapsed(clockFrom(queued), NOW), '40m00s');
+  });
+
+  test('a running card counts from when the runner picked it up', () => {
+    // Counting from the press would fold a forty-minute queue wait into a
+    // two-minute run and report it as forty.
+    const running = { status: 'active', requested_stage: 'research',
+                      requested_at: minsAgo(40), updated_at: minsAgo(2) };
+    assert.equal(isRunning(running), true);
+    assert.equal(clockFrom(running), minsAgo(2));
+    assert.equal(elapsed(clockFrom(running), NOW), '2m00s');
+  });
+
+  test('the stall clock is not moved by any of this', () => {
+    // It stays on requested_at, because the Linear reader bumps updated_at on
+    // every row it refreshes and a read must not be able to clear a stall.
+    const justRead = { requested_stage: 'research', requested_at: minsAgo(180),
+                       updated_at: minsAgo(0) };
+    assert.equal(isStalled(justRead, NOW), true);
+  });
+});
+
+describe('isRunning — one of the queue is being worked, the rest are waiting', () => {
+  test('the runner posting active after the request is what marks it', () => {
+    assert.equal(isRunning({ status: 'active', requested_stage: 'research',
+                             requested_at: minsAgo(6), updated_at: minsAgo(5) }), true);
+  });
+
+  test('a row left active by an earlier run does not claim the new one', () => {
+    // status alone is not enough: re-triggering a card that finished as
+    // 'active' would otherwise show it running the instant you pressed.
+    assert.equal(isRunning({ status: 'active', requested_stage: 'research',
+                             requested_at: minsAgo(1), updated_at: minsAgo(30) }), false);
+  });
+
+  test('nothing queued is not running, whatever its status says', () => {
+    assert.equal(isRunning({ status: 'active' }), false);
+    assert.equal(isRunning(null), false);
+  });
+});
+
+describe('the queue, in order', () => {
+  const q = (id, ago) => ({ id: id, linear_id: id, requested_stage: 'research',
+                            requested_at: minsAgo(ago), updated_at: minsAgo(ago),
+                            linear_state: 'backlog' });
+
+  test('oldest request first, which is the order the runner works in', () => {
+    const rows = [q('C', 1), q('A', 9), q('B', 5)];
+    assert.equal(queuedRows(rows).map(r => r.id).join(''), 'ABC');
+    assert.equal(queuePosition(rows[1], rows), 1);
+    assert.equal(queuePosition(rows[0], rows), 3);
+  });
+
+  test('a card in no queue has no position', () => {
+    assert.equal(queuePosition({ id: 'X' }, [q('A', 1)]), 0);
+  });
+
+  test('dismissed and closed rows are not in the queue the runner reads', () => {
+    const rows = [q('A', 9), { ...q('B', 5), set_aside_at: 'x' },
+                  { ...q('C', 3), linear_state: 'completed' }];
+    assert.equal(queuedRows(rows).map(r => r.id).join(''), 'A');
+  });
+
+  test('ordinals read like English', () => {
+    assert.equal(['', 1, 2, 3, 4, 11, 12, 13, 21, 22].slice(1).map(ordinal).join(' '),
+                 '1st 2nd 3rd 4th 11th 12th 13th 21st 22nd');
+  });
+
+  test('alone in the queue says Queued, not 1st of 1', () => {
+    const solo = [q('A', 2)];
+    assert.equal(queueLabel(solo[0], solo), 'Queued');
   });
 });
 

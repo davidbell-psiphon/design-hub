@@ -561,7 +561,7 @@ function sessionCard(r) {
       <span class="stage-pill${isSkipped(r) ? ' is-skipped' : ''}">${esc(stageLabel(r))}</span>
       ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
       ${(state === 'working' || state === 'stalled')
-        ? `<span class="session-elapsed" data-since="${esc(queuedSince(r))}">${esc(elapsed(queuedSince(r)))}</span>`
+        ? `<span class="session-elapsed" data-since="${esc(clockFrom(r))}">${esc(elapsed(clockFrom(r)))}</span>`
         : ''}
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
@@ -861,7 +861,7 @@ function renderConsole() {
       <span class="cn-ph">${esc(doing)}</span>
       <span class="cn-st state-${state}">${esc(consoleLabel(r, state, sessions))}</span>
       ${(state === 'working' || state === 'stalled')
-        ? `<span class="cn-el" data-since="${esc(queuedSince(r))}">${esc(elapsed(queuedSince(r)))}</span>`
+        ? `<span class="cn-el" data-since="${esc(clockFrom(r))}">${esc(elapsed(clockFrom(r)))}</span>`
         : ''}
     </button>${why ? `<div class="cn-msg">${esc(why)}</div>` : ''}`;
   };

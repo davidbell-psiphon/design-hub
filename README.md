@@ -413,6 +413,18 @@ blocking `spawnSync` that takes minutes. So the Hub genuinely has no new
 information during a run, and a card was identical at second one and at minute
 nine. **Working…** was a claim with nothing behind it.
 
+**A queued card and a running one count different things.** A queued card
+counts from the press — how long you have been waiting is the only thing there
+is to say about a run that has not started. A running card counts from when the
+runner picked it up, its `active` post. Counting a running card from the press
+would fold a forty-minute queue wait into a two-minute run and report it as
+forty.
+
+The stall clock deliberately does not follow this. It stays on `requested_at`,
+because the reader bumps `updated_at` on every row it refreshes and a read must
+not be able to clear a stall. The same bump can reset a running card's
+*displayed* clock, which is cosmetic, rare, and worth it.
+
 So a working or stalled card carries an elapsed clock — `4m12s` — counting up
 every second, on the card and on its console line. It is honest about what it
 is: elapsed time, not progress. But it moves, which is the difference between

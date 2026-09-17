@@ -561,6 +561,26 @@ function consoleRows(rows, now) {
   return out;
 }
 
+// What a card's clock counts from, which is not the same question for a run
+// that is going as for one that is waiting its turn.
+//
+// A queued card counts from the press. How long you have been waiting is the
+// only thing there is to say about a run that has not started.
+//
+// A running card counts from when the runner picked it up — its `active` post,
+// the last thing to move `updated_at` before the long silence of the Claude
+// call. Counting a running card from the press would fold its queue wait into
+// its run time and report a two-minute run as forty.
+//
+// The stall clock deliberately does NOT use this: it stays on `requested_at`
+// via queuedSince, because the Linear reader bumps `updated_at` on every row it
+// refreshes and a read must not be able to clear a stall. The same bump can
+// reset a running card's *displayed* clock, which is cosmetic, rare, and worth
+// it for a number that means what it says the rest of the time.
+function clockFrom(r) {
+  return isRunning(r) ? lastActivity(r) : queuedSince(r);
+}
+
 // How long a run has been going, counted in seconds.
 //
 // The one thing on this board that moves on its own, and it exists because
