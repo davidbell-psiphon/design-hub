@@ -67,7 +67,7 @@ const ALL_TEAMS = { selected: [], available: ['Conduit App', 'Marketing', 'Ryve 
 // it rendered. Extracted so that a suite can render a fixture of its own — the
 // run-state suites need errored and stalled rows, and putting those in the
 // shared fixture would move every count the suites above assert on.
-async function mount(rows, readerCfg = ALL_TEAMS) {
+async function mount(rows, readerCfg = ALL_TEAMS, heartbeatRows = []) {
   const html = fs.readFileSync(path.join(ROOT, 'frontend/index.html'), 'utf8');
   const logic = fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8');
   const inline = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
@@ -84,6 +84,10 @@ async function mount(rows, readerCfg = ALL_TEAMS) {
       if (url.endsWith('/reader/teams')) return readerCfg;
       if (url.endsWith('/runner')) return { repo: 'x/design-ai', workflow: 'design-ai.yml',
         url: 'https://github.com/x/design-ai/actions/workflows/design-ai.yml' };
+      // No heartbeat fixture by default — most suites are not testing this,
+      // and falling through to the session rows below would hand
+      // heartbeatStatus objects shaped nothing like a heartbeat row.
+      if (url.endsWith('/agent/heartbeat')) return heartbeatRows;
       return rows;
     },
   });
@@ -840,5 +844,30 @@ describe('controls per section', () => {
 
   test('board cards offer the No design control', () => {
     assert.ok(drawers.above.includes('dismissSession'));
+  });
+});
+
+describe('the local agent line — is Figma/Mobbin work actually going to run', () => {
+  test('nothing has ever checked in', async () => {
+    const { panel } = await mount(sessions, ALL_TEAMS, []);
+    assert.match(panel, /cn-agent-never/);
+    assert.match(panel, /no local agent has ever connected/);
+  });
+
+  test('a machine checked in within the last tick or two reads as connected', async () => {
+    const recent = new Date(Date.now() - 3 * 60000).toISOString().replace('T', ' ').slice(0, 19);
+    const { panel } = await mount(sessions, ALL_TEAMS,
+      [{ machine: 'dave-bell-jr', capabilities: ['research', 'design', 'figma', 'mobbin'], last_seen: recent }]);
+    assert.match(panel, /cn-agent-fresh/);
+    assert.match(panel, /dave-bell-jr connected/);
+    assert.match(panel, /figma/);
+  });
+
+  test('a machine that has gone quiet for hours reads as stale, not silently fine', async () => {
+    const stale = new Date(Date.now() - 6 * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+    const { panel } = await mount(sessions, ALL_TEAMS,
+      [{ machine: 'dave-bell-jr', capabilities: ['research'], last_seen: stale }]);
+    assert.match(panel, /cn-agent-stale/);
+    assert.match(panel, /may not be running right now/);
   });
 });

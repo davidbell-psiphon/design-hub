@@ -218,6 +218,20 @@
              font-family: var(--mono); font-size: 10px; line-height: 1.55;
              color: var(--text-muted); }
   .cn-from-label { color: var(--text-dim); }
+  /* Whether Figma/Mobbin work queued right now will actually be picked up.
+     Sits right under the header, not tucked at the foot with Sources — this
+     one is worth seeing without scrolling, calm when fine and only loud when
+     it is not. */
+  .cn-agent { flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 7px 12px;
+              font-family: var(--mono); font-size: 10px; line-height: 1.5;
+              display: flex; align-items: center; gap: 7px; }
+  .cn-agent-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .cn-agent-fresh { color: var(--text-muted); }
+  .cn-agent-fresh .cn-agent-dot { background: var(--run-done); }
+  .cn-agent-stale { color: var(--run-waiting); }
+  .cn-agent-stale .cn-agent-dot { background: var(--run-waiting); }
+  .cn-agent-gone, .cn-agent-never { color: var(--run-error); }
+  .cn-agent-gone .cn-agent-dot, .cn-agent-never .cn-agent-dot { background: var(--run-error); }
   .cn-foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: 8px 12px;
              font-family: var(--mono); font-size: 10px; color: var(--text-dim);
              display: flex; gap: 8px; }
@@ -357,6 +371,13 @@ let readerConfig = null;
 // because the Claude call blocks for minutes — so the board links out to it
 // rather than pretending it knows more than it does.
 let runnerUrl = null;
+
+// Every machine that has ever checked in with GET /api/agent/heartbeat.
+// Refetched every poll, unlike readerConfig/runnerUrl above (which barely
+// change) — "last seen" is the whole point, and it goes stale exactly as fast
+// as the rest of the board does. A failed fetch leaves it as it was rather
+// than blanking a status line that was accurate a moment ago.
+let heartbeats = [];
 
 // null = all teams. Deliberately not persisted: the board opens showing
 // everything, every time. Filtering is something you opt into for a moment,
@@ -656,6 +677,11 @@ async function loadBoard() {
     brandsById = Object.fromEntries(brands.map(b => [b.id, b]));
     sessions = rows;
     if (readerConfig === null) await loadSources();
+    // Best effort, and every poll: unlike readerConfig/runnerUrl, "last seen"
+    // is the entire content of this fetch, so leaving it at whatever it last
+    // was on failure is more honest than either blanking it or refusing the
+    // rest of the board over it.
+    try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep the last known value */ }
     renderBoard();
   } catch (e) {
     document.getElementById('board').innerHTML =
@@ -875,6 +901,7 @@ function renderConsole() {
       <span class="cn-counts">${live} live / ${open.length} open</span>
       ${runnerUrl ? `<a class="cn-log" href="${esc(runnerUrl)}" target="_blank" rel="noopener">log \u2197</a>` : ''}
     </div>
+    ${localAgentLine()}
     <div class="cn-body">
       ${lines.length ? lines.map(line).join('')
                      : '<div class="cn-empty">— nothing is running —</div>'}
@@ -885,6 +912,35 @@ function renderConsole() {
     </div>
     ${sourcesLine()}
   `;
+}
+
+// Whether pressing Run Design right now will actually get picked up. Figma
+// and Mobbin are both local-only — reachable only from a machine where a
+// person has signed in, never from GitHub Actions — so a card queued for
+// either used to look identical whether or not any machine was going to do
+// anything about it. See migration-002-heartbeat.sql and design-ai's
+// runner.mjs, which posts here on every wake, whether or not it found
+// anything queued.
+function localAgentLine() {
+  const s = heartbeatStatus(heartbeats);
+
+  if (s.state === 'never') {
+    return `<div class="cn-agent cn-agent-never" title="No machine has ever posted to POST /api/agent/heartbeat">
+      <span class="cn-agent-dot"></span>
+      no local agent has ever connected — Figma/Mobbin work will not run
+    </div>`;
+  }
+
+  const caps = (s.row.capabilities || []).length ? s.row.capabilities.join(', ') : 'research only';
+  const text = s.state === 'fresh'
+    ? `${esc(s.row.machine)} connected — checked in ${timeAgo(s.row.last_seen)} ago (${esc(caps)})`
+    : s.state === 'stale'
+    ? `${esc(s.row.machine)} last checked in ${timeAgo(s.row.last_seen)} ago — may not be running right now`
+    : `${esc(s.row.machine)} hasn't checked in for ${timeAgo(s.row.last_seen)} — presumed offline`;
+
+  return `<div class="cn-agent cn-agent-${s.state}" title="Local machine that can run Figma/Mobbin design work">
+    <span class="cn-agent-dot"></span> ${text}
+  </div>`;
 }
 
 // Where the board's Linear issues come from, in one line.

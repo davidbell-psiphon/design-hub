@@ -1180,6 +1180,41 @@ async function route(request, env) {
       return json({ ok: true, state: found.state.name, already: !!found.already });
     }
 
+    // POST /api/agent/heartbeat — the local runner checks in, whether or not
+    // it found anything queued. Everything else here is pull-only: the runner
+    // reads the queue and the Hub never reaches out to it, so a card queued
+    // for Figma or Mobbin work — both local-only, both reachable only from a
+    // person's own machine — looked identical whether or not anything was
+    // going to pick it up. This is the one write that exists purely so the
+    // board can tell those two apart. Guarded by the same X-Agent-Secret
+    // gate as every other agent write, via requireHuman above.
+    if (method === 'POST' && path === '/api/agent/heartbeat') {
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      if (!b.machine) return err('machine required');
+      const capabilities = Array.isArray(b.capabilities) ? JSON.stringify(b.capabilities) : '[]';
+      await env.DB.prepare(
+        `INSERT INTO agent_heartbeats (machine, capabilities, last_seen, first_seen)
+           VALUES (?, ?, datetime('now'), datetime('now'))
+         ON CONFLICT(machine) DO UPDATE SET
+           capabilities = excluded.capabilities,
+           last_seen    = excluded.last_seen`
+      ).bind(b.machine, capabilities).run();
+      return json({ ok: true });
+    }
+
+    // GET /api/agent/heartbeat — every machine that has ever checked in, most
+    // recent first. What the board reads to say whether a press that queues
+    // local-only work will actually be picked up, or is sitting there with
+    // nobody listening.
+    if (method === 'GET' && path === '/api/agent/heartbeat') {
+      const { results } = await env.DB.prepare(
+        `SELECT machine, capabilities, last_seen, first_seen
+           FROM agent_heartbeats ORDER BY last_seen DESC`
+      ).all();
+      return json(results.map((r) => ({ ...r, capabilities: parseOptions(r.capabilities) })));
+    }
+
     // GET /api/runner — where the work actually happens, so the board can link
     // to it. The run's own log is the only truly live view of a job: the runner
     // reports `active` once and then nothing until it is done, because the

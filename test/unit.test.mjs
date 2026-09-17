@@ -31,7 +31,8 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         runState, isStalled, lastActivity, queuedSince, stampMs, failureReason,
         consoleRows, clockTime, consoleState, clearLabel, groupOf, projectLabel, elapsed,
         clockFrom, isRunning, queuePosition, queuedRows, ordinal, queueLabel,
-        STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
+        STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H,
+        heartbeatStatus } = board;
 
 // A fixed clock, so "stalled" is a fact about the row and not about when the
 // suite happened to run.
@@ -899,6 +900,42 @@ describe('timeAgo', () => {
   test('null and garbage are empty, not NaN', () => {
     assert.equal(timeAgo(null), '');
     assert.equal(timeAgo('not a date'), '');
+  });
+});
+
+describe('heartbeatStatus — is a press actually going to be picked up', () => {
+  const ago = mins => new Date(NOW - mins * 60000).toISOString().replace('T', ' ').slice(0, 19);
+
+  test('nothing has ever checked in', () => {
+    const s = heartbeatStatus([], NOW);
+    assert.equal(s.state, 'never');
+    assert.equal(s.row, null);
+  });
+
+  test('checked in within the last tick or two — fresh', () => {
+    const s = heartbeatStatus([{ machine: 'dave-bell-jr', last_seen: ago(5) }], NOW);
+    assert.equal(s.state, 'fresh');
+    assert.equal(s.row.machine, 'dave-bell-jr');
+  });
+
+  test('a few missed ticks — stale, not gone', () => {
+    const s = heartbeatStatus([{ machine: 'dave-bell-jr', last_seen: ago(180) }], NOW);
+    assert.equal(s.state, 'stale');
+  });
+
+  test('over a day since the last check-in — presumed gone', () => {
+    const s = heartbeatStatus([{ machine: 'dave-bell-jr', last_seen: ago(60 * 30) }], NOW);
+    assert.equal(s.state, 'gone');
+  });
+
+  test('multiple machines: the most recently seen wins, regardless of row order', () => {
+    const rows = [
+      { machine: 'old-laptop', last_seen: ago(60 * 30) },
+      { machine: 'dave-bell-jr', last_seen: ago(2) },
+    ];
+    const s = heartbeatStatus(rows, NOW);
+    assert.equal(s.state, 'fresh');
+    assert.equal(s.row.machine, 'dave-bell-jr');
   });
 });
 

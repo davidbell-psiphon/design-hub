@@ -648,3 +648,26 @@ function timeAgo(ts, now) {
   if (hrs < 24) return hrs + 'h';
   return Math.floor(hrs / 24) + 'd';
 }
+
+// Whether a press that queues Figma/Mobbin work will actually be picked up —
+// the whole reason the heartbeat exists. The local runner checks in every 10
+// minutes when it's running at all (see design-ai's Task Scheduler setup), so
+// one missed tick is not "gone"; three in a row probably is. A day is the line
+// past "probably asleep" and into "this machine has stopped checking in".
+var HEARTBEAT_FRESH_MIN = 20;
+var HEARTBEAT_STALE_MIN = 24 * 60;
+
+// rows: whatever GET /api/agent/heartbeat returned, any order — sorted here
+// rather than trusted, so a caller cannot get "most recent" wrong by handing
+// rows in over in the order the network happened to return them.
+function heartbeatStatus(rows, now) {
+  if (!rows || !rows.length) return { state: 'never', row: null, minsAgo: null };
+  var latest = rows.slice().sort(function (a, b) {
+    return stampMs(b.last_seen) - stampMs(a.last_seen);
+  })[0];
+  var mins = Math.floor(((now === undefined ? Date.now() : now) - stampMs(latest.last_seen)) / 60000);
+  var state = mins <= HEARTBEAT_FRESH_MIN ? 'fresh'
+            : mins <= HEARTBEAT_STALE_MIN ? 'stale'
+            : 'gone';
+  return { state: state, row: latest, minsAgo: mins };
+}
