@@ -114,6 +114,12 @@
   .status-pill.status-stalled { border-style: dashed; border-color: rgba(224,120,100,.55); color: var(--run-stalled); }
   .status-pill.status-error { border-color: rgba(224,120,100,.5); color: var(--run-error); }
   .status-pill.status-done { border-color: rgba(111,191,139,.35); color: var(--run-done); }
+  /* The Linear project, shown only where the brand section is not
+     self-evident — see projectLabel(). On a Conduit App card it would say
+     nothing the heading above it has not already said. */
+  .session-project { font-size: 10px; color: var(--text-muted); background: var(--surface-2);
+                     border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+                     white-space: nowrap; }
   .btn-reset { border-color: rgba(224,120,100,.4); color: var(--run-error); }
   .btn-reset:hover { background: rgba(224,120,100,.1); color: var(--run-error); }
 
@@ -320,10 +326,16 @@ let brands = [];
 let brandsById = {};
 let sessions = [];
 
-// null = All brands. Deliberately not persisted: the board opens showing
+// null = all teams. Deliberately not persisted: the board opens showing
 // everything, every time. Filtering is something you opt into for a moment,
 // not a state you get stuck in.
-let filterBrand = null;
+//
+// It filters by team, not by brand. Brand is still the container the board is
+// built from — every brand, stacked, always — but since the reader stopped
+// filtering by team there are 57 open cards across seven teams, and the team
+// is the context an issue arrives with. groupOf falls back to the Linear
+// project for a row with no team.
+let filterTeam = null;
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -344,6 +356,15 @@ async function api(path, opts = {}) {
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// A team or project name inside a single-quoted JS string inside a
+// double-quoted HTML attribute. Brand ids were slugs and needed none of this;
+// "Dave's backlog" would end the string early and take the handler with it.
+// Escaped for JS first, then for HTML, so the browser un-escapes back to valid
+// JS rather than to a broken quote.
+function jsq(s) {
+  return esc(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
 }
 
 // ── CARD ───────────────────────────────────────────
@@ -380,6 +401,12 @@ function sessionCard(r) {
     actionsHtml = `
       <button class="btn" onclick="undismissSession('${esc(id)}', this)">Undo \u2014 needs design</button>
       ${linksHtml}`;
+  } else if (section === 'dismissed') {
+    // Set aside from the agents rather than marked as not-design. Nothing was
+    // written to Linear to put it here, so nothing has to be taken back.
+    actionsHtml = `
+      <button class="btn" onclick="unsetAside('${esc(id)}', this)">Undo \u2014 put it back</button>
+      ${linksHtml}`;
   } else {
     // One stage button, always rendered. actionFor returns null only at the
     // final stage, and there is deliberately no other path to a card with no
@@ -408,7 +435,8 @@ function sessionCard(r) {
     actionsHtml = `
       ${stageBtn}
       ${clearBtn}
-      <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Applies the no-design label">No design</button>
+      <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Not design work at all \u2014 applies the no-design label in Linear">No design</button>
+      <button class="btn" onclick="setAside('${esc(id)}', this)" title="Design work, but not for the research or design agent. Stays in the Hub \u2014 nothing is written to Linear">Dismiss</button>
       ${reassignHtml}
       ${linksHtml}`;
   }
@@ -487,6 +515,7 @@ function sessionCard(r) {
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || '')}</span>
+      ${projectLabel(r) ? `<span class="session-project">${esc(projectLabel(r))}</span>` : ''}
       <span class="stage-pill${isSkipped(r) ? ' is-skipped' : ''}">${esc(stageLabel(r))}</span>
       ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
@@ -539,10 +568,20 @@ function brandSection(brand, allRows) {
   </section>`;
 }
 
+// True where the current team filter lets this row through. No filter lets
+// everything through, which is how the board opens.
+function inScope(r) {
+  return !filterTeam || groupOf(r) === filterTeam;
+}
+
+// The rows in one brand that the team filter leaves standing. Brand first,
+// because brand is what the board is built from; the filter narrows what shows
+// up inside each brand rather than replacing the sections.
 function rowsFor(brandId) {
-  return brandId === UNASSIGNED.id
+  const inBrand = brandId === UNASSIGNED.id
     ? sessions.filter(r => !brandsById[r.project])
     : sessions.filter(r => r.project === brandId);
+  return inBrand.filter(inScope);
 }
 
 async function loadBoard() {
@@ -567,20 +606,29 @@ function renderBoard() {
   // Anything the reader could not place gets its own section rather than
   // vanishing off the board; the reassign select is how it gets home.
   const unplaced = rowsFor(UNASSIGNED.id);
-  const shown = filterBrand
-    ? [...brands, UNASSIGNED].filter(b => b.id === filterBrand)
-    : [...brands, ...(unplaced.length ? [UNASSIGNED] : [])];
+  const candidates = [...brands, ...(unplaced.length ? [UNASSIGNED] : [])];
 
-  const scoped = filterBrand ? rowsFor(filterBrand) : sessions;
+  // Every brand, stacked, always — an empty CONDUIT is information, and that
+  // is the point of the board. With a team filter on it is not: you have
+  // deliberately narrowed, so four empty brand headings around the one you
+  // wanted is noise. Only the brands the filter left standing render.
+  const shown = filterTeam
+    ? candidates.filter(b => rowsFor(b.id).some(isOpen))
+    : candidates;
+
+  const scoped = sessions.filter(inScope);
   const boardHtml = shown.length
     ? shown.map(b => brandSection(b, rowsFor(b.id))).join('')
-    : '<div class="empty">Nothing here.</div>';
+    : `<div class="empty">Nothing open${filterTeam ? ' in ' + esc(filterTeam) : ''}.</div>`;
 
+  // Dismissed sits above the other two because it is the one you put things in
+  // yourself and the one you are most likely to want back.
   document.getElementById('board').innerHTML = boardHtml +
+    drawer('dismissed', 'Dismissed', scoped.filter(r => sectionOf(r) === 'dismissed')) +
     drawer('nodesign', 'No design', scoped.filter(r => sectionOf(r) === 'nodesign')) +
     drawer('completed', 'Completed', scoped.filter(r => sectionOf(r) === 'completed'));
 
-  renderSidebar(unplaced.length);
+  renderSidebar();
   renderConsole();
   renderTopbar();
 }
@@ -601,52 +649,70 @@ function drawer(id, label, rows) {
 }
 
 function renderTopbar() {
-  const scope = (filterBrand ? rowsFor(filterBrand) : sessions).filter(isOpen);
+  const scope = sessions.filter(inScope).filter(isOpen);
   const working = scope.filter(isWorking).length;
   document.getElementById('topbar-sub').textContent = working
     ? `${working} running · ${scope.length} open`
     : `${scope.length} open`;
 
-  // The chip is the way back to All brands, and the only always-visible
-  // signal that you are looking at a subset.
+  // The chip is the way back to all teams, and the only always-visible signal
+  // that you are looking at a subset.
   const chip = document.getElementById('filter-chip');
-  const brand = filterBrand === UNASSIGNED.id ? UNASSIGNED : brandsById[filterBrand];
-  if (brand) {
-    chip.innerHTML = `${esc(brand.name)}<span class="x">×</span>`;
+  if (filterTeam) {
+    chip.innerHTML = `${esc(filterTeam)}<span class="x">×</span>`;
     chip.style.display = 'inline-flex';
-    chip.title = 'Back to all brands';
+    chip.title = 'Back to all teams';
   } else {
     chip.style.display = 'none';
   }
 }
 
-function renderSidebar(unplacedCount) {
-  // The badge counts what needs me, not how much exists. Total open is already
-  // in every brand header on the board; repeating it here would be noise.
-  const item = b => {
-    const working = rowsFor(b.id).filter(isOpen).filter(isWorking).length;
-    const active = filterBrand === b.id ? ' active' : '';
-    return `<button class="sb-item${active}" onclick="setFilter('${esc(b.id)}')">
-      <div class="sb-dot" style="background:${esc(b.color)}"></div>
-      <span class="sb-name">${esc(b.name)}</span>
-      ${working ? `<span class="sb-badge waiting">${working}</span>` : ''}
+// One entry per team with open work, built from the rows themselves rather
+// than from a fixed list — so a Linear team nobody has assigned Dave an issue
+// on yet does not appear, and the first time one does, it appears without a
+// code change. Alphabetical: the counts move, and a list that reorders itself
+// under you is a list you cannot learn.
+//
+// The count is total open, because with 57 cards across seven teams the
+// question the sidebar answers is "how much is over there". It turns amber
+// where something in that team is live — errored, stalled, needing an answer
+// or running — which is the thing worth walking over for.
+function renderSidebar() {
+  const open = sessions.filter(isOpen);
+  const teams = [...new Set(open.map(groupOf))].sort((a, b) => a.localeCompare(b));
+
+  // A team whose open rows all sit in one brand borrows that brand's colour.
+  // Where they do not, no colour would be honest, so it gets a neutral dot.
+  const dotFor = (rows) => {
+    const brandIds = [...new Set(rows.map(r => r.project).filter(id => brandsById[id]))];
+    return brandIds.length === 1 ? brandsById[brandIds[0]].color : 'var(--text-dim)';
+  };
+
+  const item = (name) => {
+    const rows = open.filter(r => groupOf(r) === name);
+    const live = rows.filter(r => { const st = runState(r); return st !== 'idle' && st !== 'done'; }).length;
+    const active = filterTeam === name ? ' active' : '';
+    return `<button class="sb-item${active}" onclick="setFilter('${jsq(name)}')">
+      <div class="sb-dot" style="background:${esc(dotFor(rows))}"></div>
+      <span class="sb-name">${esc(name)}</span>
+      <span class="sb-badge${live ? ' waiting' : ''}">${rows.length}</span>
     </button>`;
   };
-  const allWorking = sessions.filter(isOpen).filter(isWorking).length;
-  const allItem = `<button class="sb-item${filterBrand ? '' : ' active'}" onclick="setFilter(null)">
+
+  const allItem = `<button class="sb-item${filterTeam ? '' : ' active'}" onclick="setFilter(null)">
       <div class="sb-dot" style="background:var(--text-dim)"></div>
-      <span class="sb-name">All brands</span>
-      ${allWorking ? `<span class="sb-badge waiting">${allWorking}</span>` : ''}
+      <span class="sb-name">All teams</span>
+      <span class="sb-badge">${open.length}</span>
     </button>`;
-  const extra = unplacedCount ? item(UNASSIGNED) : '';
+
   document.getElementById('sidebar').innerHTML =
-    `<div class="sb-section"><div class="sb-label">Brands</div>${allItem}${brands.map(item).join('')}${extra}</div>`;
+    `<div class="sb-section"><div class="sb-label">Teams</div>${allItem}${teams.map(item).join('')}</div>`;
 }
 
-// Tapping a brand narrows the board to it; the chip and "All brands" both undo
+// Tapping a team narrows the board to it; the chip and "All teams" both undo
 // it. null restores the stacked everything-view the board opens with.
-function setFilter(id) {
-  filterBrand = id;
+function setFilter(team) {
+  filterTeam = team;
   renderBoard();
   closeMenu();
   const board = document.getElementById('board');
@@ -690,7 +756,7 @@ function renderConsole() {
     const doing = r.requested_stage || r.phase || '';
     const why = state === 'error' ? failureReason(r)
               : state === 'stalled' ? ('queued ' + timeAgo(queuedSince(r)) + ' ago, never came back') : '';
-    return `<button class="cn-line" onclick="setFilter('${esc(brandsById[r.project] ? r.project : UNASSIGNED.id)}')"
+    return `<button class="cn-line" onclick="setFilter('${jsq(groupOf(r))}')"
                     title="${esc(r.title || '')}">
       <span class="cn-t">${esc(clockTime(lastActivity(r)))}</span>
       <span class="cn-brand" style="background:${color}"></span>
@@ -815,6 +881,41 @@ async function dismissSession(id, btn) {
   } catch (e) {
     toast('Could not dismiss — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = 'No design'; }
+  }
+}
+
+// "This is design work, but not for the agents."
+//
+// A different statement from No design, which is about the issue and is
+// written into Linear as `no-design`. This one is about this Hub's own agents,
+// so it stays here and Linear never hears about it — which is also why it has
+// no failure mode to order around: there is no label to apply first.
+//
+// It clears any queued run with it. A card you have just told the agents to
+// leave alone must not still be sitting in the queue they read.
+async function setAside(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/setaside`, { method: 'POST' });
+    toast(res && res.cleared
+      ? `Dismissed \u2014 and the queued ${res.cleared} run was cleared`
+      : 'Dismissed \u2014 the agents will leave it alone');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not dismiss \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Dismiss'; }
+  }
+}
+
+async function unsetAside(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/setaside`, { method: 'DELETE' });
+    toast('Back on the board');
+    await loadBoard();
+  } catch (e) {
+    toast('Could not undo \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Undo \u2014 put it back'; }
   }
 }
 

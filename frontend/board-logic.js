@@ -25,12 +25,19 @@ var STAGE_LABELS = {
 // Where a session belongs on the whole board: one of the collapsed sections
 // at the bottom, or the brand buckets above them.
 //
-// A row can qualify for more than one, so the order is fixed. Completed is
-// checked first because closed is the more final fact: an issue you dismissed
-// and then closed belongs under Completed, not No design.
+// A row can qualify for more than one, so the order is fixed, from the most
+// final fact to the least:
+//
+//   completed  closed in Linear, and nothing else can outrank that
+//   nodesign   the `no-design` label — a fact about the issue, in Linear,
+//              visible to everyone, meaning it is not design work at all
+//   dismissed  set aside in this Hub — design work, but not for these agents.
+//              The weakest of the three: it is a preference about our own
+//              tooling, so it loses to both of the facts above it.
 function sectionOf(r) {
   if (r.linear_state === 'completed' || r.linear_state === 'canceled') return 'completed';
   if (r.dismissed_at) return 'nodesign';
+  if (r.set_aside_at) return 'dismissed';
   return 'board';
 }
 
@@ -39,6 +46,48 @@ function sectionOf(r) {
 // topbar total and its brand header.
 function isOpen(r) {
   return sectionOf(r) === 'board';
+}
+
+// ─── GROUPING: WHAT THE SIDEBAR FILTERS ON ─────────
+// The reader stopped filtering by team, so every issue assigned to Dave now
+// reaches the board — 57 open cards where there were a dozen. Brand stays the
+// container the board is built from; the team is how you narrow it.
+//
+// Team first, and the Linear project only where there is no team. A session an
+// agent posted with no Linear issue behind it has neither a team nor a brand,
+// and without the fallback it would be reachable only by scrolling. One row
+// belongs to exactly one group either way — never both — or the sidebar's
+// counts stop adding up to the board's.
+var UNGROUPED = 'No team';
+
+function groupOf(r) {
+  if (!r) return UNGROUPED;
+  return r.team || r.linear_project || UNGROUPED;
+}
+
+// The teams whose brand is obvious from the team itself. A card on one of these
+// sits in the brand section you would expect it to, so naming its Linear
+// project on the card adds nothing.
+//
+// Anywhere else — Marketing, Websites, Insights — the brand came from a keyword
+// in the title or project, or could not be derived at all, and then the project
+// is the thing that says what the work actually is. It is also the cue for
+// whether "Move to…" is worth reaching for.
+//
+// Kept in step with TEAM_BRAND in lib/derive.mjs by hand, the same way
+// STAGE_LABELS is kept in step with the Worker's copy. There is no build step
+// to share them through.
+var BRAND_FROM_TEAM = {
+  'Conduit App': 'conduit',
+  'Ryve App': 'ryve',
+  'Psiphon App': 'psiphon',
+  'Forge': 'forge',
+};
+
+function projectLabel(r) {
+  if (!r || !r.linear_project) return '';
+  if (BRAND_FROM_TEAM[r.team]) return '';
+  return r.linear_project;
 }
 
 // The issue's Linear labels. Stored as a JSON array by the reader; tolerant of

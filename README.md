@@ -183,24 +183,79 @@ Brand colours:
 A session whose brand could not be derived lands in an **Unassigned** section
 rather than disappearing; the "Move to…" select on the card is how it gets home.
 
-Two collapsed sections sit at the foot of the board, each showing a count and
-expanding on one click. Both are collapsed on every load, and rows in either
-one leave the brand buckets, the brand counts, the topbar total, the running
+Three collapsed sections sit at the foot of the board, each showing a count and
+expanding on one click. All are collapsed on every load, and rows in any of
+them leave the brand buckets, the brand counts, the topbar total, the running
 badges and the console.
 
 | Section | What is in it |
 |---|---|
-| **No design** | Cards carrying the `no-design` label. Un-dismissable from there. |
+| **Dismissed** | Set aside from the agents. Hub-only — nothing is written to Linear |
+| **No design** | Cards carrying the `no-design` label. Un-dismissable from there |
 | **Completed** | Issues whose Linear state is completed or canceled |
+
+**Dismissed and No design are two different statements, and the difference is
+who they are about.** `no-design` is about the *issue*: this is not design
+work at all. It is written into Linear, everyone can see it, and it rebuilds
+itself from a single read if the database is ever lost. **Dismissed** is about
+*these agents*: this is design work, but the research and design agents should
+not run on it. That is nobody else's business, so it writes nothing to Linear
+and no label carries it — keeping control labels out of Dave's Linear workflow
+is the whole reason [the trigger](#the-trigger) moved into the Hub's own queue.
+
+The trade is that a dismissal does not survive losing the database, where a
+`no-design` one does. Setting a card aside also clears any queued run with it:
+a card you have just told the agents to leave alone must not still be sitting
+in the queue they read, and `/api/agent/queue` filters the column.
+
+Where a card lands when it qualifies for more than one is fixed, most final
+fact first: **Completed**, then **No design**, then **Dismissed** — a preference
+about our own tooling loses to a fact about the issue, which loses to the issue
+being closed.
 
 `no-research` cards stay on the main board: that label means "skip research, go
 straight to mockup", and a Backlog card carrying it offers **Run Design**
 instead of Run Research.
 
-The sidebar filters the board to one brand. "All brands" is the default on every
-load and the filter is never persisted — the Hub always opens showing
-everything. On narrow screens the sidebar is a hamburger drawer, the activity
-panel moves below the board, and every control is a 44px tap target.
+### The sidebar filters by team
+
+Brand is still the container the board is built from — every brand, stacked,
+always. The sidebar narrows *what appears inside those sections*, and it
+narrows by **team**.
+
+It used to filter by brand, which was the same axis the board was already
+organised on. That was fine when the reader took only design teams and there
+were a dozen cards. Since it stopped filtering by team there are 57 open cards
+across seven teams, most of them Marketing work, and the team is the context an
+issue actually arrives with.
+
+The list is built from the rows rather than from a fixed set, so a Linear team
+appears the first time an issue on it is assigned to Dave, and a team with
+nothing open does not appear at all. Alphabetical, because the counts move and a
+list that reorders itself under you is one you cannot learn. The badge is total
+open, and it turns amber when something in that team is live — errored, stalled,
+needing an answer or running.
+
+A row is grouped by its team, falling back to its **Linear project** where it
+has no team: a session an agent posted with no Linear issue behind it has
+neither a team nor a brand, and without the fallback it would be reachable only
+by scrolling. Team first and project second, never both — one row is in exactly
+one group, or the sidebar's counts stop adding up to the board's.
+
+With a filter on, brands with nothing left in them are not rendered. Without
+one, every brand renders whether or not it has work: an empty CONDUIT is
+information, but four empty brand headings around the one you asked for is not.
+
+"All teams" is the default on every load and the filter is never persisted — the
+Hub always opens showing everything. On narrow screens the sidebar is a
+hamburger drawer, the console moves to the top of the page, and every control is
+a 44px tap target.
+
+**The card names its Linear project** where its brand section is not
+self-evident — that is, on any team that does not imply a brand by itself
+(Marketing, Websites, Insights). On a Conduit App card it would only repeat the
+heading above it. It is also the cue for whether "Move to…" is worth reaching
+for.
 
 ### The console
 
@@ -597,6 +652,8 @@ Used by the board:
 | `POST /api/agent/stage-done` | The runner reports a finished stage (`{"linear_id","stage"}`) |
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
+| `POST /api/agent/session/:id/setaside` | Dismiss — design work, but not for the agents. Writes nothing to Linear |
+| `DELETE /api/agent/session/:id/setaside` | Put it back on the board |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
 | `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id"}` or `{"response_section"}` where the gate has options, free text where it does not |
 | `PATCH /api/agent/session/:id/reopen` | Send a gate back for a new round — taking a decision back, or rejecting every option with `{"note"}` |
@@ -812,6 +869,7 @@ piece4-schema.sql              linear_uuid, linear_state, triggered_at, figma_ur
 piece5-schema.sql              dismissed_at (no-design)
 piece6-schema.sql              agent_session_id + the duplicate-row merge
 piece7-schema.sql              requested_stage / requested_at (the queue) + labels
+piece8-schema.sql              set_aside_at (Dismissed) + linear_project
 migration-001-gates.sql        options, the constrained decision, gate_round,
                                mockups/handoff, and the gate_decisions table
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL

@@ -368,6 +368,11 @@ async function readLinear(env) {
     // 'triage' | 'backlog' | 'unstarted' | 'started' from discovery; the
     // reconciliation pass is what later writes 'completed' or 'canceled'.
     const linearState = issue.state && issue.state.type;
+    // The Linear project's name, for the sidebar's fallback grouping and for
+    // the card to show where its brand section is not self-evident. Note the
+    // prefix: the column called `project` holds the *brand* id, because brands
+    // are rows in the `projects` table and predate the reader by a layer.
+    const linearProject = (issue.project && issue.project.name) || null;
     // An issue can arrive already labelled no-design, dismissed in Linear
     // before the Hub ever saw it.
     const dismissedAt = hasNoDesign(issue) ? nowStamp() : null;
@@ -391,8 +396,9 @@ async function readLinear(env) {
     await env.DB.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,
-          linear_id, team, linear_uuid, linear_state, title, dismissed_at, labels)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          linear_id, team, linear_uuid, linear_state, title, dismissed_at, labels,
+          linear_project)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          project      = COALESCE(agent_sessions.project, excluded.project),
          track        = COALESCE(agent_sessions.track, excluded.track),
@@ -418,6 +424,8 @@ async function readLinear(env) {
          -- a card moves the moment a stage finishes; this read reconciles it
          -- with whatever Linear actually has.
          labels       = excluded.labels,
+         -- Linear-owned like the rest of these, so it refreshes every pass.
+         linear_project = excluded.linear_project,
          updated_at   = datetime('now')`
     ).bind(
       existingId || ('linear/' + issue.identifier),
@@ -435,7 +443,8 @@ async function readLinear(env) {
       linearState || null,
       issue.title,
       dismissedAt,
-      labelNames
+      labelNames,
+      linearProject
     ).run();
     if (existingId) { updated++; } else { inserted++; }
   }
@@ -833,7 +842,9 @@ async function route(request, env) {
       // a number of issues it is not going to be shown.
       const queued = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM agent_sessions
-           WHERE requested_stage IS NOT NULL AND dismissed_at IS NULL`
+           WHERE requested_stage IS NOT NULL
+             AND dismissed_at IS NULL
+             AND set_aside_at IS NULL`
       ).first();
 
       const run = await startRunner(env, queued && queued.n);
@@ -891,7 +902,9 @@ async function route(request, env) {
         `SELECT id, linear_id, linear_uuid, title, project, track, team,
                 requested_stage, requested_at
            FROM agent_sessions
-          WHERE requested_stage IS NOT NULL AND dismissed_at IS NULL
+          WHERE requested_stage IS NOT NULL
+            AND dismissed_at IS NULL
+            AND set_aside_at IS NULL
           ORDER BY requested_at ASC`
       ).all();
       return json(results || []);
@@ -984,6 +997,52 @@ async function route(request, env) {
          WHERE id = ?`
       ).bind(id).run();
       return json({ ok: true, dismissed: false });
+    }
+
+    // POST/DELETE /api/agent/session/:id/setaside — "this is design work,
+    // but not for the agents".
+    //
+    // Deliberately not the dismiss route with a flag. `no-design` is a
+    // statement about the issue, it is written into Linear, and it means the
+    // work is not design work at all. This is a statement about this Hub's
+    // agents, it is nobody else's business, and it writes nothing to Linear —
+    // keeping control labels out of Dave's Linear workflow is the whole reason
+    // piece 7 exists.
+    //
+    // Which is why it needs no Linear call at all, and why it cannot fail
+    // half-way the way dismiss can. There is no ordering contract here.
+    if (path.match(/^\/api\/agent\/session\/[^/]+\/setaside$/) &&
+        (method === 'POST' || method === 'DELETE')) {
+      const id = await resolveId(env, path.split('/')[4]);
+      const row = await env.DB.prepare(
+        `SELECT requested_stage FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!row) return err('not found', 404);
+
+      if (method === 'POST') {
+        // Setting aside clears any queued run with it. A card you have just
+        // told the agents to leave alone must not still be sitting in the
+        // queue they read — and /api/agent/queue filters this column now, so
+        // leaving the entry would strand a row nothing will ever come back to.
+        //
+        // COALESCE so a second press does not move the timestamp: when it was
+        // set aside is a fact worth keeping.
+        await env.DB.prepare(
+          `UPDATE agent_sessions
+              SET set_aside_at = COALESCE(set_aside_at, datetime('now')),
+                  requested_stage = NULL,
+                  requested_at = NULL,
+                  updated_at = datetime('now')
+            WHERE id = ?`
+        ).bind(id).run();
+        return json({ ok: true, set_aside: true, cleared: row.requested_stage || null });
+      }
+
+      await env.DB.prepare(
+        `UPDATE agent_sessions SET set_aside_at = NULL, updated_at = datetime('now')
+          WHERE id = ?`
+      ).bind(id).run();
+      return json({ ok: true, set_aside: false });
     }
 
     // PATCH /api/agent/session/:id/reassign — manual brand/track correction

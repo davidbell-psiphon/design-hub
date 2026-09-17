@@ -22,6 +22,9 @@ const row = (o) => ({
   status: o.status || 'waiting', title: o.title || o.linear_id,
   updated_at: o.updated_at || null, requested_at: o.requested_at || null,
   prompt: o.prompt || null,
+  team: o.team === null ? null : (o.team || 'Conduit App'),
+  linear_project: o.linear_project || null,
+  set_aside_at: o.set_aside_at || null,
   options: o.options ? JSON.stringify(o.options) : null,
   linear_state: o.linear_state === undefined ? 'backlog' : o.linear_state,
   labels: JSON.stringify(o.labels || []),
@@ -36,9 +39,10 @@ const sessions = [
   row({ linear_id: 'CON-120', requested_stage: 'research' }),
   row({ linear_id: 'CON-124', dismissed_at: '2026-09-05 02:00:00' }),
   row({ linear_id: 'CON-125', dismissed_at: '2026-09-05 02:00:00', requested_stage: 'research' }),
-  row({ linear_id: 'WEB-271', linear_state: 'completed' }),
-  row({ linear_id: 'WEB-272', linear_state: 'canceled', dismissed_at: '2026-09-05 02:00:00' }),
-  row({ linear_id: 'RYV-187', project: 'ryve', labels: ['AI-research done'] }),
+  row({ linear_id: 'WEB-271', linear_state: 'completed', team: 'Websites' }),
+  row({ linear_id: 'WEB-272', linear_state: 'canceled', dismissed_at: '2026-09-05 02:00:00',
+        team: 'Websites' }),
+  row({ linear_id: 'RYV-187', project: 'ryve', labels: ['AI-research done'], team: 'Ryve App' }),
 ];
 
 function stubEl() {
@@ -136,9 +140,107 @@ describe('drawer rows leave the board proper', () => {
   });
 
   test('a dismissed running row does not leave a badge behind', () => {
-    // CON-120 is the only run in flight; CON-125 is queued but dismissed.
-    assert.equal((sidebar.match(/class="sb-badge waiting/g) || []).length, 2); // All brands + Conduit
-    assert.match(sidebar, /sb-badge waiting">1</);
+    // CON-120 is the only run in flight; CON-125 is queued but dismissed, so
+    // Conduit App is the one team that goes amber and the drawer rows are out
+    // of every count.
+    assert.equal((sidebar.match(/sb-badge waiting/g) || []).length, 1);
+    assert.match(sidebar, /Conduit App<\/span>[\s\S]*?sb-badge waiting">3</);
+  });
+});
+
+describe('the sidebar lists teams, not brands', () => {
+  // The reader stopped filtering by team, so every issue assigned to Dave
+  // reaches the board — 57 open cards across seven teams on the real one. The
+  // team is the context an issue arrives with; brand stays what the board is
+  // built from.
+  test('All teams first, then the teams that have open work, alphabetically', () => {
+    const names = [...sidebar.matchAll(/sb-name">([^<]+)</g)].map(m => m[1]);
+    assert.deepEqual(names, ['All teams', 'Conduit App', 'Ryve App']);
+    // Websites has two rows and both are closed, so it is not a team with open
+    // work and does not appear.
+    assert.equal(sidebar.includes('Websites'), false, 'a team with nothing open is listed');
+  });
+
+  test('the heading says what it filters on', () => {
+    assert.match(sidebar, /sb-label">Teams</);
+    assert.equal(sidebar.includes('All brands'), false, 'the brand filter is still there');
+  });
+
+  test('every open row is counted under exactly one team', () => {
+    const counts = [...sidebar.matchAll(/sb-badge[^"]*">(\d+)</g)].map(m => Number(m[1]));
+    const [all, ...teams] = counts;
+    assert.equal(all, 4, 'All teams should count every open row');
+    assert.equal(teams.reduce((a, b) => a + b, 0), all,
+                 'the teams do not add up to the board');
+  });
+});
+
+describe('filtering by team', () => {
+  let filtered;
+  before(async () => {
+    const m = await mount(sessions);
+    // setFilter is a global on the mounted board; re-render through it.
+    filtered = m;
+  });
+
+  test('a team with no open rows is not offered as a filter', () => {
+    assert.equal(filtered.sidebar.includes('>Websites<'), false);
+  });
+
+  test('brand is still what the board is built from', () => {
+    // Brand sections, not team sections — the filter narrows what is inside
+    // them rather than replacing them.
+    assert.match(filtered.drawers.above, /brand-name">Conduit</);
+    assert.match(filtered.drawers.above, /brand-name">Ryve</);
+  });
+});
+
+describe('Dismissed — design work, but not for the agents', () => {
+  const aside = [
+    row({ linear_id: 'MAR-978', project: null, team: 'Marketing',
+          linear_project: 'BCC', set_aside_at: '2026-09-16 22:00:00' }),
+    row({ linear_id: 'CON-116' }),
+    row({ linear_id: 'CON-124', dismissed_at: '2026-09-05 02:00:00' }),
+  ];
+  let m;
+  before(async () => { m = await mount(aside); });
+
+  test('it gets its own drawer, separate from No design', () => {
+    const dismissed = (m.board.match(/id="drawer-dismissed"[\s\S]*?<\/details>/) || [''])[0];
+    assert.ok(dismissed, 'no Dismissed drawer');
+    assert.ok(dismissed.includes('>MAR-978<'), 'the set-aside row is not in it');
+    assert.equal(dismissed.includes('>CON-124<'), false, 'a no-design row landed in Dismissed');
+    assert.ok(m.drawers.nodesign.includes('>CON-124<'), 'No design lost its row');
+  });
+
+  test('it leaves the board proper, like the other two drawers', () => {
+    assert.equal(m.drawers.above.includes('>MAR-978<'), false, 'still on the board');
+    assert.match(m.topbar, /^1 open$/);
+  });
+
+  test('a board card offers Dismiss beside No design', () => {
+    const card = m.sessionCard(aside[1]);
+    assert.match(card, /setAside\('linear\/CON-116'/);
+    assert.match(card, /dismissSession\('linear\/CON-116'/);
+  });
+
+  test('a dismissed card offers only the way back', () => {
+    const dismissed = (m.board.match(/id="drawer-dismissed"[\s\S]*?<\/details>/) || [''])[0];
+    assert.match(dismissed, /unsetAside\(/);
+    assert.equal(dismissed.includes('triggerSession'), false, 'a dismissed card can be triggered');
+    // Matched at the attribute boundary: unsetAside( contains setAside( .
+    assert.equal(dismissed.includes(String.fromCharCode(34) + 'setAside('), false,
+                 'offered to dismiss what is already dismissed');
+  });
+
+  test('the Linear project labels a card whose brand is not obvious', () => {
+    // Marketing does not imply a brand, so the project is what says what the
+    // work is — and the cue for whether Move to… is worth reaching for.
+    assert.match(m.sessionCard(aside[0]), /session-project">BCC</);
+    // Conduit App does imply one, so the project would repeat the heading.
+    assert.equal(
+      m.sessionCard(row({ linear_id: 'CON-116', linear_project: 'Wallet' }))
+        .includes('session-project'), false);
   });
 });
 

@@ -54,6 +54,16 @@ npx wrangler d1 execute design-hub --remote --file=./piece4-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece5-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece6-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece7-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece8-schema.sql
+```
+
+**If `--file` answers `Authentication error [code: 10000]`,** run the piece one
+statement at a time with `--command` instead. `--file` posts to D1's `/import`
+endpoint and `--command` posts to `/query`; the two are authorised separately,
+and an OAuth token that can run statements is not necessarily one that can
+import a file. piece8 was applied that way.
+
+```bash
 ```
 
 Every piece up to and including `piece5-schema.sql` is already applied to the

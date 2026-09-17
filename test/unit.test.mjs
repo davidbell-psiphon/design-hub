@@ -29,7 +29,7 @@ const { stageOf, stageName, hasLabel, isWorking, actionFor, statusPill,
         optionsOf, isGateOpen, isGateAnswered, chosenLabel, ownSection,
         stageState, stageReached, stageLabel, isSkipped,
         runState, isStalled, lastActivity, queuedSince, stampMs, failureReason,
-        consoleRows, clockTime, consoleState, clearLabel,
+        consoleRows, clockTime, consoleState, clearLabel, groupOf, projectLabel,
         STALL_AFTER_MIN, RUN_STATE_TEXT, RUN_STATE_RANK, RECENT_DONE_H } = board;
 
 // A fixed clock, so "stalled" is a fact about the row and not about when the
@@ -531,6 +531,49 @@ describe('failureReason — the card says why it stopped', () => {
   });
 });
 
+describe('groupOf — team first, project only where there is no team', () => {
+  test('the team is the group', () => {
+    assert.equal(groupOf({ team: 'Marketing', linear_project: 'BCC' }), 'Marketing');
+  });
+
+  test('the Linear project stands in where there is no team', () => {
+    // A session an agent posted with no Linear issue behind it has neither a
+    // team nor a brand. Without the fallback it is reachable only by scrolling.
+    assert.equal(groupOf({ linear_project: 'Forge Self-Serve' }), 'Forge Self-Serve');
+  });
+
+  test('a row with neither still lands somewhere', () => {
+    assert.equal(groupOf({}), 'No team');
+    assert.equal(groupOf(null), 'No team');
+  });
+
+  test('one row is in exactly one group, never two', () => {
+    // The sidebar's counts have to add up to the board's, so team and project
+    // are a fallback chain and not two dimensions.
+    const r = { team: 'Forge', linear_project: 'Forge Self-Serve' };
+    assert.equal(groupOf(r), 'Forge');
+  });
+});
+
+describe('projectLabel — shown only where the brand is not obvious', () => {
+  test('a team that implies its brand needs no project label', () => {
+    for (const team of ['Conduit App', 'Ryve App', 'Psiphon App', 'Forge']) {
+      assert.equal(projectLabel({ team, linear_project: 'Something' }), '');
+    }
+  });
+
+  test('a team that does not gets one', () => {
+    assert.equal(projectLabel({ team: 'Marketing', linear_project: 'BCC' }), 'BCC');
+    assert.equal(projectLabel({ team: 'Websites', linear_project: 'Q3 Pages' }), 'Q3 Pages');
+    assert.equal(projectLabel({ team: 'Insights', linear_project: 'Metrics' }), 'Metrics');
+  });
+
+  test('no project, no label', () => {
+    assert.equal(projectLabel({ team: 'Marketing' }), '');
+    assert.equal(projectLabel(null), '');
+  });
+});
+
 describe('sectionOf — board vs the collapsed sections', () => {
   test('an ordinary row belongs on the board', () => {
     assert.equal(sectionOf({ linear_state: 'backlog' }), 'board');
@@ -545,6 +588,25 @@ describe('sectionOf — board vs the collapsed sections', () => {
   test('completed and canceled both go to Completed', () => {
     assert.equal(sectionOf({ linear_state: 'completed' }), 'completed');
     assert.equal(sectionOf({ linear_state: 'canceled' }), 'completed');
+  });
+
+  test('set aside goes to Dismissed, which is not No design', () => {
+    // Two different statements. no-design is about the issue and is written
+    // into Linear; set_aside_at is about this Hub's agents and never leaves it.
+    assert.equal(sectionOf({ set_aside_at: '2026-09-16 22:00:00' }), 'dismissed');
+    assert.equal(sectionOf({ dismissed_at: '2026-09-16 22:00:00' }), 'nodesign');
+  });
+
+  test('no-design outranks set aside — a fact beats a preference', () => {
+    assert.equal(sectionOf({ dismissed_at: 'x', set_aside_at: 'y' }), 'nodesign');
+  });
+
+  test('closed outranks both', () => {
+    assert.equal(sectionOf({ linear_state: 'completed', set_aside_at: 'y' }), 'completed');
+  });
+
+  test('a set-aside row is not open, so it leaves every count', () => {
+    assert.equal(isOpen({ set_aside_at: 'y' }), false);
   });
 
   test('closed beats dismissed — the more final fact wins', () => {
