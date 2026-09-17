@@ -108,6 +108,53 @@ a dead run would have been the thing concealing it.
 A row whose timestamp will not parse is deliberately *not* stalled: flagging on
 missing data would flag the whole board the first time a column came back null.
 
+### Mark done
+
+The board could say what a card is *not* — No design, Dismissed — and had no
+way to say it was finished. That meant opening Linear, which is the trip this
+board exists to save. **Mark done** sets the issue to its team's finished state.
+
+It does not name a state, because every team calls it something different —
+Done, Design Done, Posted, Shipped. Linear gives every workflow state a
+`type`, and `completed` is the one that renders with the checkmark; that is
+the thing that is the same everywhere, so it is what the Worker resolves on.
+Where a team has more than one completed state the earliest by position wins:
+Linear orders a team's states left to right, and the first completed one is
+what its board's first checkmark column maps onto. The response says which
+state it used, and the toast repeats it.
+
+Linear first, the local row second — the same ordering the dismiss route
+follows and for the same reason. A card filed under Completed here but not
+there is put back by the next reconciliation pass and flickers on and off the
+board with every read. An issue that is already finished reports `already` and
+writes nothing.
+
+The queue entry goes with it. A finished issue is not work to hand the runner,
+and an entry left behind would sit on a card in the Completed drawer reading as
+**Working…**.
+
+### Dismissing a whole team
+
+With a team filter on, the topbar offers **Dismiss all _n_** — every open card
+in that team, set aside in one call. It is offered only while a filter is on:
+"Dismiss all 57" with no filter is not a button anybody wants within reach, and
+the count is in the label so it can never be a surprise.
+
+The ids are collected on the board and sent to
+`POST /api/agent/sessions/setaside`, rather than sending the team name for the
+Worker to filter on again. A second copy of the filter could drift out of step
+with the one in front of you, and then what went away would not be what you
+asked to go away. Ids the Hub does not recognise are skipped rather than
+failing the call, and the response says how many of how many moved.
+
+It is the only control on this board that asks first. Everything else is one
+card and one Undo; this is thirty-three of them.
+
+**It is a one-time action, not a rule.** The reader takes every issue assigned
+to Dave on every pass, so new Marketing issues keep arriving and keep needing
+dismissing. Nothing auto-dismisses on read: a card that silently never appears
+is exactly the failure the board was built to end.
+
 ### Stop, and Reset
 
 They are one operation — clearing the queue entry — named for what it means
@@ -654,6 +701,8 @@ Used by the board:
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
 | `POST /api/agent/session/:id/setaside` | Dismiss — design work, but not for the agents. Writes nothing to Linear |
 | `DELETE /api/agent/session/:id/setaside` | Put it back on the board |
+| `POST /api/agent/sessions/setaside` | Dismiss a list of cards at once (`{"ids":[…]}`) |
+| `POST /api/agent/session/:id/complete` | Mark done — set the Linear issue to its team's finished state |
 | `PATCH /api/agent/session/:id/reassign` | Correct brand or track |
 | `PATCH /api/agent/session/:id/respond` | Answer a waiting prompt — `{"response_option_id"}` or `{"response_section"}` where the gate has options, free text where it does not |
 | `PATCH /api/agent/session/:id/reopen` | Send a gate back for a new round — taking a decision back, or rejecting every option with `{"note"}` |

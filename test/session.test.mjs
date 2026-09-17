@@ -312,6 +312,140 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(sent[1].inputs.max_issues, '1', 'the cap was not applied');
   });
 
+  test('marking done sets the team\'s own finished state', async () => {
+    // The board could say what a card is not — no design, dismissed — and had
+    // no way to say it was finished. That meant opening Linear.
+    const db = freshDb();
+    const e = env(db);
+    const mutations = [];
+    stubLinear([issue({ identifier: 'RYV-84' })], mutations);
+    await readLinear(e);
+
+    const res = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/complete');
+    assert.equal(res.status, 200);
+    const out = await res.json();
+
+    // Resolved by type, not by name: every team calls this something else.
+    // 'Design Done' is at position 1, 'Archived' at 3 — earliest wins, and it
+    // is second in the array, so array order cannot be what decided it.
+    assert.equal(out.state, 'Design Done');
+    assert.equal(out.already, false);
+    assert.equal(mutations.length, 1, 'expected exactly one Linear write');
+    assert.match(mutations[0], /issueUpdate/);
+    assert.match(mutations[0], /stateId/);
+
+    // And the card files itself under Completed without waiting for a read.
+    assert.equal(rows(db)[0].linear_state, 'completed');
+  });
+
+  test('marking done takes the card out of the queue with it', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    const card = '/api/agent/session/' + encodeURIComponent('linear/RYV-84');
+    await call(e, 'POST', card + '/trigger', { stage: 'research' });
+
+    await call(e, 'POST', card + '/complete');
+    // A finished issue is not work to hand the runner, and an entry left
+    // behind would sit on a card in the Completed drawer reading as Working.
+    assert.equal(rows(db)[0].requested_stage, null);
+    assert.equal(rows(db)[0].requested_at, null);
+  });
+
+  test('an issue already finished is said so, and written to twice never', async () => {
+    const db = freshDb();
+    const e = env(db);
+    const mutations = [];
+    stubLinear([issue({ identifier: 'RYV-84', state: 'completed' })], mutations);
+    // Discovery does not return closed issues, so seed the row from an open
+    // one and let the stub report the closed state back.
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    stubLinear([issue({ identifier: 'RYV-84', state: 'completed' })], mutations);
+
+    const res = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/complete');
+    const out = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(out.already, true);
+    assert.equal(mutations.length, 0, 'wrote to Linear for an issue already done');
+  });
+
+  test('a team with no finished state is refused, and the card does not move', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })], null, {
+      states: [{ id: 'st-1', name: 'Backlog', type: 'backlog', position: 0 }],
+    });
+    await readLinear(e);
+    const before = rows(db)[0].linear_state;
+
+    const res = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/complete');
+    assert.equal(res.status, 502);
+    // Linear first, local second — so a refusal leaves the board as it was
+    // rather than filing a card under Completed that Linear disagrees with.
+    assert.equal(rows(db)[0].linear_state, before);
+  });
+
+  test('marking done an id nothing knows is a 404', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([]);
+    assert.equal((await call(e, 'POST', '/api/agent/session/nope/complete')).status, 404);
+  });
+
+  test('a whole team is dismissed in one call', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'MAR-1', team: 'Marketing' }),
+                issue({ identifier: 'MAR-2', team: 'Marketing' }),
+                issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/MAR-1') + '/trigger',
+      { stage: 'research' });
+
+    const res = await call(e, 'POST', '/api/agent/sessions/setaside',
+      { ids: ['linear/MAR-1', 'linear/MAR-2', 'linear/NOPE'] });
+    assert.equal(res.status, 200);
+    const out = await res.json();
+    // Three asked for, two that exist — an id it does not know is skipped
+    // rather than failing the call, so one stale id cannot strand the rest.
+    assert.equal(out.set_aside, 2);
+    assert.equal(out.asked, 3);
+
+    const byId = Object.fromEntries(rows(db).map(r => [r.linear_id, r]));
+    assert.ok(byId['MAR-1'].set_aside_at, 'MAR-1 was not set aside');
+    assert.ok(byId['MAR-2'].set_aside_at, 'MAR-2 was not set aside');
+    assert.equal(byId['RYV-84'].set_aside_at, null, 'a card nobody asked about was set aside');
+    // And a card told to stop being agent work leaves the queue with it.
+    assert.equal(byId['MAR-1'].requested_stage, null);
+  });
+
+  test('the queue and the dispatch count both skip a dismissed card', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' }), issue({ identifier: 'CON-1', team: 'Conduit App' })]);
+    await readLinear(e);
+    await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/CON-1') + '/trigger', { stage: 'research' });
+    await call(e, 'POST', '/api/agent/sessions/setaside', { ids: ['linear/CON-1'] });
+
+    const queue = await (await call(e, 'GET', '/api/agent/queue')).json();
+    assert.equal(queue.length, 0, 'a dismissed card is still being handed to the runner');
+  });
+
+  test('an empty list is refused rather than quietly doing nothing', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([]);
+    assert.equal((await call(e, 'POST', '/api/agent/sessions/setaside', { ids: [] })).status, 400);
+    assert.equal((await call(e, 'POST', '/api/agent/sessions/setaside', {})).status, 400);
+  });
+
   test('reset takes the request back out of the queue', async () => {
     // The state the board could not get itself out of. requested_stage is
     // cleared by stage-done and nothing else, so a run that failed — or was

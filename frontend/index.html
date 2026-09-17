@@ -120,6 +120,8 @@
   .session-project { font-size: 10px; color: var(--text-muted); background: var(--surface-2);
                      border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
                      white-space: nowrap; }
+  .btn-done { border-color: rgba(111,191,139,.35); color: var(--run-done); }
+  .btn-done:hover { background: rgba(111,191,139,.1); color: var(--run-done); }
   .btn-reset { border-color: rgba(224,120,100,.4); color: var(--run-error); }
   .btn-reset:hover { background: rgba(224,120,100,.1); color: var(--run-error); }
 
@@ -295,6 +297,7 @@
   <div class="topbar-sub" id="topbar-sub">Loading…</div>
   <div class="topbar-actions">
     <button class="filter-chip" id="filter-chip" style="display:none" onclick="setFilter(null)"></button>
+    <button class="btn" id="btn-bulk" style="display:none" onclick="dismissTeam(this)"></button>
     <button class="btn" id="btn-read" onclick="runReader(this)" title="Pull issues from Linear now">Read Linear</button>
     <button class="btn" id="btn-refresh" onclick="loadBoard()">Refresh</button>
   </div>
@@ -437,6 +440,7 @@ function sessionCard(r) {
       ${clearBtn}
       <button class="btn" onclick="dismissSession('${esc(id)}', this)" title="Not design work at all \u2014 applies the no-design label in Linear">No design</button>
       <button class="btn" onclick="setAside('${esc(id)}', this)" title="Design work, but not for the research or design agent. Stays in the Hub \u2014 nothing is written to Linear">Dismiss</button>
+      <button class="btn btn-done" onclick="completeSession('${esc(id)}', this)" title="Set the Linear issue to its team's finished state \u2014 Done, Design Done, whichever that team uses">Mark done</button>
       ${reassignHtml}
       ${linksHtml}`;
   }
@@ -654,6 +658,20 @@ function renderTopbar() {
   document.getElementById('topbar-sub').textContent = working
     ? `${working} running · ${scope.length} open`
     : `${scope.length} open`;
+
+  // Dismissing a whole team at once, offered only while you are looking at
+  // one. "Dismiss all 57" with no filter on is not a button anybody wants
+  // within reach, and the count is there so it can never be a surprise.
+  const bulk = document.getElementById('btn-bulk');
+  if (bulk) {
+    if (filterTeam && scope.length) {
+      bulk.textContent = `Dismiss all ${scope.length}`;
+      bulk.title = `Set aside every open card in ${filterTeam}`;
+      bulk.style.display = 'inline-flex';
+    } else {
+      bulk.style.display = 'none';
+    }
+  }
 
   // The chip is the way back to all teams, and the only always-visible signal
   // that you are looking at a subset.
@@ -881,6 +899,58 @@ async function dismissSession(id, btn) {
   } catch (e) {
     toast('Could not dismiss — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = 'No design'; }
+  }
+}
+
+// Marks the Linear issue finished, which is the one thing the board could say
+// nothing about — filing a card away under No design or Dismissed says what it
+// is not, never that it is done. Saying so meant opening Linear, which is the
+// trip this board exists to save.
+//
+// It does not name a state. Every team calls its finished state something
+// different — Done, Design Done, Posted — so the Worker resolves the team's own
+// state by *type* and reports back which one it used.
+async function completeSession(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/complete`, { method: 'POST' });
+    const state = (res && res.state) || 'done';
+    toast(res && res.already
+      ? `Already ${state} in Linear \u2014 filed under Completed`
+      : `Marked ${state} in Linear`);
+    await loadBoard();
+  } catch (e) {
+    toast('Could not mark done \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Mark done'; }
+  }
+}
+
+// Dismisses a whole team in one press. The ids are collected here, from the
+// rows the board is actually showing, rather than sent as a filter for the
+// Worker to re-apply — a second copy of the filter could drift out of step with
+// the one in front of you, and then what went away would not be what you asked
+// to go away.
+//
+// The only control on this board that asks first. Everything else is one card
+// and one Undo; this is thirty-three of them.
+async function dismissTeam(btn) {
+  if (!filterTeam) return;
+  const ids = sessions.filter(inScope).filter(isOpen).map(r => r.id);
+  if (!ids.length) return;
+  const ask = `Dismiss all ${ids.length} open cards in ${filterTeam}?\n\n` +
+    'They move to the Dismissed drawer and the agents stop seeing them. ' +
+    'Undo puts any of them back.';
+  if (typeof window.confirm === 'function' && !window.confirm(ask)) return;
+
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
+  try {
+    const res = await api('/agent/sessions/setaside', { method: 'POST', body: { ids } });
+    toast(`Dismissed ${(res && res.set_aside) || 0} cards in ${filterTeam}`);
+    await loadBoard();
+  } catch (e) {
+    toast('Could not dismiss \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = original; }
   }
 }
 

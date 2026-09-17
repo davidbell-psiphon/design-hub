@@ -145,6 +145,26 @@ export function stubLinear(issues, mutations, opts = {}) {
         issues.filter(i => ids.includes(i.id))
               .map(i => ({ id: i.id, state: i.state, labels: i.labels })) } });
     }
+    // A team's workflow states, for the complete route. Two completed states,
+    // deliberately out of position order in the array, so "the earliest by
+    // position wins" is a real assertion rather than a coincidence of ordering.
+    if (/IssueStates/.test(q)) {
+      const found = issues.find((i) => i.id === body.variables.id);
+      if (!found) return gql({ issue: null });
+      return gql({ issue: {
+        id: found.id,
+        state: found.state,
+        team: {
+          id: 'team-1',
+          name: (found.team && found.team.name) || 'Ryve App',
+          states: { nodes: opts.states || [
+            { id: 'st-backlog', name: 'Backlog',     type: 'backlog',   position: 0 },
+            { id: 'st-late',    name: 'Archived',    type: 'completed', position: 3 },
+            { id: 'st-done',    name: 'Design Done', type: 'completed', position: 1 },
+          ] },
+        },
+      } });
+    }
     if (/issueLabels/.test(q)) {
       return gql({ issueLabels: { nodes: opts.noLabel ? [] : [{ id: 'label-1' }] } });
     }

@@ -643,6 +643,48 @@ async function requireHuman(request, env) {
   return err('Forbidden — no valid Access identity', 403);
 }
 
+// ─── MARKING AN ISSUE DONE ────────────────────────────
+// Every team names its finished state differently — Done, Design Done, Posted,
+// Shipped — so the name is exactly the wrong thing to match on. Linear gives
+// every workflow state a `type`, and `completed` is the one that renders with
+// the checkmark. That is the thing that is the same everywhere.
+//
+// Where a team has more than one completed state, the earliest by position
+// wins: Linear orders a team's states left to right, and the first completed
+// one is the state its board's first checkmark column maps onto.
+const ISSUE_STATES_QUERY = `
+query IssueStates($id: String!) {
+  issue(id: $id) {
+    id
+    state { id name type }
+    team { id name states(first: 50) { nodes { id name type position } } }
+  }
+}`;
+
+const COMPLETE_MUTATION = `
+mutation Complete($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+}`;
+
+async function completedStateFor(env, issueId) {
+  const data = await linearGraphQL(env, ISSUE_STATES_QUERY, { id: String(issueId) });
+  if (data.errors) return { error: data.errors };
+  const issue = data.data && data.data.issue;
+  if (!issue) return { error: 'no such issue in Linear' };
+  // Already finished. Nothing to write, and saying so is more useful than
+  // reporting a mutation that changed nothing.
+  if (issue.state && issue.state.type === 'completed') {
+    return { already: true, state: issue.state };
+  }
+  const done = ((issue.team && issue.team.states && issue.team.states.nodes) || [])
+    .filter((st) => st && st.type === 'completed')
+    .sort((a, b) => (a.position || 0) - (b.position || 0));
+  if (!done.length) {
+    return { error: `team "${(issue.team && issue.team.name) || '?'}" has no completed state` };
+  }
+  return { state: done[0] };
+}
+
 async function removeLabelFromIssue(env, issueId, labelId) {
   const m = `mutation($issueId: String!, $labelId: String!) {
     issueRemoveLabel(id: $issueId, labelId: $labelId) { success }
@@ -1043,6 +1085,83 @@ async function route(request, env) {
           WHERE id = ?`
       ).bind(id).run();
       return json({ ok: true, set_aside: false });
+    }
+
+    // POST /api/agent/session/:id/complete — mark the issue done in Linear.
+    //
+    // The board could put a card aside and it could file it under No design,
+    // but the one thing it could not say was "this is finished" — that meant
+    // opening Linear, which is the trip the Hub exists to save.
+    //
+    // It resolves the state rather than naming one: see completedStateFor.
+    // Linear first and the local row second, which is the same ordering the
+    // dismiss route follows and for the same reason — a card moved to Completed
+    // here but not there is put back by the next reconciliation pass, and
+    // flickers on and off the board with every read.
+    if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/complete$/)) {
+      const id = await resolveId(env, path.split('/')[4]);
+      const row = await env.DB.prepare(
+        `SELECT linear_uuid FROM agent_sessions WHERE id = ?`
+      ).bind(id).first();
+      if (!row) return err('not found', 404);
+      if (!row.linear_uuid) return err('session has no linked Linear issue');
+
+      const found = await completedStateFor(env, row.linear_uuid);
+      if (found.error) return err('Linear: ' + JSON.stringify(found.error), 502);
+
+      if (!found.already) {
+        const res = await linearGraphQL(env, COMPLETE_MUTATION,
+          { id: row.linear_uuid, stateId: found.state.id });
+        if (res.errors) {
+          return err('Linear mutation failed: ' + JSON.stringify(res.errors), 502);
+        }
+      }
+
+      // The queue entry goes with it. A finished issue is not work the runner
+      // should still be handed — it would read the card as ineligible and skip
+      // it anyway, and the entry would sit there reading as Working.
+      await env.DB.prepare(
+        `UPDATE agent_sessions
+            SET linear_state = 'completed',
+                requested_stage = NULL,
+                requested_at = NULL,
+                updated_at = datetime('now')
+          WHERE id = ?`
+      ).bind(id).run();
+      return json({ ok: true, state: found.state.name, already: !!found.already });
+    }
+
+    // POST /api/agent/sessions/setaside — dismiss a list of cards at once.
+    //
+    // The ids come from the board rather than a filter sent to the server: the
+    // board already knows exactly which cards it is showing you, and a team
+    // filter reimplemented here could drift out of step with the one you are
+    // actually looking at. What you see dismissed is what you asked to dismiss.
+    if (method === 'POST' && path === '/api/agent/sessions/setaside') {
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      const ids = Array.isArray(b.ids) ? b.ids.filter(Boolean) : null;
+      if (!ids || !ids.length) return err('ids required');
+      if (ids.length > 200) return err('too many ids in one call', 413);
+
+      let n = 0;
+      for (const asked of ids) {
+        const id = (await canonicalId(env, String(asked))) || String(asked);
+        const row = await env.DB.prepare(
+          `SELECT id FROM agent_sessions WHERE id = ?`
+        ).bind(id).first();
+        if (!row) continue;
+        await env.DB.prepare(
+          `UPDATE agent_sessions
+              SET set_aside_at = COALESCE(set_aside_at, datetime('now')),
+                  requested_stage = NULL,
+                  requested_at = NULL,
+                  updated_at = datetime('now')
+            WHERE id = ?`
+        ).bind(id).run();
+        n++;
+      }
+      return json({ ok: true, set_aside: n, asked: ids.length });
     }
 
     // PATCH /api/agent/session/:id/reassign — manual brand/track correction
