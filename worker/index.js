@@ -1,6 +1,7 @@
 import { deriveBrand, deriveTrack, TEAM_TRACK } from '../lib/derive.mjs';
 import { accessIdentity } from '../lib/access.mjs';
 import { linearKeyFromSessionId } from '../lib/session-id.mjs';
+import { diagnose } from '../lib/diagnostics.mjs';
 
 // Allowed origins - your Pages deployments
 const ALLOWED_ORIGINS = [
@@ -1509,6 +1510,30 @@ async function route(request, env) {
 
 
 
+
+    // GET /api/diagnostics — §14.1 and §14.2, on demand.
+    //
+    // Every dependency this Worker has, reported pass / fail / unknown with
+    // the reason and the name of the variable involved. The point is that a
+    // missing credential is answerable in one request instead of showing up
+    // as a strange failure in the middle of a run three hours later.
+    //
+    // `?live=1` adds the network round trips — currently the Linear call.
+    // Off by default so this is cheap enough to hit whenever you want, and so
+    // that a check nobody asked for never spends anyone's API budget.
+    //
+    // Behind requireHuman like everything else. What it reports about how the
+    // Hub is configured is exactly what you would not want served openly, and
+    // when it says Access is off, that is the one moment it is served openly —
+    // which is the reason the answer is a `fail` rather than a note.
+    if (method === 'GET' && path === '/api/diagnostics') {
+      const live = url.searchParams.get('live') === '1';
+      const report = await diagnose(env, { live });
+      // 200 either way. This endpoint answering is the diagnostic; a non-200
+      // would be indistinguishable from the Worker itself being broken, which
+      // is the thing it exists to rule out.
+      return json(report);
+    }
 
     // GET /api/brands — the board's only structural read.
     //
