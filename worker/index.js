@@ -1395,10 +1395,18 @@ async function route(request, env) {
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
       if (!b.machine) return err('machine required');
       const capabilities = Array.isArray(b.capabilities) ? JSON.stringify(b.capabilities) : '[]';
-      // 'ci' or 'local'. A runner that does not send it reads as local, which
-      // is the safe default: a selection applies to it, so an old runner
-      // cannot quietly keep taking work you have pointed at another machine.
-      const kind = b.kind === 'ci' ? 'ci' : 'local';
+      // What the runner SAID it is, or null when it said nothing.
+      //
+      // Storing a guess here was a bug, and a live one: defaulting a missing
+      // value to 'local' meant every check-in from a runner that predates this
+      // field overwrote whatever was there — including a correction made by
+      // hand. A GitHub runner marked 'ci' flipped back to 'local' on its next
+      // heartbeat and was promptly starved by the selection, which is the one
+      // thing this feature is supposed never to do.
+      //
+      // So: store what was said. Null stays null, and a value already recorded
+      // survives a runner that has nothing to say about it.
+      const kind = b.kind === 'ci' ? 'ci' : b.kind === 'local' ? 'local' : null;
 
       try {
         await env.DB.prepare(
@@ -1406,7 +1414,9 @@ async function route(request, env) {
              VALUES (?, ?, ?, datetime('now'), datetime('now'))
            ON CONFLICT(machine) DO UPDATE SET
              capabilities = excluded.capabilities,
-             kind         = excluded.kind,
+             -- Only where the runner said. A check-in that is silent about
+             -- what it is must not overwrite what is already known.
+             kind         = COALESCE(excluded.kind, agent_heartbeats.kind),
              last_seen    = excluded.last_seen`
         ).bind(b.machine, capabilities, kind).run();
       } catch (e) {
@@ -1431,7 +1441,8 @@ async function route(request, env) {
       // CI can never claim. A GitHub runner is not somewhere you are sitting.
       if (b.claim && kind !== 'ci') await selectMachine(env, b.machine);
 
-      return json({ ok: true, machine: b.machine, kind, claimed: !!b.claim && kind !== 'ci' });
+      return json({ ok: true, machine: b.machine, kind: kind, 
+                    claimed: !!b.claim && kind !== 'ci' });
     }
 
     // PUT /api/agent/working-from — the by-hand half. The board sends a machine

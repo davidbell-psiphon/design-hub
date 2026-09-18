@@ -72,13 +72,24 @@ describe('a runner says where it is', () => {
     assert.equal(by['gh-runner-7'].kind, 'ci');
   });
 
-  test('a runner that does not say reads as local', async () => {
-    // An old runner must not vanish from the board, and must not escape a
-    // selection either — treating it as local is the safe reading of silence.
+  test('a runner that does not say is stored as unknown, not guessed at', async () => {
+    // It used to be stored as 'local', which was a guess written as a fact —
+    // and the guess then overwrote anything already known. What is stored is
+    // what was said.
     const { e } = await queued();
     await beat(e, 'old-runner');
     const rows = await (await machines(e)).json();
-    assert.equal(rows[0].kind, 'local');
+    assert.equal(rows[0].kind, null);
+  });
+
+  test('but unknown is READ as local, which is the safe reading of silence', async () => {
+    // An old runner must not vanish from the board, and must not escape a
+    // selection either: it could be the laptop you are not sitting at.
+    const { e } = await queued();
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
+    await beat(e, 'old-runner');
+    assert.deepEqual(await (await queue(e, 'old-runner')).json(), [],
+      'a machine that never said what it is escaped the selection');
   });
 });
 
@@ -331,6 +342,61 @@ describe('the board speaks for the machine you chose, not the freshest', () => {
 // ──────────────────────────────────────────────────────────────────────
 // Deploying this Worker before piece12 is applied
 // ──────────────────────────────────────────────────────────────────────
+
+describe('a check-in never overwrites what is already known about a machine', () => {
+  // This was live, and it starved GitHub Actions. `kind` defaulted a missing
+  // value to 'local', so every heartbeat from a runner that predates the field
+  // overwrote whatever was there — including a correction made by hand. A CI
+  // runner marked 'ci' flipped back to 'local' on its next check-in and was
+  // immediately caught by the selection.
+  test('a silent runner does not undo a known kind', async () => {
+    const { e, db } = await queued();
+    await beat(e, 'gh-runner-7', { kind: 'ci' });
+    await beat(e, 'gh-runner-7');                 // old runner: says nothing
+
+    const rows = await (await machines(e)).json();
+    assert.equal(rows.find((r) => r.machine === 'gh-runner-7').kind, 'ci',
+      'a silent check-in overwrote the kind, which is how CI got starved');
+  });
+
+  test('and a silent runner that was never known stays unknown', async () => {
+    const { e } = await queued();
+    await beat(e, 'mystery-box');
+    const rows = await (await machines(e)).json();
+    assert.equal(rows.find((r) => r.machine === 'mystery-box').kind, null,
+      'the Hub stored a guess instead of what it was told');
+  });
+
+  test('a runner that changes its mind is believed', async () => {
+    const { e } = await queued();
+    await beat(e, 'shape-shifter', { kind: 'local' });
+    await beat(e, 'shape-shifter', { kind: 'ci' });
+    const rows = await (await machines(e)).json();
+    assert.equal(rows.find((r) => r.machine === 'shape-shifter').kind, 'ci');
+  });
+
+  test('a known CI runner keeps its exemption across a silent check-in', async () => {
+    // The consequence, end to end: this is the assertion that says research
+    // still runs in the cloud while a machine is selected.
+    const { e } = await queued('research');
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
+    await beat(e, 'gh-runner-7', { kind: 'ci', capabilities: ['research'] });
+    await beat(e, 'gh-runner-7', { capabilities: ['research'] });   // silent
+
+    const out = await (await queue(e, 'gh-runner-7')).json();
+    assert.equal(out.length, 1, 'the cloud runner was starved after a silent check-in');
+  });
+
+  test('an unknown machine is still treated as local by the selection', async () => {
+    // Unchanged, and deliberate: a runner that has never said what it is could
+    // be the laptop you are not at, and it must not keep taking work you have
+    // pointed elsewhere.
+    const { e } = await queued();
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
+    await beat(e, 'unknown-laptop');
+    assert.deepEqual(await (await queue(e, 'unknown-laptop')).json(), []);
+  });
+});
 
 describe('the Worker survives a database without piece12', () => {
   // DEPLOY.md says the order does not matter. This is what makes that true,
