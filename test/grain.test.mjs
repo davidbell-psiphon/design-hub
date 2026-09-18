@@ -399,7 +399,7 @@ describe('migration-004 moves what is there without losing it', () => {
     migrate(db);
     const snapshot = () => JSON.stringify([
       rows(db).map((r) => [r.issue_key, r.brand, r.description]),
-      db.prepare(`SELECT issue_key, stage, status, requested_at FROM sessions
+      db.prepare(`SELECT issue_key, stage, status, requested_at FROM stage_sessions
                    ORDER BY issue_key, stage`).all().map((r) => Object.values(r)),
     ]);
     const after = snapshot();

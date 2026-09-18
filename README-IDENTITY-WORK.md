@@ -66,7 +66,7 @@ whole change rests on.
 |---|---|---|---|
 | The issue | Linear | mixed into the row | `cards`, replaced on every read, with `linear_read_at` |
 | The card | You | mixed into the row | `cards`, never touched by a read |
-| The session | The Manager, per stage | **one per issue** | `sessions`, one per `(issue_key, stage)` |
+| The session | The Manager, per stage | **one per issue** | `stage_sessions`, one per `(issue_key, stage)` |
 
 ### Why the grain mattered, given nothing was visibly broken
 
@@ -90,13 +90,13 @@ have silently done the wrong thing before.
 ### Three things that got simpler rather than more complex
 
 **The guard that is gone.** `cards.description` is the Linear description;
-`sessions.detail` is the agent's context. They shared a column, so the reader
+`stage_sessions.detail` is the agent's context. They shared a column, so the reader
 needed a CASE to avoid wiping the agent's — first keyed off the bridge column,
 then off `agent_posted_at`. Separate columns mean no guard, and both facts
 survive, which the old shape could not manage at all.
 
 **`requested_stage` is gone.** The stage *is* the row, so queuing is
-`sessions.requested_at`. A column saying which stage was queued could disagree
+`stage_sessions.requested_at`. A column saying which stage was queued could disagree
 with the stage that was actually queued; now there is nothing to disagree with.
 
 **The reader writes no sessions.** It used to stamp `status='waiting'` and
@@ -140,7 +140,7 @@ being defensible. `CLAUDE.md` says so where someone will see it.
 
 ## What was verified, and how
 
-527 tests, 0 failing. Every invariant was proved to bite: break it deliberately,
+536 tests, 0 failing. Every invariant was proved to bite: break it deliberately,
 confirm the named test fails, restore, confirm green.
 
 - 10 breaks for §3/§5/§6/§8/§12/§14 (`test/invariants.test.mjs`)
@@ -176,6 +176,36 @@ cron fires in that window, press Read Linear afterwards.
 
 **Nothing is dropped.** `agent_sessions` is frozen at migration time and is the
 rollback: revert the Worker and it is still there, still correct.
+
+---
+
+## What went wrong on the first deploy
+
+Worth keeping, because the failure was not in the SQL — it was in the test
+database being a different shape from the real one.
+
+`piece11-schema.sql` originally called its table `sessions`. The live database
+already has a `sessions` table: the password-auth one the retired chat organiser
+left behind, dead since Access took over, still present because §13 step 4 has
+not been run. So `CREATE TABLE IF NOT EXISTS sessions` did nothing at all,
+silently, and the next statement failed with `no such column: requested_at`.
+
+The whole suite was green through all of it. `freshDb` built a database with the
+four live tables and a stub `projects`, so the name was free — the test database
+had none of the legacy tables the real one still carries.
+
+Three things changed as a result:
+
+- The table is `stage_sessions`.
+- **`freshDb` creates the legacy tables.** That is the actual fix: the test
+  database is now the shape of the real one, and re-introducing the collision
+  fails 20 tests locally with the exact production error.
+- `test/sql.test.mjs` parses `schema.sql` for every name the old product used
+  and fails any piece that reuses one. `IF NOT EXISTS` turning a collision into
+  a silent no-op is the worst combination there is, so it gets its own test.
+
+The §13 audit had already flagged this, under a heading called "The name
+collision worth knowing about". Writing it down was not the same as checking it.
 
 ---
 

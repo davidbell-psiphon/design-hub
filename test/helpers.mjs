@@ -45,13 +45,39 @@ export function applyPieces(db, pieces) {
   }
 }
 
+// The tables the retired chat organiser left behind, which are STILL IN THE
+// LIVE DATABASE — §13 audited them as dead and step 4 has not been run, so
+// every one of them is sitting there right now.
+//
+// They are created here because a database without them is not the database
+// the migrations run against, and that difference has already cost a failed
+// deploy: piece11 originally called its table `sessions`, which collided with
+// the password-auth `sessions` below. `CREATE TABLE IF NOT EXISTS` did nothing
+// at all, silently, and the next statement failed with `no such column:
+// requested_at`. The suite was green throughout, because here the name was
+// free.
+//
+// Shapes are from schema.sql. Only the names matter for collisions, but the
+// columns are real so that a piece which touches one is exercised properly.
+const LEGACY = [
+  `CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, color TEXT,
+     section_id TEXT, sort_order INTEGER)`,
+  `CREATE TABLE sections (id TEXT PRIMARY KEY, name TEXT, sort_order INTEGER)`,
+  `CREATE TABLE capabilities (id INTEGER PRIMARY KEY, project_id TEXT, text TEXT)`,
+  `CREATE TABLE resources (id INTEGER PRIMARY KEY, project_id TEXT, label TEXT, url TEXT)`,
+  `CREATE TABLE chats (id INTEGER PRIMARY KEY, project_id TEXT, title TEXT, url TEXT)`,
+  `CREATE TABLE auth (id INTEGER PRIMARY KEY, password_hash TEXT)`,
+  `CREATE TABLE sessions (token TEXT PRIMARY KEY, expires_at TEXT,
+     created_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE TABLE rate_limits (ip TEXT PRIMARY KEY, attempts INTEGER, reset_at TEXT)`,
+];
+
 // piece4-schema.sql sets the brand colours, so `projects` has to exist for it
 // to apply verbatim — which is worth keeping, since applying every piece in
 // order is half of what these suites check.
 export function freshDb(pieces = PIECES) {
   const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, color TEXT,
-             section_id TEXT, sort_order INTEGER)`);
+  for (const stmt of LEGACY) db.exec(stmt);
   applyPieces(db, pieces);
   return db;
 }
@@ -212,11 +238,11 @@ export const one = (db, key) =>
 // what most fixtures have, and asserting on "the session" is clearer there
 // than naming a stage the test does not care about.
 export const session = (db, key, stage) => stage
-  ? db.prepare(`SELECT * FROM sessions WHERE issue_key = ? AND stage = ?`).get(key, stage)
-  : db.prepare(`SELECT * FROM sessions WHERE issue_key = ?`).get(key);
+  ? db.prepare(`SELECT * FROM stage_sessions WHERE issue_key = ? AND stage = ?`).get(key, stage)
+  : db.prepare(`SELECT * FROM stage_sessions WHERE issue_key = ?`).get(key);
 
 export const sessionsOf = (db, key) =>
-  db.prepare(`SELECT * FROM sessions WHERE issue_key = ? ORDER BY stage`).all(key);
+  db.prepare(`SELECT * FROM stage_sessions WHERE issue_key = ? ORDER BY stage`).all(key);
 
 // A card as the API serves it: the projection in lib/card.mjs, over what is
 // actually stored. This is the shape the board reads, so a test about what the

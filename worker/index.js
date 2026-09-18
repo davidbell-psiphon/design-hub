@@ -72,7 +72,7 @@ async function closeRound(env, key, stage, row, note) {
            row.response_option_id || null, trail).run();
   }
   await env.DB.prepare(
-    `UPDATE sessions
+    `UPDATE stage_sessions
         SET gate_round = COALESCE(gate_round, 1) + 1,
             response = NULL, response_option_id = NULL, response_note = NULL,
             responded_at = NULL, updated_at = datetime('now')
@@ -191,7 +191,7 @@ async function cardWire(env, key) {
   ).bind(key).first();
   if (!card) return null;
   const { results } = await env.DB.prepare(
-    `SELECT * FROM sessions WHERE issue_key = ? ORDER BY stage`
+    `SELECT * FROM stage_sessions WHERE issue_key = ? ORDER BY stage`
   ).bind(key).all();
   return toWire(card, results || []);
 }
@@ -211,7 +211,7 @@ async function ensureCard(env, key) {
 // of one of these, so nothing creates them speculatively.
 async function ensureSession(env, key, stage) {
   await env.DB.prepare(
-    `INSERT INTO sessions (issue_key, stage) VALUES (?, ?)
+    `INSERT INTO stage_sessions (issue_key, stage) VALUES (?, ?)
      ON CONFLICT(issue_key, stage) DO NOTHING`
   ).bind(key, stage).run();
 }
@@ -219,7 +219,7 @@ async function ensureSession(env, key, stage) {
 // Every session on a card, oldest stage first.
 async function sessionsFor(env, key) {
   const { results } = await env.DB.prepare(
-    `SELECT * FROM sessions WHERE issue_key = ? ORDER BY stage`
+    `SELECT * FROM stage_sessions WHERE issue_key = ? ORDER BY stage`
   ).bind(key).all();
   return results || [];
 }
@@ -810,7 +810,7 @@ async function route(request, env) {
       const prev = await env.DB.prepare(
         `SELECT issue_key, stage, options, gate_round, response,
                 response_option_id, response_note
-           FROM sessions WHERE issue_key = ? AND stage = ?`
+           FROM stage_sessions WHERE issue_key = ? AND stage = ?`
       ).bind(key, stage).first();
       if (options && prev && (prev.response_option_id || prev.response) &&
           !sameOptions(parseOptions(prev.options), parseOptions(options))) {
@@ -822,7 +822,7 @@ async function route(request, env) {
       // Linear-owned column, and no guard stopping a cron read wiping the
       // agent's detail, because none of those columns are here any more.
       await env.DB.prepare(
-        `UPDATE sessions SET
+        `UPDATE stage_sessions SET
            system          = ?,
            status          = ?,
            prompt          = ?,
@@ -920,7 +920,7 @@ async function route(request, env) {
       // waiting to start would put two rows in the queue for one issue — which
       // reads on the board as one card in two places.
       const busy = await env.DB.prepare(
-        `SELECT stage FROM sessions WHERE issue_key = ? AND requested_at IS NOT NULL`
+        `SELECT stage FROM stage_sessions WHERE issue_key = ? AND requested_at IS NOT NULL`
       ).bind(key).first();
       if (busy) return err(`already queued for ${busy.stage}`, 409);
 
@@ -928,7 +928,7 @@ async function route(request, env) {
       // stage — there is no `requested_stage` to disagree with it.
       await ensureSession(env, key, b.stage);
       await env.DB.prepare(
-        `UPDATE sessions
+        `UPDATE stage_sessions
             SET requested_at = datetime('now'), updated_at = datetime('now')
           WHERE issue_key = ? AND stage = ?`
       ).bind(key, b.stage).run();
@@ -938,7 +938,7 @@ async function route(request, env) {
       // if the two ever disagreed, the Hub would be telling the runner to take
       // a number of issues it is not going to be shown.
       const queued = await env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM sessions s
+        `SELECT COUNT(*) AS n FROM stage_sessions s
            JOIN cards c ON c.issue_key = s.issue_key
           WHERE s.requested_at IS NOT NULL
             AND c.dismissed_at IS NULL
@@ -981,11 +981,11 @@ async function route(request, env) {
       // What is reported back is the queued stage, which is the thing the
       // press was most likely about.
       const queued = await env.DB.prepare(
-        `SELECT stage, status FROM sessions
+        `SELECT stage, status FROM stage_sessions
           WHERE issue_key = ? AND requested_at IS NOT NULL`
       ).bind(key).first();
       const errored = await env.DB.prepare(
-        `SELECT stage, status FROM sessions
+        `SELECT stage, status FROM stage_sessions
           WHERE issue_key = ? AND status = 'error'`
       ).bind(key).first();
 
@@ -1000,7 +1000,7 @@ async function route(request, env) {
       // Both CASEs read each row as it was, so clearing the prompt keys off
       // the old status rather than the one being written in the same statement.
       await env.DB.prepare(
-        `UPDATE sessions
+        `UPDATE stage_sessions
             SET requested_at = NULL,
                 status = CASE WHEN status = 'error' THEN 'waiting' ELSE status END,
                 prompt = CASE WHEN status = 'error' THEN NULL ELSE prompt END,
@@ -1032,7 +1032,7 @@ async function route(request, env) {
                 c.team        AS team,
                 s.stage       AS requested_stage,
                 s.requested_at AS requested_at
-           FROM sessions s
+           FROM stage_sessions s
            JOIN cards c ON c.issue_key = s.issue_key
           WHERE s.requested_at IS NOT NULL
             AND c.dismissed_at IS NULL
@@ -1091,7 +1091,7 @@ async function route(request, env) {
 
       await ensureSession(env, id, b.stage);
       await env.DB.prepare(
-        `UPDATE sessions
+        `UPDATE stage_sessions
             SET status = 'done', requested_at = NULL,
                 last_error = NULL, last_error_at = NULL,
                 updated_at = datetime('now')
@@ -1161,7 +1161,7 @@ async function route(request, env) {
       // Whatever is queued on this card, so setting it aside can report what
       // it called off. There may be no session at all, which is not an error.
       const row = (await env.DB.prepare(
-        `SELECT stage FROM sessions WHERE issue_key = ? AND requested_at IS NOT NULL`
+        `SELECT stage FROM stage_sessions WHERE issue_key = ? AND requested_at IS NOT NULL`
       ).bind(id).first()) || {};
 
       if (method === 'POST') {
@@ -1179,7 +1179,7 @@ async function route(request, env) {
             WHERE issue_key = ?`
         ).bind(id).run();
         await env.DB.prepare(
-          `UPDATE sessions SET requested_at = NULL, updated_at = datetime('now')
+          `UPDATE stage_sessions SET requested_at = NULL, updated_at = datetime('now')
             WHERE issue_key = ? AND requested_at IS NOT NULL`
         ).bind(id).run();
         return json({ ok: true, set_aside: true, cleared: row.stage || null });
@@ -1249,7 +1249,7 @@ async function route(request, env) {
           WHERE issue_key = ?`
       ).bind(id).run();
       await env.DB.prepare(
-        `UPDATE sessions SET requested_at = NULL, updated_at = datetime('now')
+        `UPDATE stage_sessions SET requested_at = NULL, updated_at = datetime('now')
           WHERE issue_key = ? AND requested_at IS NOT NULL`
       ).bind(id).run();
       return json({ ok: true, state: found.state.name, already: !!found.already });
@@ -1360,7 +1360,7 @@ async function route(request, env) {
             WHERE issue_key = ?`
         ).bind(id).run();
         await env.DB.prepare(
-          `UPDATE sessions SET requested_at = NULL, updated_at = datetime('now')
+          `UPDATE stage_sessions SET requested_at = NULL, updated_at = datetime('now')
             WHERE issue_key = ? AND requested_at IS NOT NULL`
         ).bind(id).run();
         n++;
@@ -1411,7 +1411,7 @@ async function route(request, env) {
         `SELECT * FROM cards WHERE linear_uuid IS NOT NULL`
       ).all();
       const { results: sessionRows } = await env.DB.prepare(
-        `SELECT * FROM sessions`
+        `SELECT * FROM stage_sessions`
       ).all();
 
       const byKey = new Map();
@@ -1474,7 +1474,7 @@ async function route(request, env) {
         if (section) {
           if (section.length > 200) return err('section name too long — 200 characters at most');
           await env.DB.prepare(
-            `UPDATE sessions
+            `UPDATE stage_sessions
                 SET response_option_id = NULL, response_note = ?, response = ?,
                     responded_at = datetime('now'),
                     status = 'active', updated_at = datetime('now')
@@ -1496,7 +1496,7 @@ async function route(request, env) {
         // than typed, so it can no longer say something the question never
         // offered.
         await env.DB.prepare(
-          `UPDATE sessions
+          `UPDATE stage_sessions
               SET response_option_id = ?, response_note = ?, response = ?,
                   responded_at = datetime('now'),
                   status = 'active', updated_at = datetime('now')
@@ -1508,7 +1508,7 @@ async function route(request, env) {
 
       if (!b.response) return err('response required');
       await env.DB.prepare(
-        `UPDATE sessions
+        `UPDATE stage_sessions
          SET response = ?, response_note = ?, responded_at = datetime('now'),
              status = 'active', updated_at = datetime('now')
          WHERE issue_key = ? AND stage = ?`
@@ -1547,7 +1547,7 @@ async function route(request, env) {
       }
       const round = await closeRound(env, key, stage, row, note || null);
       await env.DB.prepare(
-        `UPDATE sessions SET status = 'waiting', updated_at = datetime('now')
+        `UPDATE stage_sessions SET status = 'waiting', updated_at = datetime('now')
           WHERE issue_key = ? AND stage = ?`
       ).bind(key, stage).run();
       return json({ ok: true, gate_round: round, status: 'waiting' });
@@ -1588,7 +1588,7 @@ async function route(request, env) {
       fields.push("updated_at = datetime('now')");
       values.push(key, stage);
       await env.DB.prepare(
-        `UPDATE sessions SET ${fields.join(', ')} WHERE issue_key = ? AND stage = ?`
+        `UPDATE stage_sessions SET ${fields.join(', ')} WHERE issue_key = ? AND stage = ?`
       ).bind(...values).run();
       return json({ ok: true });
     }
@@ -1600,7 +1600,7 @@ async function route(request, env) {
         // The sessions go with the card. They are the card's transient state
         // and nothing else refers to them; leaving them would be the orphaned
         // rows §11 already lists once, in a new place.
-        await env.DB.prepare(`DELETE FROM sessions WHERE issue_key = ?`).bind(id).run();
+        await env.DB.prepare(`DELETE FROM stage_sessions WHERE issue_key = ?`).bind(id).run();
         await env.DB.prepare(`DELETE FROM cards WHERE issue_key = ?`).bind(id).run();
       }
       return json({ ok: true });
@@ -1675,7 +1675,7 @@ async function route(request, env) {
   if (method === 'GET' && path === '/api/sessions') {
     const { results } = await env.DB.prepare(
       `SELECT DISTINCT c.issue_key, c.created_at FROM cards c
-         JOIN sessions s ON s.issue_key = c.issue_key
+         JOIN stage_sessions s ON s.issue_key = c.issue_key
         WHERE s.status = 'waiting'
         ORDER BY c.created_at DESC`
     ).all();

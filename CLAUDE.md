@@ -34,13 +34,24 @@ Three kinds of fact, three homes, split on who owns them:
 | Table | Grain | Holds | Who writes it |
 |---|---|---|---|
 | `cards` | one per Linear issue | the Linear cache, and your overrides | the reader, and your presses |
-| `sessions` | one per **(issue_key, stage)** | the run and the whole gate | the agent, and the trigger |
+| `stage_sessions` | one per **(issue_key, stage)** | the run and the whole gate | the agent, and the trigger |
 | `gate_decisions` | one per round | decision history | `closeRound` only |
 
 ```
-cards.issue_key ─┬─ sessions (issue_key, stage)  research | design | …
+cards.issue_key ─┬─ stage_sessions (issue_key, stage)  research | design
                  └─ gate_decisions (session_id = issue_key, stage, gate_round)
 ```
+
+**It is `stage_sessions`, not `sessions`.** The retired chat organiser left a
+`sessions` table in the live database (password auth, dead since Access took
+over, still there because §13 step 4 has not run). Naming the new one `sessions`
+made `CREATE TABLE IF NOT EXISTS` a silent no-op against production, and the
+next statement failed on a column that was never created — a failed deploy, with
+the local suite green throughout.
+
+**Check `schema.sql` before naming a new table.** `test/sql.test.mjs` enforces
+it, and `freshDb` creates the legacy tables now, so the test database is the
+shape of the real one.
 
 ### Identity: the Linear issue key, and nothing else
 
@@ -78,7 +89,7 @@ ever, and then it is not a cache, it is a second home.
 **You own it** → `cards`, and **a reader pass must not mention it**.
 `brand`, `track`, `figma_url`, `dismissed_at`, `set_aside_at`.
 
-**A run owns it** → `sessions`, per stage.
+**A run owns it** → `stage_sessions`, per stage.
 `status`, `prompt`, `detail`, `options`, `gate_round`, `response*`,
 `requested_at`, `started_at`, `last_error`, `mockups_*`, `handoff_at`.
 

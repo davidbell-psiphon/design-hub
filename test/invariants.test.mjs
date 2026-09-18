@@ -169,7 +169,7 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     // reader must leave both alone, and the two halves are written by
     // different code, so both are worth asserting.
     db.prepare(
-      `INSERT INTO sessions (issue_key, stage, requested_at)
+      `INSERT INTO stage_sessions (issue_key, stage, requested_at)
        VALUES ('RYV-84', 'design', '2026-09-01 10:00:00')`
     ).run();
 

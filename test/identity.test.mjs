@@ -122,8 +122,8 @@ describe('§2 — one Linear issue can only ever be one card', () => {
     // card is the normal case, and the thing the old row could not express.
     const db = freshDb();
     db.prepare(`INSERT INTO cards (issue_key) VALUES ('RYV-84')`).run();
-    db.prepare(`INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'research')`).run();
-    db.prepare(`INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'design')`).run();
+    db.prepare(`INSERT INTO stage_sessions (issue_key, stage) VALUES ('RYV-84', 'research')`).run();
+    db.prepare(`INSERT INTO stage_sessions (issue_key, stage) VALUES ('RYV-84', 'design')`).run();
 
     assert.equal(rows(db).length, 1, 'two sessions became two cards');
     assert.equal(sessionsOf(db, 'RYV-84').length, 2);
@@ -132,10 +132,10 @@ describe('§2 — one Linear issue can only ever be one card', () => {
   test('but not two sessions at the same stage', () => {
     const db = freshDb();
     db.prepare(`INSERT INTO cards (issue_key) VALUES ('RYV-84')`).run();
-    db.prepare(`INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'design')`).run();
+    db.prepare(`INSERT INTO stage_sessions (issue_key, stage) VALUES ('RYV-84', 'design')`).run();
     assert.throws(
       () => db.prepare(
-        `INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'design')`
+        `INSERT INTO stage_sessions (issue_key, stage) VALUES ('RYV-84', 'design')`
       ).run(),
       /UNIQUE|constraint|PRIMARY KEY/i,
       '(issue_key, stage) is not the key it is supposed to be');

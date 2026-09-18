@@ -64,7 +64,7 @@ npx wrangler d1 execute design-hub --remote --file=./migration-004-grain.sql
 
 ### piece11 and migration-004: the card/session split
 
-`piece11-schema.sql` creates `cards` and `sessions`; `migration-004-grain.sql`
+`piece11-schema.sql` creates `cards` and `stage_sessions`; `migration-004-grain.sql`
 copies `agent_sessions` into them. **Run both, then deploy, in one sitting.**
 
 The currently deployed Worker reads `agent_sessions` and is unaffected by either
@@ -80,7 +80,7 @@ Check it landed before deploying. The three numbers must match:
 npx wrangler d1 execute design-hub --remote --command \
   "SELECT (SELECT COUNT(*) FROM agent_sessions WHERE linear_id IS NOT NULL) AS was,
           (SELECT COUNT(*) FROM cards) AS cards,
-          (SELECT COUNT(*) FROM sessions) AS sessions"
+          (SELECT COUNT(*) FROM stage_sessions) AS sessions"
 ```
 
 And after deploying, the board should look exactly as it did — that is the
