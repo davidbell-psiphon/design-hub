@@ -741,6 +741,21 @@ async function removeLabelFromIssue(env, issueId, labelId) {
   return linearGraphQL(env, m, { issueId, labelId });
 }
 
+// Brand rows as they were stored before piece10-schema.sql: in `projects`,
+// found by a section id. Only reached while `brands` is empty, and returns
+// nothing rather than throwing if the old table has gone — a board with no
+// brand buckets is recoverable, a 500 on its only structural read is not.
+async function legacyBrands(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, name, color FROM projects WHERE section_id = 'brands' ORDER BY sort_order`
+    ).all();
+    return results || [];
+  } catch (e) {
+    return [];
+  }
+}
+
 async function route(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -1496,15 +1511,30 @@ async function route(request, env) {
 
 
     // GET /api/brands — the board's only structural read.
-    // Brand identity still lives in `projects` rows under the 'brands'
-    // section: that is where the current brand colours are, and keeping them
-    // in D1 means a colour change is an UPDATE, not a deploy. The rest of
-    // that table's UI is gone; these three columns are all the board reads.
+    //
+    // Keeping brand identity in D1 means a colour change is an UPDATE and not
+    // a deploy, which is worth having. Where it was kept was not: this read
+    // was `SELECT ... FROM projects WHERE section_id = 'brands'`, and
+    // `projects` is the sidebar hierarchy of the retired chat organiser
+    // (§13). The board's only structural read pointed at an otherwise dead
+    // table, and found its rows by a magic string you had to know the history
+    // to recognise. piece10-schema.sql gives it a table named for what it
+    // holds.
     if (method === 'GET' && path === '/api/brands') {
       const { results } = await env.DB.prepare(
-        `SELECT id, name, color FROM projects WHERE section_id = 'brands' ORDER BY sort_order`
+        `SELECT id, name, color FROM brands ORDER BY sort_order`
       ).all();
-      return json(results || []);
+      if (results && results.length) return json(results);
+
+      // Transitional, and deliberately not a silent default: an empty read
+      // means this Worker is deployed and piece10 has not been applied yet.
+      // The board losing every brand bucket over a deploy-ordering mistake is
+      // not worth the purity — same reasoning as readerTeams.
+      //
+      // DELETE THIS once piece10-schema.sql is applied and the board has been
+      // confirmed to render its brands. At that point `projects` has no reader
+      // left and §13 step 4 is unblocked.
+      return json(await legacyBrands(env));
     }
 
     // POST /api/read-linear — run the Linear Reader on demand

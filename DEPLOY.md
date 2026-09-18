@@ -56,7 +56,16 @@ npx wrangler d1 execute design-hub --remote --file=./piece6-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece7-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece8-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece9-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece10-schema.sql
 ```
+
+`piece10-schema.sql` moves the board's brand list out of `projects` — the
+retired chat organiser's table — into a `brands` table of its own, seeded from
+whatever `projects` currently holds. **The order it is applied in does not
+matter**: `/api/brands` falls back to the old query while `brands` is empty, so
+neither a Worker deployed before the migration nor a migration run before the
+deploy loses the brand buckets. Once it is applied and the board has been seen
+to render its brands, delete the fallback — `worker/index.js` says where.
 
 **If `--file` answers `Authentication error [code: 10000]`,** run the piece one
 statement at a time with `--command` instead. `--file` posts to D1's `/import`

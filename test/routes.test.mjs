@@ -15,7 +15,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows,
+  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, applyPieces,
 } from './helpers.mjs';
 
 const CARD = 'linear/RYV-84';
@@ -156,6 +156,76 @@ describe('GET /api/brands', () => {
   test('no brand rows is an empty array', async () => {
     const out = await (await call(env(freshDb()), 'GET', '/api/brands')).json();
     assert.deepEqual(out, []);
+  });
+
+  // piece10-schema.sql moved brand identity out of `projects` — the retired
+  // chat organiser's sidebar hierarchy — into a table named for what it holds.
+  // The two tests above still pass because the fallback is still there; these
+  // are what say the new table is actually the one being read.
+  test('reads the brands table', async () => {
+    const db = freshDb();
+    db.exec(`INSERT INTO brands (id, name, color, sort_order) VALUES
+      ('ryve', 'Ryve', '#206CCC', 2),
+      ('conduit', 'Conduit', '#7E67A4', 1)`);
+
+    const out = await (await call(env(db), 'GET', '/api/brands')).json();
+    assert.deepEqual(out.map(b => b.id), ['conduit', 'ryve'],
+                     'brands came back unsorted, or not from the brands table');
+    assert.equal(out[0].color, '#7E67A4');
+  });
+
+  test('the brands table wins over the projects fallback', async () => {
+    const db = freshDb();
+    db.exec(`INSERT INTO projects (id, name, color, section_id, sort_order) VALUES
+      ('stale', 'Left over', '#000', 'brands', 0)`);
+    db.exec(`INSERT INTO brands (id, name, color, sort_order) VALUES
+      ('conduit', 'Conduit', '#7E67A4', 1)`);
+
+    const out = await (await call(env(db), 'GET', '/api/brands')).json();
+    assert.deepEqual(out.map(b => b.id), ['conduit'],
+                     'the legacy projects row leaked through a populated brands table');
+  });
+
+  // The window between deploying this Worker and applying piece10. The board
+  // losing every brand bucket over a deploy-ordering mistake is the thing the
+  // fallback exists to prevent, so it gets a test rather than a comment alone.
+  test('falls back to projects while brands is empty', async () => {
+    const db = freshDb();
+    db.exec(`INSERT INTO projects (id, name, color, section_id, sort_order) VALUES
+      ('conduit', 'Conduit', '#7E67A4', 'brands', 1)`);
+
+    const out = await (await call(env(db), 'GET', '/api/brands')).json();
+    assert.deepEqual(out.map(b => b.id), ['conduit'],
+                     'an unmigrated database lost its brand buckets');
+  });
+
+  // And the window on the other side: `projects` dropped by §13 step 4 before
+  // anyone noticed the fallback was still wired up. A missing table must not
+  // 500 the board's only structural read.
+  test('a missing projects table is an empty list, not a 500', async () => {
+    const db = freshDb();
+    db.exec(`DROP TABLE projects`);
+
+    const res = await call(env(db), 'GET', '/api/brands');
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), []);
+  });
+
+  // piece10 carries the live values across rather than retyping them, so a
+  // colour changed by hand since piece4 arrives with the rest.
+  test('piece10 seeds brands from whatever projects currently holds', async () => {
+    // freshDb creates `projects` and applies nothing, so this is the table as
+    // it stands the moment before the migration runs.
+    const db = freshDb([]);
+    db.exec(`INSERT INTO projects (id, name, color, section_id, sort_order) VALUES
+      ('conduit', 'Conduit', '#CHANGED', 'brands', 1),
+      ('notabrand', 'Something else', '#000', 'other', 0)`);
+    applyPieces(db, ['piece10-schema.sql']);
+
+    const seeded = db.prepare(`SELECT id, color FROM brands ORDER BY id`)
+      .all().map(r => [r.id, r.color]);
+    assert.deepEqual(seeded, [['conduit', '#CHANGED']],
+                     'the seed retyped the colours, or dragged a non-brand row across');
   });
 });
 
