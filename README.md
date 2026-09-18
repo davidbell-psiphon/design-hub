@@ -559,8 +559,17 @@ This is read-side derivation only (`stageState` / `stageReached` in
 reads the column rather than special-casing `no-research`, so the stage button
 and the column a card sits in can no longer disagree.
 
-`design-ai:go` and `design-ai:qa` are retired. Nothing writes them and nothing
-reads them.
+`design-ai:go` and `design-ai:qa` are retired, and are gone from the issues as
+well as from the code — §12: *"Retired labels must be removed rather than
+documented as meaningless."* A label that still exists and does nothing is a
+piece of trivia every reader, human or agent, has to know in order to ignore.
+`design-ai:go` was taken off RYV-84 and RYV-86 on 18 September 2026; there is a
+test in `test/invariants.test.mjs` asserting it would change nothing if it came
+back.
+
+The four labels in §12 are the whole vocabulary: `AI-research done`,
+`AI-design done`, `no-research`, `no-design`. Absence means "not yet" and
+nothing else.
 
 ---
 

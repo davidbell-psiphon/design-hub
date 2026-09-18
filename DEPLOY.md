@@ -120,12 +120,12 @@ on every read and every trigger, and the board reads `labels` to decide which
 column a card is in — deploy against a database without them and the reader
 throws and the board renders every card under Backlog.
 
-**`piece6-schema.sql` goes first, before `npx wrangler deploy`.** It adds
-`agent_session_id`, which the new Worker reads on every session route — deploy
-the Worker against a database without that column and every one of those routes
-throws. It also merges the duplicate rows that are in the table now (see
-[One card per issue](./README.md#one-card-per-issue)), so it is worth reading
-the row counts before and after:
+**`piece6-schema.sql` went first, before its own deploy.** It added
+`agent_session_id` and merged the duplicate rows that were in the table (see
+[One card per issue](./README.md#one-card-per-issue)). Both are history now:
+`migration-003-identity.sql` made the Linear issue key the identity outright,
+and nothing reads `agent_session_id` any more. The row counts are still worth
+reading around any migration that touches identity:
 
 ```bash
 npx wrangler d1 execute design-hub --remote \
