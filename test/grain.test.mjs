@@ -17,6 +17,10 @@
 // it, so there is no third copy to drift.
 
 import { test, describe } from 'node:test';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 import { toWire, activeSession } from '../lib/card.mjs';
@@ -25,6 +29,7 @@ import {
   session, sessionsOf, wire,
 } from './helpers.mjs';
 
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KEY = 'RYV-84';
 
 async function board(issues = [issue({ identifier: KEY })]) {
@@ -407,6 +412,134 @@ describe('migration-004 moves what is there without losing it', () => {
     // Everything before it is INSERT OR IGNORE and has to be safe.
     try { migrate(db); } catch (e) { /* duplicate column name: expected */ }
     assert.equal(snapshot(), after, 'a second run moved something');
+  });
+});
+
+
+// ──────────────────────────────────────────────────────────────────────
+// §4 — the last error is kept and shown
+// ──────────────────────────────────────────────────────────────────────
+
+describe('§4 — an error that cannot be read is still a mystery', () => {
+  // "The last error is kept and shown on the card — message, stage, and when.
+  // An error that exists only in a terminal you have closed is not an error
+  // state, it is a mystery."
+  //
+  // This was failing in production. A research run died, and the card said:
+  //
+  //   Research failed — claude-failed. {"is_error":true,"duration_api_ms":
+  //   671294,"num_turns":42,"stop_reason":"tool_use","session_id":"1e5b7abe-…
+  //
+  // truncated mid-field, naming no cause, filed in `prompt` — which is the
+  // question put to a human, not a place for a stack trace.
+  async function errored(body = {}) {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    await agentPost(e, {
+      session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'error',
+      prompt: 'Research failed — claude-failed.',
+      last_error: 'claude exited 1 (stop_reason: tool_use, 42 turns)\nfull output: logs/runs/x/RYV-84.json',
+      ...body,
+    });
+    return { db, e };
+  }
+
+  test('it is kept, with the stage and the time', async () => {
+    const { db } = await errored();
+    const s = session(db, 'RYV-84', 'research');
+    assert.match(s.last_error, /stop_reason: tool_use/);
+    assert.ok(s.last_error_at, 'the error has no time on it');
+    assert.equal(s.stage, 'research', 'the error is not attached to a stage');
+  });
+
+  test('the whole message survives — no truncation mid-field', async () => {
+    // 400 characters was the old limit, and it cut the only useful part.
+    const long = 'x'.repeat(1200) + ' END';
+    const { db } = await errored({ last_error: long });
+    assert.match(session(db, 'RYV-84', 'research').last_error, /END$/,
+      'the error was truncated before the part that says what happened');
+  });
+
+  test('an agent that reports an error and says nothing still leaves a trace', async () => {
+    const { db } = await errored({ last_error: undefined, prompt: undefined });
+    assert.ok(session(db, 'RYV-84', 'research').last_error,
+      'a card said it failed and could not say how — the mystery §4 names');
+  });
+
+  test('it falls back to the prompt, for errors written before the column', async () => {
+    const { db } = await errored({ last_error: undefined });
+    assert.match(session(db, 'RYV-84', 'research').last_error, /claude-failed/);
+  });
+
+  test('starting again clears it', async () => {
+    // A run that is going is not still carrying the last failure.
+    const { db, e } = await errored();
+    await agentPost(e, {
+      session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'active',
+    });
+    const s = session(db, 'RYV-84', 'research');
+    assert.equal(s.last_error, null, 'a running card still showed the last failure');
+    assert.equal(s.last_error_at, null);
+  });
+
+  test('it reaches the board', async () => {
+    const { db } = await errored();
+    const w = wire(db, 'RYV-84');
+    assert.match(w.last_error, /stop_reason: tool_use/);
+    assert.ok(w.last_error_at);
+  });
+
+  test('and one stage failing does not put an error on the other', async () => {
+    const { db, e } = await errored();
+    await agentPost(e, {
+      session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'waiting',
+      prompt: 'Which direction?',
+    });
+    assert.ok(session(db, 'RYV-84', 'research').last_error);
+    assert.equal(session(db, 'RYV-84', 'design').last_error, null,
+      'the design session inherited the research failure');
+  });
+});
+
+describe('§4 — the board can read a failure at a glance', () => {
+  const b = (row) => {
+    const ctx = vm.createContext({ Date, Math, isNaN, String });
+    vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), ctx);
+    return ctx;
+  };
+
+  test('the summary is the first line, not the whole dump', () => {
+    const ctx = b();
+    const row = { status: 'error',
+      last_error: 'claude exited 1 (stop_reason: tool_use, 42 turns)\nfull output: logs/runs/x/RYV-84.json' };
+    assert.equal(ctx.failureSummary(row), 'claude exited 1 (stop_reason: tool_use, 42 turns)');
+    // The rest is still available where there is room for it.
+    assert.match(ctx.failureReason(row), /full output:/);
+  });
+
+  test('a very long first line is cut short and marked as cut', () => {
+    // Cut by character count, not by word — a card has a fixed width and the
+    // ellipsis is what says there is more, which `failureReason` still has.
+    const ctx = b();
+    const row = { status: 'error', last_error: 'y'.repeat(400) };
+    const out = ctx.failureSummary(row);
+    assert.ok(out.length <= 200, 'a 400-character line reached the card whole');
+    assert.match(out, /…$/, 'it was cut with nothing to say so');
+    assert.equal(ctx.failureReason(row).length, 400, 'the full text was lost too');
+  });
+
+  test('an error written before the column still reads', () => {
+    const ctx = b();
+    assert.equal(ctx.failureSummary({ status: 'error', prompt: 'Research failed — old style' }),
+                 'Research failed — old style');
+  });
+
+  test('a card that has not failed says nothing', () => {
+    const ctx = b();
+    assert.equal(ctx.failureSummary({ status: 'active', last_error: 'stale' }), '');
+    assert.equal(ctx.failureAt({ status: 'active', last_error_at: 'x' }), '');
   });
 });
 

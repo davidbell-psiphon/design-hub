@@ -515,9 +515,36 @@ function clearLabel(r, now, rows) {
 // reason they were the first: a card that has stopped and will not say why is
 // a card you have to go and look up somewhere else, which is precisely the
 // trip the board exists to save.
+// Why the last run failed, in words, for the card.
+//
+// `last_error` first: §4 gives the error its own home precisely so it does not
+// have to share the prompt, which is the question put to a human. The prompt is
+// still read after it, because that is where every error written before the
+// column existed still lives.
 function failureReason(r) {
   if (!r || r.status !== 'error') return '';
-  return String(r.prompt || r.detail || '').trim();
+  return String(r.last_error || r.prompt || r.detail || '').trim();
+}
+
+// When it failed. Null when nothing recorded it, which is every error written
+// before the column existed — the card says what went wrong without claiming
+// to know when.
+function failureAt(r) {
+  if (!r || r.status !== 'error') return '';
+  return (r.last_error_at || '');
+}
+
+// A failure as one line, for a card that has no room for a stack trace.
+//
+// Machine output gets cut at the first line break, because a runner that dumps
+// a JSON summary turns the card into a wall of fields — and the first line is
+// the part a person can act on. The whole thing is still there in
+// `failureReason` for anywhere with room to show it.
+function failureSummary(r) {
+  var full = failureReason(r);
+  if (!full) return '';
+  var first = full.split(/\r?\n/)[0].trim();
+  return first.length > 200 ? first.slice(0, 197) + '…' : first;
 }
 
 // ─── THE CONSOLE ───────────────────────────────────

@@ -871,6 +871,25 @@ async function route(request, env) {
       // session table holds nothing else. There is no CASE guarding a
       // Linear-owned column, and no guard stopping a cron read wiping the
       // agent's detail, because none of those columns are here any more.
+      // §4: "The last error is kept and shown on the card — message, stage,
+      // and when. An error that exists only in a terminal you have closed is
+      // not an error state, it is a mystery."
+      //
+      // It is its own column rather than the prompt, because the prompt is the
+      // question put to a human and an error is not one — that is the same
+      // "one signal, one meaning" the whole document is about. An agent that
+      // sends no `last_error` and reports `error` still gets something stored,
+      // because a card that says it failed and cannot say how is the mystery
+      // §4 names.
+      //
+      // Cleared on any status that is not an error: a run that has started
+      // again is not still carrying the last one.
+      const failed = status === 'error';
+      const lastError = failed
+        ? String(b.last_error || b.prompt || 'the run reported an error and said nothing more')
+            .slice(0, 4000)
+        : null;
+
       await env.DB.prepare(
         `UPDATE stage_sessions SET
            system          = ?,
@@ -878,11 +897,14 @@ async function route(request, env) {
            prompt          = ?,
            detail          = COALESCE(?, detail),
            options         = COALESCE(?, options),
+           last_error      = ?,
+           last_error_at   = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,
            agent_posted_at = COALESCE(agent_posted_at, datetime('now')),
            updated_at      = datetime('now')
          WHERE issue_key = ? AND stage = ?`
       ).bind(
-        b.system, status, b.prompt || null, b.detail || null, options, key, stage
+        b.system, status, b.prompt || null, b.detail || null, options,
+        lastError, lastError, key, stage
       ).run();
 
       // The three Linear-owned fields an agent may still send are only ever
