@@ -60,7 +60,7 @@ function healthyDb() {
 
 // A card as the board receives it: labels as the JSON array the reader stores.
 const card = (labels = [], extra = {}) => ({
-  id: 'linear/RYV-84', linear_id: 'RYV-84', title: 'A real issue',
+  id: 'RYV-84', linear_id: 'RYV-84', title: 'A real issue',
   labels: JSON.stringify(labels), ...extra,
 });
 
@@ -145,7 +145,7 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     })]);
     await readLinear(env(db));
 
-    const row = one(db, 'linear/RYV-84');
+    const row = one(db, 'RYV-84');
     assert.equal(row.title, 'The title Linear actually has', 'title survived as a stale copy');
     assert.equal(row.team, 'Ryve App', 'team survived as a stale copy');
     assert.deepEqual(JSON.parse(row.labels), ['AI-design done'],
@@ -171,7 +171,7 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     stubLinear([issue({ identifier: 'RYV-84', team: 'Ryve App' })]);
     await readLinear(env(db));
 
-    const row = one(db, 'linear/RYV-84');
+    const row = one(db, 'RYV-84');
     assert.equal(row.figma_url, 'https://figma.com/file/abc', 'a read cleared the Figma override');
     assert.equal(row.set_aside_at, '2026-09-01 10:00:00', 'a read un-set-aside a card');
     assert.equal(row.requested_stage, 'design', 'a read cleared a queued run');
@@ -187,13 +187,13 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     const db = freshDb();
     stubLinear([issue({ identifier: 'RYV-84', labels: [{ name: 'no-design' }] })]);
     await readLinear(env(db));
-    assert.ok(one(db, 'linear/RYV-84').dismissed_at, 'the no-design label did not dismiss the card');
+    assert.ok(one(db, 'RYV-84').dismissed_at, 'the no-design label did not dismiss the card');
 
     // The label comes off in Linear. The dismissal is the Hub's, and stays.
     stubLinear([issue({ identifier: 'RYV-84', labels: [] })]);
     await readLinear(env(db));
 
-    assert.ok(one(db, 'linear/RYV-84').dismissed_at,
+    assert.ok(one(db, 'RYV-84').dismissed_at,
       'a cron read un-dismissed a card — every dismissal whose label had been removed ' +
       'in Linear would come back onto the board');
   });
@@ -204,7 +204,7 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     await readLinear(env(db));
 
     await call(env(db), 'POST', '/api/agent/session/linear%2FRYV-84/dismiss');
-    const dismissedAt = one(db, 'linear/RYV-84').dismissed_at;
+    const dismissedAt = one(db, 'RYV-84').dismissed_at;
     assert.ok(dismissedAt);
 
     // Linear has not caught up — the mutation has not propagated to what the
@@ -212,7 +212,7 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     stubLinear([issue({ identifier: 'RYV-84', labels: [] })]);
     await readLinear(env(db));
 
-    assert.equal(one(db, 'linear/RYV-84').dismissed_at, dismissedAt,
+    assert.equal(one(db, 'RYV-84').dismissed_at, dismissedAt,
       'a read undid a dismissal made seconds earlier');
   });
 });
@@ -315,7 +315,7 @@ describe('§6 — every write to Linear is idempotent', () => {
     await call(env(db), 'POST', '/api/agent/stage-done', { linear_id: 'RYV-84', stage: 'research' });
     await call(env(db), 'POST', '/api/agent/stage-done', { linear_id: 'RYV-84', stage: 'research' });
 
-    const labels = JSON.parse(one(db, 'linear/RYV-84').labels);
+    const labels = JSON.parse(one(db, 'RYV-84').labels);
     assert.deepEqual(labels.filter((l) => l === 'AI-research done'), ['AI-research done'],
       'the local label set accumulated duplicates');
   });
@@ -325,9 +325,9 @@ describe('§6 — every write to Linear is idempotent', () => {
     await cardFor(db);
 
     await call(env(db), 'POST', '/api/agent/session/linear%2FRYV-84/dismiss');
-    const firstAt = one(db, 'linear/RYV-84').dismissed_at;
+    const firstAt = one(db, 'RYV-84').dismissed_at;
     await call(env(db), 'POST', '/api/agent/session/linear%2FRYV-84/dismiss');
-    const secondAt = one(db, 'linear/RYV-84').dismissed_at;
+    const secondAt = one(db, 'RYV-84').dismissed_at;
 
     assert.equal(secondAt, firstAt, 'a repeat dismissal rewrote when it was dismissed');
   });
@@ -342,7 +342,7 @@ describe('§6 — every write to Linear is idempotent', () => {
       { linear_id: 'RYV-84', stage: 'research' });
 
     assert.equal(res.status, 502);
-    assert.equal(one(db, 'linear/RYV-84').requested_stage, 'research',
+    assert.equal(one(db, 'RYV-84').requested_stage, 'research',
       'a stage whose label could not be written vanished from the queue');
   });
 });
@@ -369,7 +369,7 @@ describe('§8 — a response naming no option is never a decision', () => {
   }
 
   const undecided = (db) => {
-    const row = one(db, 'linear/RYV-84');
+    const row = one(db, 'RYV-84');
     assert.equal(row.responded_at, null, 'the gate recorded an answer it should have refused');
     assert.equal(row.response_option_id, null, 'an option id was stored that was never offered');
     assert.equal(row.status, 'waiting', 'the card stopped waiting on a decision nobody made');
@@ -426,7 +426,7 @@ describe('§8 — a response naming no option is never a decision', () => {
       { response_option_id: 'd2', response_note: 'keep the balance visible' });
 
     assert.equal(res.status, 200);
-    const row = one(db, 'linear/RYV-84');
+    const row = one(db, 'RYV-84');
     assert.equal(row.response_option_id, 'd2');
     assert.equal(row.response, 'Split header',
       'the stored answer was typed rather than copied off the chosen option');
@@ -439,7 +439,7 @@ describe('§8 — a response naming no option is never a decision', () => {
       { response_section: 'Wallet v4 — Dave' });
 
     assert.equal(res.status, 200);
-    const row = one(db, 'linear/RYV-84');
+    const row = one(db, 'RYV-84');
     assert.equal(row.response_option_id, null,
       'a section name was stored in the column that only ever holds offered ids');
     assert.equal(row.response_note, 'Wallet v4 — Dave');

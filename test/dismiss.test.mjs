@@ -25,7 +25,7 @@ import {
 const RYV = () => issue({ identifier: 'RYV-84' });
 const NO_DESIGN = () => issue({ identifier: 'RYV-84', labels: [{ name: 'no-design' }] });
 
-const CARD = 'linear/RYV-84';
+const CARD = 'RYV-84';
 const dismiss = (e, id = CARD) =>
   call(e, 'POST', '/api/agent/session/' + encodeURIComponent(id) + '/dismiss');
 const undismiss = (e, id = CARD) =>

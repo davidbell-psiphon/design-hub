@@ -150,7 +150,7 @@ describe('reconciliation is update-only', () => {
     await readLinear(e);
 
     assert.equal(rows(db).length, 1, 'reconciliation inserted a row');
-    assert.equal(one(db, 'linear/RYV-84').linear_state, 'completed');
+    assert.equal(one(db, 'RYV-84').linear_state, 'completed');
   });
 
   test('closing an issue in Linear is what fills the Completed section', async () => {
@@ -158,12 +158,12 @@ describe('reconciliation is update-only', () => {
     const e = env(db);
     stubLinear([RYV()]);
     await readLinear(e);
-    assert.equal(one(db, 'linear/RYV-84').linear_state, 'unstarted');
+    assert.equal(one(db, 'RYV-84').linear_state, 'unstarted');
 
     // Now it closes. Discovery can no longer see it; reconciliation must.
     stubLinear([RYV({ state: 'completed' })]);
     await readLinear(e);
-    assert.equal(one(db, 'linear/RYV-84').linear_state, 'completed',
+    assert.equal(one(db, 'RYV-84').linear_state, 'completed',
                  'a card closed in Linear never reached Completed');
   });
 
@@ -174,7 +174,7 @@ describe('reconciliation is update-only', () => {
     await readLinear(e);
     stubLinear([RYV({ state: 'canceled' })]);
     await readLinear(e);
-    assert.equal(one(db, 'linear/RYV-84').linear_state, 'canceled');
+    assert.equal(one(db, 'RYV-84').linear_state, 'canceled');
   });
 
   test('Linear failing the reconciliation query is survivable', async () => {
@@ -206,11 +206,11 @@ describe('a read refreshes Linear, and only Linear', () => {
     await readLinear(e);
     await call(e, 'POST', '/api/agent/session/' + encodeURIComponent('linear/RYV-84') +
                '/trigger', { stage: 'research' });
-    assert.equal(one(db, 'linear/RYV-84').requested_stage, 'research');
+    assert.equal(one(db, 'RYV-84').requested_stage, 'research');
 
     stubLinear([RYV()]);
     await readLinear(e);
-    assert.equal(one(db, 'linear/RYV-84').requested_stage, 'research',
+    assert.equal(one(db, 'RYV-84').requested_stage, 'research',
                  'a read cleared the queue and the run will never happen');
   });
 
@@ -228,7 +228,7 @@ describe('a read refreshes Linear, and only Linear', () => {
     stubLinear([RYV()]);
     await readLinear(e);
 
-    const r = one(db, 'linear/RYV-84');
+    const r = one(db, 'RYV-84');
     assert.equal(r.status, 'waiting', 'a read closed an open gate');
     assert.equal(r.prompt, 'Which direction proceeds?');
     assert.equal(JSON.parse(r.options).length, 2, 'a read dropped the options');
@@ -239,11 +239,11 @@ describe('a read refreshes Linear, and only Linear', () => {
     const e = env(db);
     stubLinear([RYV({ title: 'Old title' })]);
     await readLinear(e);
-    assert.equal(one(db, 'linear/RYV-84').title, 'Old title');
+    assert.equal(one(db, 'RYV-84').title, 'Old title');
 
     stubLinear([RYV({ title: 'Renamed in Linear' })]);
     await readLinear(e);
-    assert.equal(one(db, 'linear/RYV-84').title, 'Renamed in Linear');
+    assert.equal(one(db, 'RYV-84').title, 'Renamed in Linear');
   });
 
   test('labels refresh, so a finished stage moves its card', async () => {
@@ -251,11 +251,11 @@ describe('a read refreshes Linear, and only Linear', () => {
     const e = env(db);
     stubLinear([RYV()]);
     await readLinear(e);
-    assert.deepEqual(JSON.parse(one(db, 'linear/RYV-84').labels), []);
+    assert.deepEqual(JSON.parse(one(db, 'RYV-84').labels), []);
 
     stubLinear([RYV({ labels: [{ name: 'AI-research done' }] })]);
     await readLinear(e);
-    assert.deepEqual(JSON.parse(one(db, 'linear/RYV-84').labels), ['AI-research done']);
+    assert.deepEqual(JSON.parse(one(db, 'RYV-84').labels), ['AI-research done']);
   });
 
   test('every team reaches the board — only the assignee filters', async () => {

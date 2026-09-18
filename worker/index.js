@@ -223,63 +223,79 @@ export default {
   },
 };
 
-// ─── ONE CARD PER LINEAR ISSUE ─────────────────────
+// ─── ONE CARD PER LINEAR ISSUE (§2) ────────────────
 // Two writers share agent_sessions and used to disagree about the primary key.
-// The reader keys rows `linear/RYV-84`; the agent posts `ryve/ryv-84/research`.
+// The reader keyed rows `linear/RYV-84`; the agent posts `ryve/ryv-84/research`.
 // Neither collided with the other on ON CONFLICT(id), so one Linear issue grew
 // two rows and triggering research added a sibling instead of moving the card.
 //
-// The agent's contract is untouched — it still posts and polls the id it always
-// used. These two lookups are what make that id land on the existing card:
-// `agent_session_id` remembers the alias, and the Linear issue key extracted
-// from it (lib/session-id.mjs) is what joins the two conventions together.
+// piece6 merged the duplicates and remembered the agent's id in an
+// `agent_session_id` column, so the two conventions could be reconciled after
+// the fact. §2 is explicit that the bridge is the bug rather than the fix: "A
+// bridge implies two identities, and two identities is how one issue becomes
+// two cards."
+//
+// So there is one identity now — the Linear issue key, in `linear_id`, with a
+// unique index on it (migration-003). A second row for one issue is not
+// reconciled away, it cannot be written. The lookups below are what is left
+// once that is true, and the alias column is read by none of them.
+//
+// The agent's contract is still untouched. It posts whatever id it likes and
+// the key is parsed back out of it on the way in, which is a different thing
+// from storing a second one.
 
-// The row an id names outright: its own primary key, or the agent alias
-// recorded on it. Null when neither matches. Primary keys win, so a row whose
-// id happens to equal another row's alias is never shadowed.
-async function aliasId(env, id) {
+// The row an id names outright. Its own primary key and nothing else — an
+// alias is not an identity.
+async function rowById(env, id) {
   if (!id) return null;
   const row = await env.DB.prepare(
-    `SELECT id FROM agent_sessions
-      WHERE id = ? OR agent_session_id = ?
-      ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
-      LIMIT 1`
-  ).bind(id, id, id).first();
+    `SELECT id FROM agent_sessions WHERE id = ? LIMIT 1`
+  ).bind(id).first();
   return row ? row.id : null;
 }
 
-// The row an id refers to, however it is written. Falls back to the Linear
-// issue the id names, so a session id the Hub has never been posted under —
-// a later phase running as its own session, `ryve/ryv-84/design` after
-// `ryve/ryv-84/research` — still reaches the card for that issue instead of
-// a 404. Null when nothing matches.
-async function canonicalId(env, id) {
-  return (await aliasId(env, id)) ||
-         (await rowIdForLinearKey(env, linearKeyFromSessionId(id)));
-}
-
-// A path segment as a row id: decoded, then resolved through the aliases.
-// Falls back to the id as asked for, so a miss still reaches the route's own
-// "not found" check rather than turning into a different error here.
-async function resolveId(env, segment) {
-  const asked = decodeURIComponent(segment || '');
-  return (await canonicalId(env, asked)) || asked;
-}
-
-// The row that already owns a Linear issue key, whichever writer created it:
-// the reader (`linear_id`) or the agent (a session id with the key in it).
-// This is the join the two id conventions share.
+// The row that owns a Linear issue key.
+//
+// `linear_id` is the identity and is unique, so the first clause is the
+// answer. The second is for one legacy shape: a row the agent created before
+// the reader ever saw the issue, from a time when the insert did not fill
+// `linear_id` in. It reads the key out of the row's own id rather than out of
+// a second column — the same parse this file does on the way in, so there is
+// still only one identity, and the next reader pass fills `linear_id` in and
+// retires the row from this clause for good.
 async function rowIdForLinearKey(env, key) {
   if (!key) return null;
   const row = await env.DB.prepare(
     `SELECT id FROM agent_sessions
       WHERE linear_id = ?
-         OR '/' || lower(COALESCE(agent_session_id, id)) || '/'
-            LIKE '%/' || lower(?) || '/%'
+         OR (linear_id IS NULL
+             AND '/' || lower(id) || '/' LIKE '%/' || lower(?) || '/%')
       ORDER BY CASE WHEN linear_id = ? THEN 0 ELSE 1 END, updated_at DESC
       LIMIT 1`
   ).bind(key, key, key).first();
   return row ? row.id : null;
+}
+
+// The row an id refers to, however it is written. Its own id first, then the
+// Linear issue the id names — which is how `ryve/ryv-84/design` reaches the
+// card for RYV-84 whether the row is still called `linear/RYV-84`, has been
+// renamed to `RYV-84` by migration-003, or was created by the agent under its
+// own session id. Null when nothing matches.
+//
+// Because the key is parsed rather than looked up in a bridge, this reads a
+// migrated database and an unmigrated one identically. Deploying this Worker
+// before running migration-003, or after, makes no difference to what resolves.
+async function canonicalId(env, id) {
+  return (await rowById(env, id)) ||
+         (await rowIdForLinearKey(env, linearKeyFromSessionId(id)));
+}
+
+// A path segment as a row id: decoded, then resolved. Falls back to the id as
+// asked for, so a miss still reaches the route's own "not found" check rather
+// than turning into a different error here.
+async function resolveId(env, segment) {
+  const asked = decodeURIComponent(segment || '');
+  return (await canonicalId(env, asked)) || asked;
 }
 
 // ─── WHERE ISSUES ARE READ FROM ────────────────────
@@ -438,9 +454,13 @@ async function readLinear(env) {
     // are only filled in when still null.
     //
     // The row id is whatever row already owns this issue — including one the
-    // agent created first under its own session id — and only falls back to
-    // `linear/<KEY>` for an issue nothing has seen yet. Without that, an
-    // agent-first row and a reader row are two cards for one issue.
+    // agent created first under its own session id — and falls back to the
+    // issue key itself for an issue nothing has seen yet. Without the lookup,
+    // an agent-first row and a reader row are two cards for one issue.
+    //
+    // The fallback used to be `linear/<KEY>`, which was a second naming
+    // convention and half of what §2 exists to remove. A new card is called
+    // what it is.
     const existingId = await rowIdForLinearKey(env, issue.identifier);
 
     await env.DB.prepare(
@@ -455,7 +475,11 @@ async function readLinear(env) {
          -- The Linear description, unless the agent has posted to this row:
          -- once it has, detail carries the context behind its decision
          -- prompt, and a Wednesday read must not wipe that.
-         detail       = CASE WHEN agent_sessions.agent_session_id IS NULL
+         -- agent_posted_at replaces a test on the alias column, which was
+         -- never a fact about the row - only a side effect of the bridge
+         -- that section 2 removes. Same meaning, said outright: an agent
+         -- has written to this row.
+         detail       = CASE WHEN agent_sessions.agent_posted_at IS NULL
                              THEN excluded.detail ELSE agent_sessions.detail END,
          url          = excluded.url,
          team         = excluded.team,
@@ -478,7 +502,7 @@ async function readLinear(env) {
          linear_project = excluded.linear_project,
          updated_at   = datetime('now')`
     ).bind(
-      existingId || ('linear/' + issue.identifier),
+      existingId || issue.identifier,
       'design-ai',
       brand,
       track,
@@ -805,16 +829,24 @@ async function route(request, env) {
         options = JSON.stringify(parsed);
       }
 
-      // Which row this post belongs to. The agent's own session id first —
-      // that is the row it has been writing to all along — then the Linear
-      // issue its session id names, which is how `ryve/ryv-84/research` lands
-      // on the card the reader already made for RYV-84 instead of beside it.
+      // Which row this post belongs to. The Linear issue its session id names
+      // first, because that is the identity (§2) — which is how
+      // `ryve/ryv-84/research` lands on the card for RYV-84 instead of beside
+      // it. Then the id as given, for a session with no Linear issue behind
+      // it, which is the only case left where a row is named by anything else.
+      //
+      // The two cannot now disagree, and that is the point rather than the
+      // order: a row carrying a Linear issue is named by it, so looking up the
+      // key and looking up the id find the same row or nothing. Swapping these
+      // two lines changes no behaviour and no test, which is exactly what was
+      // not true while a second naming scheme was load-bearing.
+      //
       // `linear_id` in the body is honoured if sent, but nothing has to send
-      // it: the key is derivable from the session id the agent already posts.
+      // it — the key is derivable from the session id the agent already posts.
       const key = String(b.linear_id || linearKeyFromSessionId(b.session_id) || '')
         .toUpperCase() || null;
-      const target = (await aliasId(env, b.session_id)) ||
-                     (key ? await rowIdForLinearKey(env, key) : null);
+      const target = (key ? await rowIdForLinearKey(env, key) : null) ||
+                     (await rowById(env, b.session_id));
 
       if (target) {
         // A different set of options supersedes a decision that has already
@@ -844,7 +876,7 @@ async function route(request, env) {
         // it) there is nothing to protect and the agent still owns them.
         await env.DB.prepare(
           `UPDATE agent_sessions SET
-             agent_session_id = ?,
+             agent_posted_at = COALESCE(agent_posted_at, datetime('now')),
              system    = ?,
              phase     = ?,
              status    = ?,
@@ -863,28 +895,33 @@ async function route(request, env) {
              updated_at = datetime('now')
            WHERE id = ?`
         ).bind(
-          b.session_id, b.system, phase, status, b.prompt || null, b.detail || null,
+          b.system, phase, status, b.prompt || null, b.detail || null,
           b.figma_url || null, options,
           project, project, track, track, url, url, title, title,
           target
         ).run();
       } else {
+        // A brand-new row. It is named by its Linear issue where there is one
+        // (§2) and only by the agent's own session id where there is not —
+        // which is the difference between a card and a session that merely
+        // exists. `linear/<KEY>` is gone: that was the second convention.
         await env.DB.prepare(
           `INSERT INTO agent_sessions
-             (id, agent_session_id, system, project, track, phase, status,
+             (id, agent_posted_at, system, project, track, phase, status,
               prompt, detail, url, figma_url, title, linear_id, options)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            -- Unreachable unless two posts for a brand-new session race each
            -- other, but this route was an upsert before and stays one.
            ON CONFLICT(id) DO UPDATE SET
-             agent_session_id=excluded.agent_session_id, system=excluded.system,
+             agent_posted_at=COALESCE(agent_posted_at, datetime('now')),
+             system=excluded.system,
              project=excluded.project, track=excluded.track, phase=excluded.phase,
              status=excluded.status, prompt=excluded.prompt, detail=excluded.detail,
              url=excluded.url, figma_url=excluded.figma_url, title=excluded.title,
              options=COALESCE(excluded.options, options),
              updated_at=datetime('now')`
         ).bind(
-          b.session_id, b.session_id, b.system, project, track, phase, status,
+          key || b.session_id, b.system, project, track, phase, status,
           b.prompt || null, b.detail || null, url, b.figma_url || null, title, key,
           options
         ).run();
@@ -1326,10 +1363,24 @@ async function route(request, env) {
       return json({ ok: true });
     }
 
-    // GET /api/agent/sessions — dashboard list, newest first
+    // GET /api/agent/sessions — the board's list, newest first.
+    //
+    // §2: "A record with no Linear issue key is not a card and cannot appear
+    // on the board." This is where that is true. A session with no issue
+    // behind it still exists, still reads and writes on its own route, and
+    // still works exactly as it always did — the runner's reachability probe
+    // is one and has to keep working — but it is not a card, and the board is
+    // where the difference is enforced.
+    //
+    // §11 lists this as a bug already had: "Test card can't exercise its
+    // controls". A row with no issue has no Linear uuid, so Run, Skip,
+    // Dismiss and Complete all refuse it. Drawing it as a card offered a full
+    // set of controls where none of them could work, and it was tested against
+    // once, which produced a false result.
     if (method === 'GET' && path === '/api/agent/sessions') {
       const rows = await env.DB.prepare(
         `SELECT * FROM agent_sessions
+          WHERE linear_id IS NOT NULL
          ORDER BY CASE status WHEN 'waiting' THEN 0 WHEN 'error' THEN 1
                               WHEN 'active' THEN 2 ELSE 3 END,
                   updated_at DESC`

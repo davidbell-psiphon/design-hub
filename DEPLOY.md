@@ -57,6 +57,39 @@ npx wrangler d1 execute design-hub --remote --file=./piece7-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece8-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece9-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece10-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./migration-003-identity.sql
+```
+
+### migration-003 runs BEFORE the Worker deploy
+
+This is the one migration whose order matters, and it is the opposite way round
+from piece10.
+
+`migration-003-identity.sql` adds `agent_posted_at`, and the new Worker writes
+that column on every agent post and reads it on every reader pass. Deploy the
+Worker first and both of those fail with `no such column` until the migration
+catches up — the board keeps rendering, but nothing can report a stage and the
+cron read errors.
+
+Running it first is safe. The currently deployed Worker does not know the new
+column and ignores it, and it resolves a renamed row by `linear_id` exactly as
+it did before, so the migration changes nothing for the code already running.
+
+So: **migration, then deploy.** Check it landed before deploying:
+
+```bash
+npx wrangler d1 execute design-hub --remote \
+  --command "SELECT COUNT(*) AS renamed FROM agent_sessions WHERE id = linear_id"
+```
+
+It refuses to run at all if two rows still share one Linear issue — the unique
+index is the first statement for that reason, so a failure there has changed
+nothing. If it does fail, find them and merge them by hand before retrying:
+
+```bash
+npx wrangler d1 execute design-hub --remote \
+  --command "SELECT linear_id, COUNT(*) n, GROUP_CONCAT(id) FROM agent_sessions
+             WHERE linear_id IS NOT NULL GROUP BY linear_id HAVING n > 1"
 ```
 
 `piece10-schema.sql` moves the board's brand list out of `projects` — the

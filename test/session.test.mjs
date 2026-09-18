@@ -65,8 +65,11 @@ describe('reader first, then the agent posts', () => {
     const all = rows(db);
     assert.equal(all.length, 1, 'the agent post added a second row');
     const r = all[0];
-    assert.equal(r.id, 'linear/RYV-84');
-    assert.equal(r.agent_session_id, AGENT_ID);
+    // §2: the Linear issue key is the only identity, and it is the row's
+    // name. It used to be 'linear/RYV-84' with the agent's own id remembered
+    // alongside it, which was the second identity §2 removes.
+    assert.equal(r.id, 'RYV-84');
+    assert.ok(r.agent_posted_at, 'nothing recorded that an agent had written here');
     // Agent state on the card…
     assert.equal(r.phase, 'research');
     assert.equal(r.status, 'waiting');
@@ -114,12 +117,17 @@ describe('the agent posts first, then the reader discovers the issue', () => {
 
     await agentPost(e, AGENT_BODY);
     assert.equal(rows(db).length, 1);
-    assert.equal(rows(db)[0].id, AGENT_ID);
+    // §2: the agent posts 'ryve/ryv-84/research' and the row is named RYV-84,
+    // because that is the identity and the rest of the string is a Linear fact
+    // repeated back. The brand segment is read and discarded — encoding it in
+    // the key is what let the key contradict Linear.
+    assert.equal(rows(db)[0].id, 'RYV-84');
+    assert.equal(rows(db)[0].linear_id, 'RYV-84');
 
     await readLinear(e);
     const all = rows(db);
     assert.equal(all.length, 1, 'the reader added a second row');
-    assert.equal(all[0].id, AGENT_ID);
+    assert.equal(all[0].id, 'RYV-84');
     assert.equal(all[0].linear_id, 'RYV-84');
     assert.equal(all[0].linear_uuid, 'uuid-RYV-84');
     assert.equal(all[0].title, 'RYV-84 title');
@@ -140,7 +148,9 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.linear_id, 'RYV-84');
-    assert.equal(body.agent_session_id, AGENT_ID);
+    // The agent polls by the id it posted and reaches the card, with no
+    // column storing that id anywhere — the key is parsed out of it (§2).
+    assert.equal(body.id, 'RYV-84');
   });
 
   test('a response written through the alias reaches the same row', async () => {
@@ -615,7 +625,7 @@ describe('the agent still addresses its own session id', () => {
     const all = rows(db);
     assert.equal(all.length, 1);
     assert.equal(all[0].phase, 'design');
-    assert.equal(all[0].agent_session_id, 'ryve/ryv-84/design');
+    assert.equal(all[0].id, 'RYV-84', 'a later phase was filed under its own name');
   });
 
   test('an unknown id is still a 404', async () => {
@@ -1077,7 +1087,11 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
   // The state the live database is in before the migration: a reader row and
   // an agent row for the same issue, written by the two old code paths.
   function withDuplicates() {
-    const db = freshDb(PIECES.filter(p => p !== 'piece6-schema.sql'));  // everything except piece6
+    // Everything except piece6 — and except migration-003, which comes
+    // after it in history and reads the column piece6 adds. This block is
+    // about what piece6 itself did; migration-003 has its own below.
+    const db = freshDb(PIECES.filter(
+      p => p !== 'piece6-schema.sql' && p !== 'migration-003-identity.sql'));
     db.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,

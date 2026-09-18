@@ -24,6 +24,34 @@ applied. Add `pieceN-schema.sql` using `ALTER TABLE` / `CREATE INDEX IF NOT
 EXISTS`, so re-running one fails on a duplicate column instead of destroying
 data.
 
+## Identity: the Linear issue key, and nothing else
+
+A card is named by its Linear issue. `RYV-84`, not `linear/RYV-84`, not
+`ryve/ryv-84/design`. `agent_sessions.linear_id` holds it and carries a unique
+index, so a second card for one issue is not reconciled away — it cannot be
+written.
+
+**The agent still posts whatever it likes.** `ryve/ryv-84/design` keeps working
+and always will: `lib/session-id.mjs` parses the key back out of it at the
+boundary. Parsing an id is not the same as storing a second one, and that
+distinction is the whole of §2. If you find yourself adding a column so that
+two naming schemes can be matched up later, that is the bug the architecture
+document is about.
+
+**Brand is never part of the key.** It is derived from the Linear team. A
+session id naming the wrong brand still lands on the right card and does not
+change the card's brand — there is a test for exactly that, because the reason
+the brand segment went is that it let the key contradict Linear.
+
+`agent_session_id` is the bridging column this replaced. It is still on the
+table and is written by nothing; leave it alone rather than reading it.
+
+**A record with no Linear issue key is not a card.** It may exist — the
+runner's reachability probe is one — and it works on its own routes. It is
+filtered out of `GET /api/agent/sessions`, because every control on a card
+refuses a row with no Linear issue behind it, and drawing one offers a full set
+of buttons that cannot work.
+
 ## Invariants that look like cruft
 
 Three things are load-bearing and read as redundant. Do not simplify them:
@@ -52,9 +80,19 @@ Resist adding Design-AI-specific concepts to Worker or board code.
 ## Running things
 
 ```bash
-node --test                      # unit + render + production smoke
-node --test test/unit.test.mjs   # unit only, no network
+node --test                          # everything, including production smoke
+node --test test/unit.test.mjs       # unit only, no network
+node --test test/invariants.test.mjs # the rules of the architecture, by section
+node --test test/identity.test.mjs   # §2, the one identity
 ```
+
+**Tests here are proved to bite.** Break the invariant deliberately, confirm
+the named test fails, restore, confirm green. A passing test that has never
+failed proves nothing, and `test/invariants.test.mjs` exists precisely so a
+violation reports which rule broke rather than which line.
+
+`GET /api/diagnostics` answers what is configured and what is missing, by
+variable name. `?live=1` adds the Linear round trip.
 
 Run from the repo root — `node --test test/` fails on some Node versions.
 
