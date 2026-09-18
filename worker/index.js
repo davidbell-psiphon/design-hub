@@ -216,6 +216,37 @@ async function ensureSession(env, key, stage) {
   ).bind(key, stage).run();
 }
 
+// ─── WHICH MACHINE YOU ARE AT ──────────────────────
+// The Hub cannot tell. It never reaches out to anything — runners poll it —
+// and a browser cannot read its own hostname. So the machine says so, either
+// by running design-local.bat (which means you are sitting at it) or by you
+// picking it on the board.
+//
+// Exactly one machine holds the selection, which is why this clears the others
+// in the same breath as setting one. Two selected machines is not a state
+// anything downstream knows how to read.
+async function selectMachine(env, machine) {
+  await env.DB.prepare(
+    `UPDATE agent_heartbeats SET selected_at = NULL
+      WHERE selected_at IS NOT NULL AND machine <> ?`
+  ).bind(machine).run();
+  await env.DB.prepare(
+    `UPDATE agent_heartbeats
+        SET selected_at = COALESCE(selected_at, datetime('now'))
+      WHERE machine = ?`
+  ).bind(machine).run();
+}
+
+// The machine you are working from, or null when you have not said.
+async function workingFrom(env) {
+  const row = await env.DB.prepare(
+    `SELECT machine FROM agent_heartbeats
+      WHERE selected_at IS NOT NULL
+      ORDER BY selected_at DESC LIMIT 1`
+  ).first();
+  return row ? row.machine : null;
+}
+
 // Every session on a card, oldest stage first.
 async function sessionsFor(env, key) {
   const { results } = await env.DB.prepare(
@@ -1019,6 +1050,44 @@ async function route(request, env) {
     // Linear. Oldest request first, so a button pressed on Monday is not
     // starved by one pressed this morning.
     if (method === 'GET' && path === '/api/agent/queue') {
+      // ── Who is asking ──
+      //
+      // A runner that names itself gets the work meant for it. One that does
+      // not gets everything, exactly as before, so a runner that has not been
+      // updated keeps working — this route is the runner's only source of
+      // work and breaking it silently would stop every run.
+      //
+      // Two filters, in this order, and both are about the asker rather than
+      // about the work:
+      //
+      //   capability   a runner is only offered a stage it said it can run.
+      //                Generic: the Hub matches the stage name against the
+      //                names the runner declared, and knows what neither
+      //                means. It is what keeps GitHub Actions — which declares
+      //                research only — from being handed design work it cannot
+      //                do and would fail.
+      //
+      //   selection    when you have said which machine you are at, the other
+      //                machines you sit at get nothing. CI is never filtered
+      //                this way: starving Actions of research is not what
+      //                anybody means by "run this here".
+      const asking = url.searchParams.get('machine');
+      let me = null;
+      if (asking) {
+        me = await env.DB.prepare(
+          `SELECT machine, capabilities, kind FROM agent_heartbeats WHERE machine = ?`
+        ).bind(asking).first();
+
+        const chosen = await workingFrom(env);
+        // An unknown machine is treated as local and as not the chosen one.
+        // The runner heartbeats before it reads the queue, so in practice this
+        // is a caller that is not the runner.
+        const isCi = me && me.kind === 'ci';
+        if (chosen && !isCi && asking !== chosen) {
+          return json([]);
+        }
+      }
+
       // The runner's shape is unchanged — `requested_stage` is what it reads,
       // and it is the stage of the queued session rather than a column that
       // could disagree with one.
@@ -1039,7 +1108,16 @@ async function route(request, env) {
             AND c.set_aside_at IS NULL
           ORDER BY s.requested_at ASC`
       ).all();
-      return json(results || []);
+
+      let queue = results || [];
+      if (me) {
+        const can = parseOptions(me.capabilities);
+        // No declared capabilities is not "can do nothing" — it is a runner
+        // that has not said. Filtering it to nothing would strand the queue on
+        // a single missing field.
+        if (can.length) queue = queue.filter((r) => can.includes(r.requested_stage));
+      }
+      return json(queue);
     }
 
     // POST /api/agent/stage-done — the runner reports a finished stage.
@@ -1268,14 +1346,63 @@ async function route(request, env) {
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
       if (!b.machine) return err('machine required');
       const capabilities = Array.isArray(b.capabilities) ? JSON.stringify(b.capabilities) : '[]';
+      // 'ci' or 'local'. A runner that does not send it reads as local, which
+      // is the safe default: a selection applies to it, so an old runner
+      // cannot quietly keep taking work you have pointed at another machine.
+      const kind = b.kind === 'ci' ? 'ci' : 'local';
+
       await env.DB.prepare(
-        `INSERT INTO agent_heartbeats (machine, capabilities, last_seen, first_seen)
-           VALUES (?, ?, datetime('now'), datetime('now'))
+        `INSERT INTO agent_heartbeats (machine, capabilities, kind, last_seen, first_seen)
+           VALUES (?, ?, ?, datetime('now'), datetime('now'))
          ON CONFLICT(machine) DO UPDATE SET
            capabilities = excluded.capabilities,
+           kind         = excluded.kind,
            last_seen    = excluded.last_seen`
-      ).bind(b.machine, capabilities).run();
-      return json({ ok: true });
+      ).bind(b.machine, capabilities, kind).run();
+
+      // `claim` is the automatic half of "which machine am I at". Running
+      // design-local.bat means you are sitting at that machine — that is what
+      // the command is for — so the runner says so and the board follows.
+      // Nothing else claims: a scheduled run on a laptop you are nowhere near
+      // must not decide where you are.
+      //
+      // CI can never claim. A GitHub runner is not somewhere you are sitting.
+      if (b.claim && kind !== 'ci') await selectMachine(env, b.machine);
+
+      return json({ ok: true, machine: b.machine, kind, claimed: !!b.claim && kind !== 'ci' });
+    }
+
+    // PUT /api/agent/working-from — the by-hand half. The board sends a machine
+    // name, or null to stop preferring any.
+    //
+    // Deliberately not inferred from the browser: a page cannot read its own
+    // hostname, and guessing from the freshest check-in gets it wrong exactly
+    // when it matters, which is when a scheduled run on the other machine has
+    // just checked in.
+    if (method === 'PUT' && path === '/api/agent/working-from') {
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+
+      if (b.machine === null || b.machine === '') {
+        await env.DB.prepare(
+          `UPDATE agent_heartbeats SET selected_at = NULL WHERE selected_at IS NOT NULL`
+        ).run();
+        return json({ ok: true, machine: null });
+      }
+      if (!b.machine) return err('machine required, or null to clear');
+
+      const row = await env.DB.prepare(
+        `SELECT machine, kind FROM agent_heartbeats WHERE machine = ?`
+      ).bind(b.machine).first();
+      // Only a machine that has actually checked in. Selecting one that never
+      // has would silently route every queued run to nothing at all.
+      if (!row) return err(`no machine called "${b.machine}" has ever checked in`, 404);
+      if (row.kind === 'ci') {
+        return err('that is a CI runner, not a machine you sit at');
+      }
+
+      await selectMachine(env, b.machine);
+      return json({ ok: true, machine: b.machine });
     }
 
     // GET /api/agent/heartbeat — every machine that has ever checked in, most
@@ -1284,7 +1411,7 @@ async function route(request, env) {
     // nobody listening.
     if (method === 'GET' && path === '/api/agent/heartbeat') {
       const { results } = await env.DB.prepare(
-        `SELECT machine, capabilities, last_seen, first_seen
+        `SELECT machine, capabilities, kind, selected_at, last_seen, first_seen
            FROM agent_heartbeats ORDER BY last_seen DESC`
       ).all();
       return json(results.map((r) => ({ ...r, capabilities: parseOptions(r.capabilities) })));

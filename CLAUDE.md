@@ -145,6 +145,45 @@ Three things are load-bearing and read as redundant. Do not simplify them:
   `CF-Authorization` cookie is per-hostname, preflights carry no cookies, and
   Safari drops it as third-party. Do not cut out the middleman.
 
+## Which machine you are at
+
+The Hub **cannot see it**. It never reaches out to anything — runners poll it —
+and a browser cannot read its own hostname. Anything that claims otherwise is
+guessing. So the machine says so, two ways:
+
+- **Automatic.** Running `design-local.bat` claims the machine, because that is
+  what the command is for: the local tiers are OAuth sign-ins that only exist
+  where somebody signed in. The runner sends `--claim` and the Hub points the
+  queue there.
+- **By hand.** The board lists every machine that has checked in and you pick
+  one. Pressing the chosen one again clears it.
+
+**A scheduled run never claims.** `runner.bat` on a Task Scheduler entry fires
+on a laptop you may be nowhere near, and a machine checking in is not the same
+as you sitting in front of it — which is exactly why "most recent heartbeat"
+was the wrong answer.
+
+`agent_heartbeats.selected_at` holds it, on the machine rather than in a
+settings table, so there is no second place it can disagree. At most one row
+carries it; `selectMachine` clears the others in the same breath.
+
+### What the queue does with it
+
+`GET /api/agent/queue?machine=X` applies two filters, both about the asker
+rather than the work:
+
+- **capability** — a runner is only offered a stage it declared. Generic: the
+  Hub matches the stage name against the names the runner sent and knows what
+  neither means. It is what stops GitHub Actions, which declares research only,
+  being handed design work it would fail.
+- **selection** — when you have chosen a machine, the other machines you sit at
+  get nothing. **CI is never filtered this way**, because starving Actions of
+  research is not what anyone means by "run this here".
+
+Asking with **no** `machine` returns everything, exactly as before. The runner
+is fed entirely by this route, so a runner that has not been updated has to
+keep working.
+
 ## What the Hub writes to Linear
 
 Four things, and no more: stage labels (`AI-research done`, `AI-design done`)

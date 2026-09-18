@@ -60,7 +60,14 @@ npx wrangler d1 execute design-hub --remote --file=./piece10-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./migration-003-identity.sql
 npx wrangler d1 execute design-hub --remote --file=./piece11-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./migration-004-grain.sql
+npx wrangler d1 execute design-hub --remote --file=./piece12-schema.sql
 ```
+
+`piece12-schema.sql` adds two columns to `agent_heartbeats` — which machine a
+runner is (`local` or `ci`) and which one you are working from. Order does not
+matter: the Worker reads both defensively, and a runner that has not been
+updated reads as `local` with nothing selected, which is exactly today's
+behaviour.
 
 ### piece11 and migration-004: the card/session split
 

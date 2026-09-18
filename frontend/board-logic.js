@@ -660,14 +660,112 @@ var HEARTBEAT_STALE_MIN = 24 * 60;
 // rows: whatever GET /api/agent/heartbeat returned, any order — sorted here
 // rather than trusted, so a caller cannot get "most recent" wrong by handing
 // rows in over in the order the network happened to return them.
+// The machines you sit at. CI runners are not among them: a GitHub runner is
+// not somewhere you can sign in to Figma, and offering it as "where I am
+// working" would be offering a choice that cannot be true.
+//
+// A machine that has never said which it is reads as local, matching the
+// Worker — an old runner must not disappear from the board.
+function localAgents(rows) {
+  return (rows || []).filter(function (r) { return r && r.kind !== 'ci'; });
+}
+
+// Which machine you are working from, or null if you have not said. At most
+// one row carries it; the Worker clears the others when it sets one.
+function workingFrom(rows) {
+  var local = localAgents(rows);
+  for (var i = 0; i < local.length; i++) {
+    if (local[i].selected_at) return local[i];
+  }
+  return null;
+}
+
+// How long ago a machine checked in, and what that means.
+function agentFreshness(row, now) {
+  var mins = Math.floor(((now === undefined ? Date.now() : now) - stampMs(row.last_seen)) / 60000);
+  return {
+    minsAgo: mins,
+    state: mins <= HEARTBEAT_FRESH_MIN ? 'fresh'
+         : mins <= HEARTBEAT_STALE_MIN ? 'stale'
+         : 'gone',
+  };
+}
+
+// The machine the board speaks for.
+//
+// The one you are working from, if you have said — NOT the freshest. That
+// distinction is the whole point: a laptop on a Task Scheduler entry checks in
+// every few minutes from wherever it is, so "most recent" is wrong exactly
+// when it matters, which is when you are somewhere else.
+//
+// Falls back to the freshest when nothing is selected, which is the old
+// behaviour and is right when there is only one machine.
 function heartbeatStatus(rows, now) {
-  if (!rows || !rows.length) return { state: 'never', row: null, minsAgo: null };
-  var latest = rows.slice().sort(function (a, b) {
+  var local = localAgents(rows);
+  if (!local.length) return { state: 'never', row: null, minsAgo: null, chosen: false };
+
+  var chosen = workingFrom(rows);
+  var row = chosen || local.slice().sort(function (a, b) {
     return stampMs(b.last_seen) - stampMs(a.last_seen);
   })[0];
-  var mins = Math.floor(((now === undefined ? Date.now() : now) - stampMs(latest.last_seen)) / 60000);
-  var state = mins <= HEARTBEAT_FRESH_MIN ? 'fresh'
-            : mins <= HEARTBEAT_STALE_MIN ? 'stale'
-            : 'gone';
-  return { state: state, row: latest, minsAgo: mins };
+
+  var f = agentFreshness(row, now);
+  return { state: f.state, row: row, minsAgo: f.minsAgo, chosen: !!chosen };
+}
+
+// Every machine you sit at, as the board lists them: the selected one first,
+// then by how recently each checked in. One row per machine, so the list and
+// the line above it cannot disagree about which is which.
+function agentList(rows, now) {
+  var local = localAgents(rows);
+  var chosen = workingFrom(rows);
+  return local.slice().sort(function (a, b) {
+    if (chosen) {
+      if (a.machine === chosen.machine) return -1;
+      if (b.machine === chosen.machine) return 1;
+    }
+    return stampMs(b.last_seen) - stampMs(a.last_seen);
+  }).map(function (r) {
+    var f = agentFreshness(r, now);
+    return {
+      machine: r.machine,
+      capabilities: r.capabilities || [],
+      state: f.state,
+      minsAgo: f.minsAgo,
+      selected: !!(chosen && r.machine === chosen.machine),
+    };
+  });
+}
+
+// Where a queued run will actually be picked up, in one sentence.
+//
+// There are three answers and they are genuinely different, which is why this
+// is derived once here rather than written out at each place that shows it.
+function queueDestination(rows, now) {
+  var local = localAgents(rows);
+  if (!local.length) {
+    return { kind: 'none', text: 'no machine has ever connected — local work will not run' };
+  }
+  var chosen = workingFrom(rows);
+  if (!chosen) {
+    return { kind: 'any',
+             text: 'no machine chosen — work goes to whichever runner asks first' };
+  }
+  var f = agentFreshness(chosen, now);
+  if (f.state === 'fresh') {
+    return { kind: 'ok', machine: chosen.machine,
+             text: 'work goes to ' + chosen.machine };
+  }
+  // Chosen, but not answering. The most useful thing the board can say, and
+  // the state that would otherwise look like nothing happening at all.
+  //
+  // The age is formatted from the minutes already derived rather than by
+  // calling timeAgo, which reads the real clock and would ignore the `now`
+  // every other line here is measured against.
+  var age = f.minsAgo < 90 ? f.minsAgo + 'm'
+          : f.minsAgo < 60 * 48 ? Math.floor(f.minsAgo / 60) + 'h'
+          : Math.floor(f.minsAgo / 1440) + 'd';
+  return { kind: 'stale', machine: chosen.machine,
+           text: 'work goes to ' + chosen.machine + ', which has not checked in for ' +
+                 age + ' — start it, or choose another machine' };
 }

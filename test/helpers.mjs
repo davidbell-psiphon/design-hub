@@ -25,7 +25,8 @@ export const PIECES = ['agent-schema.sql', 'reader-schema.sql', 'track-schema.sq
                       'piece7-schema.sql', 'migration-001-gates.sql',
                       'piece8-schema.sql', 'piece9-schema.sql', 'migration-002-heartbeat.sql',
                       'piece10-schema.sql', 'migration-003-identity.sql',
-                      'piece11-schema.sql', 'migration-004-grain.sql'];
+                      'piece11-schema.sql', 'migration-004-grain.sql',
+                      'piece12-schema.sql'];
 
 // Comments first, then split on statement boundaries — that order matters,
 // because one piece4 comment has a semicolon in it. Safe here because none of
