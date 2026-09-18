@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { toWire } from '../lib/card.mjs';
 
 export const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -23,7 +24,8 @@ export const PIECES = ['agent-schema.sql', 'reader-schema.sql', 'track-schema.sq
                       'piece4-schema.sql', 'piece5-schema.sql', 'piece6-schema.sql',
                       'piece7-schema.sql', 'migration-001-gates.sql',
                       'piece8-schema.sql', 'piece9-schema.sql', 'migration-002-heartbeat.sql',
-                      'piece10-schema.sql', 'migration-003-identity.sql'];
+                      'piece10-schema.sql', 'migration-003-identity.sql',
+                      'piece11-schema.sql', 'migration-004-grain.sql'];
 
 // Comments first, then split on statement boundaries — that order matters,
 // because one piece4 comment has a semicolon in it. Safe here because none of
@@ -198,7 +200,26 @@ export const agentPost = (e, body) =>
 
 export const readLinear = (e) => call(e, 'POST', '/api/read-linear');
 
-export const rows = (db) => db.prepare(`SELECT * FROM agent_sessions ORDER BY id`).all();
+// The cards, as stored. Card-level facts only — piece11 moved the run and the
+// gate to `sessions`, so a test asserting on a status or a prompt wants
+// `session()` or `wire()` instead.
+export const rows = (db) => db.prepare(`SELECT * FROM cards ORDER BY issue_key`).all();
 
-export const one = (db, id) =>
-  db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).get(id);
+export const one = (db, key) =>
+  db.prepare(`SELECT * FROM cards WHERE issue_key = ?`).get(key);
+
+// One session, as stored. With no stage, the only one on the card — which is
+// what most fixtures have, and asserting on "the session" is clearer there
+// than naming a stage the test does not care about.
+export const session = (db, key, stage) => stage
+  ? db.prepare(`SELECT * FROM sessions WHERE issue_key = ? AND stage = ?`).get(key, stage)
+  : db.prepare(`SELECT * FROM sessions WHERE issue_key = ?`).get(key);
+
+export const sessionsOf = (db, key) =>
+  db.prepare(`SELECT * FROM sessions WHERE issue_key = ? ORDER BY stage`).all(key);
+
+// A card as the API serves it: the projection in lib/card.mjs, over what is
+// actually stored. This is the shape the board reads, so a test about what the
+// board sees should assert on this rather than on either table.
+export const wire = (db, key) =>
+  toWire(one(db, key), sessionsOf(db, key));

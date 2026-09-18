@@ -24,42 +24,106 @@ applied. Add `pieceN-schema.sql` using `ALTER TABLE` / `CREATE INDEX IF NOT
 EXISTS`, so re-running one fails on a duplicate column instead of destroying
 data.
 
-## Identity: the Linear issue key, and nothing else
+## Where data lives
 
-A card is named by its Linear issue. `RYV-84`, not `linear/RYV-84`, not
-`ryve/ryv-84/design`. `agent_sessions.linear_id` holds it and carries a unique
-index, so a second card for one issue is not reconciled away — it cannot be
-written.
+**Read this before touching any query.** It is the thing most likely to be
+assumed wrong, and the reason for most of the architecture document.
+
+Three kinds of fact, three homes, split on who owns them:
+
+| Table | Grain | Holds | Who writes it |
+|---|---|---|---|
+| `cards` | one per Linear issue | the Linear cache, and your overrides | the reader, and your presses |
+| `sessions` | one per **(issue_key, stage)** | the run and the whole gate | the agent, and the trigger |
+| `gate_decisions` | one per round | decision history | `closeRound` only |
+
+```
+cards.issue_key ─┬─ sessions (issue_key, stage)  research | design | …
+                 └─ gate_decisions (session_id = issue_key, stage, gate_round)
+```
+
+### Identity: the Linear issue key, and nothing else
+
+A card is named by its Linear issue. `RYV-84` — not `linear/RYV-84`, not
+`ryve/ryv-84/design`. `cards.issue_key` **is** the primary key, so a second
+card for one issue is not reconciled away: it cannot be written.
 
 **The agent still posts whatever it likes.** `ryve/ryv-84/design` keeps working
-and always will: `lib/session-id.mjs` parses the key back out of it at the
-boundary. Parsing an id is not the same as storing a second one, and that
-distinction is the whole of §2. If you find yourself adding a column so that
+and always will — `lib/session-id.mjs` parses the key and the stage back out of
+it at the boundary. Parsing an id is not the same as storing a second one, and
+that distinction is the whole of §2. If you find yourself adding a column so
 two naming schemes can be matched up later, that is the bug the architecture
 document is about.
 
 **Brand is never part of the key.** It is derived from the Linear team. A
-session id naming the wrong brand still lands on the right card and does not
-change the card's brand — there is a test for exactly that, because the reason
-the brand segment went is that it let the key contradict Linear.
+session id naming the wrong brand lands on the right card and does not change
+the card's brand — there is a test for exactly that, because a brand in the key
+is a key that can contradict Linear.
 
-`agent_session_id` is the bridging column this replaced. It is still on the
-table and is written by nothing; leave it alone rather than reading it.
+**A record with no Linear issue behind it is not a card.** It may exist — the
+runner's reachability probe is one — and works on its own routes. The board
+list filters on `linear_uuid IS NOT NULL`, because every control refuses a row
+with no Linear issue, and drawing one offers buttons that cannot work.
 
-**A record with no Linear issue key is not a card.** It may exist — the
-runner's reachability probe is one — and it works on its own routes. It is
-filtered out of `GET /api/agent/sessions`, because every control on a card
-refuses a row with no Linear issue behind it, and drawing one offers a full set
-of buttons that cannot work.
+### Which half a column is in
+
+This is the question to ask before writing any UPDATE.
+
+**Linear owns it** → `cards`, and **every reader pass replaces it**. Never
+COALESCE one of these: a cache that merges can disagree with its source for
+ever, and then it is not a cache, it is a second home.
+`title`, `description`, `url`, `team`, `linear_state`, `labels`,
+`linear_project`, `linear_uuid`, `linear_read_at`.
+
+**You own it** → `cards`, and **a reader pass must not mention it**.
+`brand`, `track`, `figma_url`, `dismissed_at`, `set_aside_at`.
+
+**A run owns it** → `sessions`, per stage.
+`status`, `prompt`, `detail`, `options`, `gate_round`, `response*`,
+`requested_at`, `started_at`, `last_error`, `mockups_*`, `handoff_at`.
+
+Two traps worth naming:
+
+- **`cards.description` is the Linear description. `sessions.detail` is the
+  agent's context.** They shared a column once and needed a guard to stop a
+  cron read wiping the agent's; separate columns mean there is no guard to get
+  wrong.
+- **There is no `requested_stage`.** The stage *is* the row, so queuing is
+  `sessions.requested_at` on the row for that stage. The wire still carries
+  `requested_stage` because the board and the runner read it — derived, in
+  `lib/card.mjs`.
+
+### The wire is a projection, never a stored row
+
+`lib/card.mjs` flattens a card and its sessions into the shape the board has
+always been sent, **computed per request and never stored**. A stored
+flattening would be a third copy of two facts, which is how §11's bugs started.
+
+It also serves `stages: { research: {…}, design: {…} }`, which is what to read
+once a card has to say that research is Drift while design is Unverified.
+
+Two names are translated there and nowhere else: `issue_key` → `id`, and
+`brand` → `project` (the agent posts `project`, so one name on the wire beats
+two). `/api/agent/session/:id/reassign` is the only other place `project`
+means the brand.
+
+### Dead tables, kept on purpose
+
+`agent_sessions` (pre-split), `projects` (pre-`brands`), and the chat
+organiser's tables. Nothing reads or writes any of them. They are the rollback,
+and dropping them is §13 step 4 — a separate decision. Do not read them, and do
+not "restore" a column from one.
 
 ## Invariants that look like cruft
 
 Three things are load-bearing and read as redundant. Do not simplify them:
 
-- **`dismissed_at = COALESCE(agent_sessions.dismissed_at, excluded.dismissed_at)`**
-  (`worker/index.js:148`) — a cron read can only ever *add* a dismissal, never
+- **`dismissed_at = COALESCE(cards.dismissed_at, excluded.dismissed_at)`**
+  in the reader's upsert — a cron read can only ever *add* a dismissal, never
   clear one. Drop the COALESCE and a Wednesday run silently un-dismisses every
-  card whose `no-design` label was removed in Linear.
+  card whose `no-design` label was removed in Linear. It is the one Hub-owned
+  column the reader touches at all, which is why it needs the guard and the
+  others do not.
 - **The two-pass reader.** Discovery carries a fixed `first: 100` budget;
   reconciliation is a separate update-only pass. Merging them lets closed issues
   eat the budget and starve the board of real work.
@@ -69,6 +133,27 @@ Three things are load-bearing and read as redundant. Do not simplify them:
   to `workers.dev` cannot be authenticated by Access from a browser — the
   `CF-Authorization` cookie is per-hostname, preflights carry no cookies, and
   Safari drops it as third-party. Do not cut out the middleman.
+
+## What the Hub writes to Linear
+
+Four things, and no more: stage labels (`AI-research done`, `AI-design done`)
+when a stage reports finished, `no-design` when you dismiss a card, its removal
+when you undo that, and **issue status — but only from `POST
+/api/agent/session/:id/complete`.**
+
+That last one is a deliberate exception to §6, which says "Never issue status".
+§15 asked which of the code and the document should move, and the answer is the
+document. The rule exists to stop the Manager *inventing* a fact it does not
+own — deciding by itself that work is finished, from a label or a timer or an
+evidence read. That is still forbidden and nothing does it. A human pressing
+Complete is not that; it is the press being carried to Linear instead of you
+opening Linear to do the same thing by hand.
+
+**What keeps it honest is that nothing else can reach that mutation.** The
+cron read, the agent post, stage-done, dismiss and set-aside are each asserted
+never to write status in `test/invariants.test.mjs`. If you add a path that
+completes an issue, you are removing the exception's only justification — do
+not, without changing this section first.
 
 ## The Hub stays generic
 
@@ -84,6 +169,7 @@ node --test                          # everything, including production smoke
 node --test test/unit.test.mjs       # unit only, no network
 node --test test/invariants.test.mjs # the rules of the architecture, by section
 node --test test/identity.test.mjs   # §2, the one identity
+node --test test/grain.test.mjs      # the card/session split, and the projection
 ```
 
 **Tests here are proved to bite.** Break the invariant deliberately, confirm

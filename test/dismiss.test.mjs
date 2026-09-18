@@ -18,8 +18,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  freshDb, env, call, agentPost, readLinear, issue, stubLinear, one,
+import {  freshDb, env, call, agentPost, readLinear, issue, stubLinear, one, wire, session, sessionsOf,
 } from './helpers.mjs';
 
 const RYV = () => issue({ identifier: 'RYV-84' });
@@ -36,7 +35,7 @@ const undismiss = (e, id = CARD) =>
 // test that cares about survival plants this and checks it comes back intact.
 const PLANTED = '2020-01-01 00:00:00';
 const plant = (db, id = CARD) =>
-  db.prepare('UPDATE agent_sessions SET dismissed_at = ? WHERE id = ?').run(PLANTED, id);
+  db.prepare('UPDATE cards SET dismissed_at = ? WHERE issue_key = ?').run(PLANTED, id);
 
 // A board with one discovered Linear card on it.
 async function boardWithOneCard(issues = [RYV()]) {

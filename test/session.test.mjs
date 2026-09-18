@@ -16,9 +16,8 @@ import assert from 'node:assert/strict';
 // the schema pieces in the order the live database got them, and a stubbed
 // Linear. It lives in helpers.mjs so that adding a pieceN-schema.sql is one
 // edit rather than one per suite.
-import {
-  PIECES, applyPieces, freshDb, env, call, agentPost, readLinear,
-  issue, stubLinear, rows,
+import {  PIECES, applyPieces, freshDb, env, call, agentPost, readLinear,
+  issue, stubLinear, rows, wire, session, sessionsOf,
 } from './helpers.mjs';
 
 // Options as stored (JSON) or as a read hands them back (an array).
@@ -62,14 +61,14 @@ describe('reader first, then the agent posts', () => {
     const res = await agentPost(e, AGENT_BODY);
     assert.equal(res.status, 200);
 
-    const all = rows(db);
-    assert.equal(all.length, 1, 'the agent post added a second row');
-    const r = all[0];
+    assert.equal(rows(db).length, 1, 'the agent post added a second row');
+    const r = only(db);
     // §2: the Linear issue key is the only identity, and it is the row's
     // name. It used to be 'linear/RYV-84' with the agent's own id remembered
     // alongside it, which was the second identity §2 removes.
     assert.equal(r.id, 'RYV-84');
-    assert.ok(r.agent_posted_at, 'nothing recorded that an agent had written here');
+    assert.ok(onlySession(db).agent_posted_at,
+              'nothing recorded that an agent had written here');
     // Agent state on the card…
     assert.equal(r.phase, 'research');
     assert.equal(r.status, 'waiting');
@@ -89,13 +88,13 @@ describe('reader first, then the agent posts', () => {
     await agentPost(e, { ...AGENT_BODY, figma_url: 'https://figma.com/f/1' });
     await readLinear(e);
 
-    const all = rows(db);
-    assert.equal(all.length, 1);
-    assert.equal(all[0].phase, 'research');
-    assert.equal(all[0].status, 'waiting');
-    assert.equal(all[0].prompt, AGENT_BODY.prompt);
-    assert.equal(all[0].detail, AGENT_BODY.detail);
-    assert.equal(all[0].figma_url, 'https://figma.com/f/1');
+    assert.equal(rows(db).length, 1);
+    const r = only(db);
+    assert.equal(r.phase, 'research');
+    assert.equal(r.status, 'waiting');
+    assert.equal(r.prompt, AGENT_BODY.prompt);
+    assert.equal(r.detail, AGENT_BODY.detail);
+    assert.equal(r.figma_url, 'https://figma.com/f/1');
   });
 
   test('a manual brand reassignment survives the agent post', async () => {
@@ -105,7 +104,7 @@ describe('reader first, then the agent posts', () => {
     await readLinear(e);
     await call(e, 'PATCH', '/api/agent/session/linear%2FRYV-84/reassign', { project: 'forge' });
     await agentPost(e, AGENT_BODY);  // posts brand 'ryve'
-    assert.equal(rows(db)[0].project, 'forge');
+    assert.equal(rows(db)[0].brand, 'forge');
   });
 });
 
@@ -121,17 +120,16 @@ describe('the agent posts first, then the reader discovers the issue', () => {
     // because that is the identity and the rest of the string is a Linear fact
     // repeated back. The brand segment is read and discarded — encoding it in
     // the key is what let the key contradict Linear.
-    assert.equal(rows(db)[0].id, 'RYV-84');
-    assert.equal(rows(db)[0].linear_id, 'RYV-84');
+    assert.equal(rows(db)[0].issue_key, 'RYV-84');
 
     await readLinear(e);
-    const all = rows(db);
-    assert.equal(all.length, 1, 'the reader added a second row');
-    assert.equal(all[0].id, 'RYV-84');
-    assert.equal(all[0].linear_id, 'RYV-84');
-    assert.equal(all[0].linear_uuid, 'uuid-RYV-84');
-    assert.equal(all[0].title, 'RYV-84 title');
-    assert.equal(all[0].phase, 'research');
+    assert.equal(rows(db).length, 1, 'the reader added a second row');
+    const r = only(db);
+    assert.equal(r.id, 'RYV-84');
+    assert.equal(r.linear_id, 'RYV-84');
+    assert.equal(r.linear_uuid, 'uuid-RYV-84');
+    assert.equal(r.title, 'RYV-84 title');
+    assert.equal(r.phase, 'research');
   });
 });
 
@@ -164,8 +162,8 @@ describe('the agent still addresses its own session id', () => {
       '/api/agent/session/' + encodeURIComponent(AGENT_ID) + '/respond',
       { response: 'Direction B' });
     assert.equal(res.status, 200);
-    assert.equal(rows(db)[0].response, 'Direction B');
-    assert.equal(rows(db)[0].status, 'active');
+    assert.equal(only(db).response, 'Direction B');
+    assert.equal(only(db).status, 'active');
   });
 
   test('the trigger works through either id and queues the one card', async () => {
@@ -178,9 +176,8 @@ describe('the agent still addresses its own session id', () => {
     const res = await call(e, 'POST',
       '/api/agent/session/' + encodeURIComponent(AGENT_ID) + '/trigger', { stage: 'research' });
     assert.equal(res.status, 200);
-    const all = rows(db);
-    assert.equal(all.length, 1);
-    assert.equal(all[0].requested_stage, 'research');
+    assert.equal(rows(db).length, 1);
+    assert.equal(only(db).requested_stage, 'research');
   });
 
   test('the trigger applies no Linear label — the Hub owns the queue now', async () => {
@@ -221,7 +218,7 @@ describe('the agent still addresses its own session id', () => {
       '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger', { stage: 'qa' });
     assert.equal(trigger.status, 400);
     assert.match((await trigger.json()).error, /research, design/);
-    assert.equal(rows(db)[0].requested_stage, null, 'a refused stage was still queued');
+    assert.equal(only(db).requested_stage, null, 'a refused stage was still queued');
 
     const done = await call(e, 'POST', '/api/agent/stage-done',
       { linear_id: 'RYV-84', stage: 'qa' }, { 'X-Agent-Secret': 's' });
@@ -238,7 +235,7 @@ describe('the agent still addresses its own session id', () => {
     const id = '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger';
     assert.equal((await call(e, 'POST', id, { stage: 'research' })).status, 200);
     assert.equal((await call(e, 'POST', id, { stage: 'design' })).status, 409);
-    assert.equal(rows(db)[0].requested_stage, 'research');
+    assert.equal(only(db).requested_stage, 'research');
   });
 
   // The runner's workflow declares max_issues with a default of '2', and
@@ -360,8 +357,8 @@ describe('the agent still addresses its own session id', () => {
     await call(e, 'POST', card + '/complete');
     // A finished issue is not work to hand the runner, and an entry left
     // behind would sit on a card in the Completed drawer reading as Working.
-    assert.equal(rows(db)[0].requested_stage, null);
-    assert.equal(rows(db)[0].requested_at, null);
+    assert.equal(only(db).requested_stage, null);
+    assert.equal(only(db).requested_at, null);
   });
 
   test('an issue already finished is said so, and written to twice never', async () => {
@@ -427,12 +424,12 @@ describe('the agent still addresses its own session id', () => {
     assert.equal(out.set_aside, 2);
     assert.equal(out.asked, 3);
 
-    const byId = Object.fromEntries(rows(db).map(r => [r.linear_id, r]));
+    const byId = Object.fromEntries(rows(db).map(r => [r.issue_key, r]));
     assert.ok(byId['MAR-1'].set_aside_at, 'MAR-1 was not set aside');
     assert.ok(byId['MAR-2'].set_aside_at, 'MAR-2 was not set aside');
     assert.equal(byId['RYV-84'].set_aside_at, null, 'a card nobody asked about was set aside');
     // And a card told to stop being agent work leaves the queue with it.
-    assert.equal(byId['MAR-1'].requested_stage, null);
+    assert.equal(wire(db, 'MAR-1').requested_stage, null);
   });
 
   test('the queue and the dispatch count both skip a dismissed card', async () => {
@@ -473,8 +470,8 @@ describe('the agent still addresses its own session id', () => {
     const res = await call(e, 'DELETE', card + '/trigger');
     assert.equal(res.status, 200);
     assert.equal((await res.json()).cleared, 'research');
-    assert.equal(rows(db)[0].requested_stage, null);
-    assert.equal(rows(db)[0].requested_at, null);
+    assert.equal(only(db).requested_stage, null);
+    assert.equal(only(db).requested_at, null);
 
     // And the whole point: the stage can be pressed again.
     assert.equal((await call(e, 'POST', card + '/trigger', { stage: 'research' })).status, 200);
@@ -489,15 +486,15 @@ describe('the agent still addresses its own session id', () => {
       { session_id: 'ryve/ryv-86/research', system: 'design-ai', status: 'error',
         prompt: 'Research blocked — no BCC documents for ryve' },
       { 'X-Agent-Secret': 's' });
-    assert.equal(rows(db)[0].status, 'error');
+    assert.equal(only(db).status, 'error');
 
     const res = await call(e, 'DELETE',
       '/api/agent/session/' + encodeURIComponent('linear/RYV-86') + '/trigger');
     assert.equal(res.status, 200);
     // 'waiting' is what the reader writes on every quiet row, so this is the
     // card going quiet rather than claiming anything new.
-    assert.equal(rows(db)[0].status, 'waiting');
-    assert.equal(rows(db)[0].prompt, null, 'the failure prose outlived the failure');
+    assert.equal(only(db).status, 'waiting');
+    assert.equal(only(db).prompt, null, 'the failure prose outlived the failure');
   });
 
   test('reset leaves everything that is not the request alone', async () => {
@@ -513,7 +510,7 @@ describe('the agent still addresses its own session id', () => {
     const row = rows(db)[0];
     assert.equal(rows(db).length, 1, 'reset dropped the row — it is not a delete');
     assert.deepEqual(JSON.parse(row.labels), ['AI-research done'], 'reset moved the stage');
-    assert.equal(row.linear_id, 'RYV-84');
+    assert.equal(row.issue_key, 'RYV-84');
     assert.equal(row.linear_uuid, 'uuid-RYV-84');
     assert.equal(mutations.length, 0, 'reset wrote to Linear: ' + mutations.join(', '));
   });
@@ -533,9 +530,9 @@ describe('the agent still addresses its own session id', () => {
 
     await call(e, 'DELETE',
       '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger');
-    assert.equal(rows(db)[0].prompt, 'Which direction proceeds?');
-    assert.equal(rows(db)[0].status, 'waiting');
-    assert.equal(JSON.parse(rows(db)[0].options).length, 2);
+    assert.equal(only(db).prompt, 'Which direction proceeds?');
+    assert.equal(only(db).status, 'waiting');
+    assert.equal(only(db).options.length, 2);
   });
 
   test('reset on an id nothing knows is a 404, not a silent ok', async () => {
@@ -561,7 +558,7 @@ describe('the agent still addresses its own session id', () => {
       issue({ identifier: 'OLD-1', state: 'completed' }),           // closed: not discovered
     ]);
     const result = await (await readLinear(e)).json();
-    const ids = rows(db).map(r => r.linear_id).sort();
+    const ids = rows(db).map(r => r.issue_key).sort();
     assert.deepEqual(ids, ['CON-116', 'MAR-980', 'RYV-84', 'STO-421', 'WEB-265']);
     assert.equal(result.skipped, 0);
   });
@@ -598,12 +595,14 @@ describe('the agent still addresses its own session id', () => {
       { linear_id: 'RYV-84', stage: 'research' }, { 'X-Agent-Secret': 's' });
     assert.equal(res.status, 200);
 
-    const row = rows(db)[0];
-    assert.equal(row.requested_stage, null, 'still queued after reporting done');
+    assert.equal(only(db).requested_stage, null, 'still queued after reporting done');
+    assert.equal(onlySession(db, 'research').status, 'done',
+                 'the session that finished was not marked done');
     // Written locally as well as in Linear: the reader only runs twice a week,
     // and without this the card sits in the wrong column until it next does.
-    assert.ok(JSON.parse(row.labels).includes('AI-research done'),
-              'the done label was not recorded on the row');
+    // The labels are the issue's, so they are on the card.
+    assert.ok(JSON.parse(rows(db)[0].labels).includes('AI-research done'),
+              'the done label was not recorded on the card');
     assert.ok(mutations.length >= 1, 'no Linear label was applied');
   });
 
@@ -622,10 +621,13 @@ describe('the agent still addresses its own session id', () => {
     assert.equal((await res.json()).linear_id, 'RYV-84');
 
     await agentPost(e, { ...AGENT_BODY, session_id: 'ryve/ryv-84/design', stage: 'design' });
-    const all = rows(db);
-    assert.equal(all.length, 1);
-    assert.equal(all[0].phase, 'design');
-    assert.equal(all[0].id, 'RYV-84', 'a later phase was filed under its own name');
+    assert.equal(rows(db).length, 1);
+    assert.equal(rows(db)[0].issue_key, 'RYV-84',
+                 'a later stage was filed under its own name');
+    // One card, two sessions — the grain §2 asks for. The research session is
+    // still there rather than having been overwritten by design, which is what
+    // the single-row shape did.
+    assert.deepEqual(sessionsOf(db, 'RYV-84').map((x) => x.stage), ['design', 'research']);
   });
 
   test('an unknown id is still a 404', async () => {
@@ -645,16 +647,26 @@ describe('sessions with no Linear issue behind them', () => {
     await agentPost(e, { session_id: id, system: 'social-ai', brand: 'conduit',
                          stage: 'design', status: 'active', title: 'Wallet flow' });
     assert.equal(rows(db).length, 1);
-    assert.equal(rows(db)[0].id, id);
-    assert.equal(rows(db)[0].linear_id, null);
+    // No Linear key in the id, so the id itself is what it is filed under —
+    // nothing is invented for it (§2 forbids a second identity, not a session
+    // that has no issue). What makes it not a card is that Linear has nothing
+    // behind it.
+    assert.equal(rows(db)[0].issue_key, id);
+    assert.equal(rows(db)[0].linear_uuid, null);
 
     await agentPost(e, { session_id: id, system: 'social-ai', brand: 'conduit',
                          stage: 'qa', status: 'waiting', prompt: 'Ship it?' });
-    const all = rows(db);
-    assert.equal(all.length, 1);
-    assert.equal(all[0].phase, 'qa');
-    assert.equal(all[0].status, 'waiting');
-    assert.equal(all[0].system, 'social-ai');
+    assert.equal(rows(db).length, 1, 'a second stage became a second card');
+    // 'qa' is not a stage the Hub runs, and it is stored anyway: the schema
+    // does not constrain stage, because the Hub stays generic and does not own
+    // another agent system's vocabulary. The trigger route is where the Hub's
+    // own stages are enforced.
+    const qa = session(db, id, 'qa');
+    assert.equal(qa.status, 'waiting');
+    assert.equal(qa.system, 'social-ai');
+    assert.equal(qa.prompt, 'Ship it?');
+    // And the design session it posted first is still there beside it.
+    assert.equal(session(db, id, 'design').status, 'active');
   });
 
   test('two issues stay two cards', async () => {
@@ -666,7 +678,7 @@ describe('sessions with no Linear issue behind them', () => {
     await agentPost(e, { ...AGENT_BODY, session_id: 'conduit/con-116/design', stage: 'design' });
     const all = rows(db);
     assert.equal(all.length, 2);
-    assert.deepEqual(all.map(r => r.linear_id).sort(), ['CON-116', 'RYV-84']);
+    assert.deepEqual(all.map(r => r.issue_key).sort(), ['CON-116', 'RYV-84']);
   });
 });
 
@@ -691,7 +703,16 @@ const reopen = (e, id, body) =>
 const setState = (e, id, body) =>
   call(e, 'PATCH', '/api/agent/session/' + encodeURIComponent(id) + '/state', body);
 const decisions = (db) => db.prepare(`SELECT * FROM gate_decisions ORDER BY id`).all();
-const only = (db) => rows(db)[0];
+// The one card on the board, as a consumer sees it: the projection in
+// lib/card.mjs over both tables. piece11 split the card from its sessions, and
+// almost everything below is about a gate or a run — which live on the
+// session — so asserting on the card row alone would be asserting on the wrong
+// half. This is the shape the board and the agent both read.
+const only = (db) => wire(db, rows(db)[0].issue_key);
+
+// The stored session, for the few assertions that are about what is written
+// rather than what is served.
+const onlySession = (db, stage) => session(db, rows(db)[0].issue_key, stage);
 
 // A Linear card with a gate posted against it, reached through the agent's own
 // session id — the same path everything else in this file uses.
@@ -708,7 +729,7 @@ async function gated(body = GATE) {
 describe('posting a gate', () => {
   test('options are stored, and read back as an array rather than a blob', async () => {
     const { db, e } = await gated();
-    assert.equal(typeof only(db).options, 'string', 'the column should hold JSON');
+    assert.equal(typeof onlySession(db).options, 'string', 'the column should hold JSON');
 
     const res = await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
                            undefined, { 'X-Agent-Secret': 's' });
@@ -1086,12 +1107,20 @@ describe('mockups and handoff', () => {
 describe('piece6-schema.sql merges the rows already in the table', () => {
   // The state the live database is in before the migration: a reader row and
   // an agent row for the same issue, written by the two old code paths.
+  // Everything applied after piece6. This block replays the database as it
+  // was before piece6 ran, so none of them can be present: migration-003
+  // reads the column piece6 adds, and piece11/migration-004 move the data out
+  // of the table this is about entirely.
+  const AFTER_006 = ['piece6-schema.sql', 'migration-003-identity.sql',
+                     'piece11-schema.sql', 'migration-004-grain.sql'];
+
+  // `agent_sessions` directly, because `cards` does not exist at this point in
+  // history and the shared helpers read it. That is the point of the block.
+  const allOld = (db) =>
+    db.prepare(`SELECT * FROM agent_sessions ORDER BY id`).all();
+
   function withDuplicates() {
-    // Everything except piece6 — and except migration-003, which comes
-    // after it in history and reads the column piece6 adds. This block is
-    // about what piece6 itself did; migration-003 has its own below.
-    const db = freshDb(PIECES.filter(
-      p => p !== 'piece6-schema.sql' && p !== 'migration-003-identity.sql'));
+    const db = freshDb(PIECES.filter(p => !AFTER_006.includes(p)));
     db.prepare(
       `INSERT INTO agent_sessions
          (id, system, project, track, phase, status, prompt, detail, url,
@@ -1116,11 +1145,11 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
 
   test('the twin collapses onto the Linear row', () => {
     const db = withDuplicates();
-    assert.equal(rows(db).length, 3);
+    assert.equal(allOld(db).length, 3);
 
     applyPieces(db, ['piece6-schema.sql']);
 
-    const all = rows(db);
+    const all = allOld(db);
     assert.equal(all.length, 2, 'the duplicate row is still there');
     const merged = all.find(r => r.linear_id === 'RYV-84');
     assert.equal(merged.id, 'linear/RYV-84');
@@ -1136,7 +1165,7 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
   test('a Hub-only session is left where it is', () => {
     const db = withDuplicates();
     applyPieces(db, ['piece6-schema.sql']);
-    const hub = rows(db).find(r => r.id === 'conduit/wallet-flow/design');
+    const hub = allOld(db).find(r => r.id === 'conduit/wallet-flow/design');
     assert.ok(hub, 'the Hub-only session was swept up');
     assert.equal(hub.agent_session_id, 'conduit/wallet-flow/design');
     assert.equal(hub.linear_id, null);
@@ -1150,7 +1179,7 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
 
     applyPieces(db, ['piece6-schema.sql']);
 
-    const all = rows(db);
+    const all = allOld(db);
     assert.equal(all.length, 2);
     const merged = all.find(r => r.linear_id === 'RYV-84');
     // Newest twin wins, and the older one is gone rather than left orphaned.
@@ -1159,19 +1188,10 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
     assert.equal(all.some(r => r.id === AGENT_ID), false);
   });
 
-  test('after the migration the agent still reaches the card by its own id', async () => {
-    const db = withDuplicates();
-    applyPieces(db, ['piece6-schema.sql']);
-    const e = env(db);
-    stubLinear([issue({ identifier: 'RYV-84' })]);
-
-    const res = await call(e, 'GET', '/api/agent/session/' + encodeURIComponent(AGENT_ID),
-                           undefined, { 'X-Agent-Secret': 's' });
-    assert.equal(res.status, 200);
-    assert.equal((await res.json()).id, 'linear/RYV-84');
-
-    await agentPost(e, { ...AGENT_BODY, stage: 'qa' });
-    await readLinear(e);
-    assert.equal(rows(db).length, 2);   // the merged card + the Hub-only one
-  });
+  // There used to be a fourth test here, driving the Worker against this
+  // schema to show the agent could still reach the merged card by its own id.
+  // The Worker does not read `agent_sessions` any more (piece11), so that can
+  // no longer be asked here — and it is the wrong place to ask it now anyway.
+  // It lives in test/identity.test.mjs, "every id anything has ever sent still
+  // reaches the card", against the schema that actually ships.
 });

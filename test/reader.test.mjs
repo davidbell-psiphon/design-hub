@@ -17,8 +17,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, one,
+import {  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, one, wire, session, sessionsOf,
 } from './helpers.mjs';
 
 const RYV = (o = {}) => issue({ identifier: 'RYV-84', ...o });
@@ -89,7 +88,7 @@ describe('discovery keeps its budget for open work', () => {
     stubLinear([issue({ identifier: 'RYV-189', state: 'started' }),
                 issue({ identifier: 'PSI2-278', state: 'started', team: 'Psiphon App' })]);
     await readLinear(e);
-    assert.deepEqual(rows(db).map(r => r.linear_id).sort(), ['PSI2-278', 'RYV-189']);
+    assert.deepEqual(rows(db).map(r => r.issue_key).sort(), ['PSI2-278', 'RYV-189']);
   });
 
   test('the budget is still bounded and still 100', async () => {
@@ -206,11 +205,14 @@ describe('a read refreshes Linear, and only Linear', () => {
     await readLinear(e);
     await call(e, 'POST', '/api/agent/session/' + encodeURIComponent('linear/RYV-84') +
                '/trigger', { stage: 'research' });
-    assert.equal(one(db, 'RYV-84').requested_stage, 'research');
+    // What the board sees, which is the thing that must not change: the queue
+    // lives on the session now and the reader writes the card, so this is
+    // asserting across the split rather than within one row.
+    assert.equal(wire(db, 'RYV-84').requested_stage, 'research');
 
     stubLinear([RYV()]);
     await readLinear(e);
-    assert.equal(one(db, 'RYV-84').requested_stage, 'research',
+    assert.equal(wire(db, 'RYV-84').requested_stage, 'research',
                  'a read cleared the queue and the run will never happen');
   });
 
@@ -228,10 +230,10 @@ describe('a read refreshes Linear, and only Linear', () => {
     stubLinear([RYV()]);
     await readLinear(e);
 
-    const r = one(db, 'RYV-84');
+    const r = wire(db, 'RYV-84');
     assert.equal(r.status, 'waiting', 'a read closed an open gate');
     assert.equal(r.prompt, 'Which direction proceeds?');
-    assert.equal(JSON.parse(r.options).length, 2, 'a read dropped the options');
+    assert.equal(r.options.length, 2, 'a read dropped the options');
   });
 
   test('the title and state do refresh — that is the job', async () => {
@@ -272,7 +274,7 @@ describe('a read refreshes Linear, and only Linear', () => {
     const out = await res.json();
 
     assert.equal(res.status, 200);
-    assert.deepEqual(rows(db).map(r => r.linear_id).sort(), ['INS-66', 'MAR-978']);
+    assert.deepEqual(rows(db).map(r => r.issue_key).sort(), ['INS-66', 'MAR-978']);
     assert.equal(out.skipped, 1, 'skipped should count the other assignee, and only that');
   });
 });

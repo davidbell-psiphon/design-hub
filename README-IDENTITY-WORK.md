@@ -1,196 +1,193 @@
-# §2 — what was done, and where data should live next
+# §2 — identity, and where data lives
 
-Written 18 September 2026, alongside the change that removed the second
-identity scheme.
+Done 18 September 2026, in two steps on the same evening. This is the record of
+what changed and why, for whoever reads the code next.
 
 ---
 
-## What §2 actually was
+## The short version
 
-Not a naming problem. The system had **two writers with two naming schemes and
-no shared key**, and everything else followed from that.
+`agent_sessions` held three different kinds of fact in one row, under a name
+that two different writers spelled two different ways. Both halves of that are
+now fixed:
+
+- **Identity.** `cards.issue_key` is the primary key. A second card for one
+  Linear issue cannot be written — not reconciled away afterwards, not merged
+  by a migration. Written.
+- **Grain.** A session is `(issue_key, stage)`, in its own table, so research
+  and design each carry their own status, gate, error and history.
+
+The board did not change. Not one line of `frontend/`.
+
+---
+
+## Part 1 — identity
+
+### What it was
 
 The Linear Reader keyed its rows `linear/RYV-84`. The design-ai agent posted
 `ryve/ryv-84/research`. Neither collided with the other on the primary key, so
-one issue grew two rows. `piece6-schema.sql` merged the duplicates and added
-`agent_session_id` to remember the agent's id, and three lookups grew up around
-it to make the two conventions agree after the fact.
+one issue grew two rows and triggering research added a sibling instead of
+moving the card. `piece6-schema.sql` merged the duplicates and remembered the
+agent's id in `agent_session_id`, and three lookups grew up around it.
 
 That is reconciliation, and reconciliation is a thing you have to keep being
 right about. §2's objection is exact: *"A bridge implies two identities, and two
 identities is how one issue becomes two cards."*
 
-## What changed
+### What it is
 
-**`linear_id` is the identity, and it is unique.**
+**The issue key is the primary key.** First as a unique index
+(`migration-003-identity.sql`), then outright as `cards.issue_key`
+(`piece11-schema.sql`). Two rows for one issue is not a bug to be caught; it is
+a statement the database refuses.
 
-```sql
-CREATE UNIQUE INDEX idx_agent_linear_unique
-  ON agent_sessions(linear_id) WHERE linear_id IS NOT NULL;
-```
+Everything else followed:
 
-One statement, and the first bug in §11 stops being possible rather than
-becoming well-handled. Whatever writes, whatever the id string says, two rows
-cannot claim one issue. The index is partial, so the sessions that legitimately
-have no issue are unaffected — there can be any number of those, and they are
-not cards.
+- Rows are named by their issue — `RYV-84`. `linear/…` is gone as a convention.
+- Nothing writes `agent_session_id`; the new tables have no such column.
+- Brand left the key. It is derived from the Linear team, so a session id naming
+  the wrong brand lands on the right card and does not change its brand.
+- A record with no Linear issue behind it is not a card. It still exists and
+  still works on its own routes — the runner's reachability probe is one.
 
-Everything else follows from that:
-
-- **Rows are named by their issue.** `RYV-84`. `linear/…` is gone as a
-  convention, and `migration-003-identity.sql` renames what is there, carrying
-  `gate_decisions` with it in the same file so history is not orphaned.
-- **The bridge is dead in code.** Nothing writes `agent_session_id`. The column
-  stays on the table — dropping it was not wanted, and keeping it means this is
-  reversible by reverting the Worker alone.
-- **The parser replaced the bridge.** `lib/session-id.mjs` reads the issue key
-  out of whatever string arrives. Six shapes resolve, including every one
-  anything still sends. **Parsing an id is not storing a second one**, which is
-  the distinction the whole change rests on.
-- **Brand left the key.** It is derived from the Linear team. A session id
-  naming the wrong brand now lands on the right card and does not change the
-  card's brand — which is the point, because encoding it was what let the key
-  contradict Linear.
-- **A record with no issue key is not a card.** Filtered out of
-  `GET /api/agent/sessions`. It still exists and still works on its own routes,
-  because the runner's reachability probe is one of them.
-
-### Why this is safe to deploy in either state
-
-The key is parsed, not looked up in a bridge, so the Worker resolves a renamed
-database and an unrenamed one identically.
-
-**One exception, and it is the deploy order.** `agent_posted_at` is new and the
-Worker writes it. Run the migration first. DEPLOY.md has the detail and the
-check.
-
-### What it cost
-
-Eight invariant breaks were introduced deliberately and eight were caught by a
-named test. The ninth — swapping the order of the two lookups in the agent post
-route — changed no behaviour and no test, which is the correct result and is
-now said in the comment there: once a row carrying an issue is named by it,
-the two lookups cannot disagree. That is what was not true before.
-
-495 local tests, 0 failing.
+**The agent's contract never changed.** It posts `ryve/ryv-84/design` and always
+can: `lib/session-id.mjs` parses the key and the stage back out at the boundary.
+**Parsing an id is not storing a second one**, and that distinction is what the
+whole change rests on.
 
 ---
 
-## Where data should live next
+## Part 2 — where data lives
 
-§2 says a session is `(issue_key, stage)` — `RYV-84/design`. That is **not**
-what the table holds, and the difference is deliberate. It is worth being
-precise about why, because it is the next piece of work.
+### The three facts that were sharing a row
 
-### Three kinds of fact are still in one row
+| Kind | Owner | Was | Is |
+|---|---|---|---|
+| The issue | Linear | mixed into the row | `cards`, replaced on every read, with `linear_read_at` |
+| The card | You | mixed into the row | `cards`, never touched by a read |
+| The session | The Manager, per stage | **one per issue** | `sessions`, one per `(issue_key, stage)` |
 
-| Kind | Who owns it | Examples |
-|---|---|---|
-| **The issue** | Linear | `title`, `team`, `linear_state`, `labels`, `linear_project`, `url` |
-| **The card** | You, in the Hub | `dismissed_at`, `set_aside_at`, `figma_url`, brand/track override |
-| **The session** | The Manager, per stage | `status`, `prompt`, `options`, `gate_round`, `response*`, `requested_stage`, `last error` |
+### Why the grain mattered, given nothing was visibly broken
 
-One row per issue holds all three. The identity fix made the row's *name*
-right. It did not change its *grain*.
+It wasn't visibly broken because runs are serialised — GitHub's concurrency
+group allows one at a time — so only ever one stage was in flight and one set of
+gate columns was enough.
 
-### What that costs today: nothing. What it costs the moment §3 lands: a lot
+It breaks the moment two stages have something to say at once, which is what
+§3, §4 and §8 each ask for:
 
-A card has **one gate**, not one per stage. That works right now for a reason
-that is nothing to do with design: runs are serialised — GitHub's concurrency
-group allows exactly one at a time — so only one stage is ever in flight, and
-one set of gate columns is enough.
+- research is `Drift` while design is `Unverified` — §3 has six states per
+  stage, and the row could hold one
+- research failed while design waits on a gate — §4 keeps the last error per
+  stage, and the row kept one
+- a design gate is reopened without disturbing research history — §8 numbers
+  rounds, and the row numbered them once
 
-It stops working the moment any of these is wanted, and §3, §4 and §8 all want
-them:
+`test/grain.test.mjs` asserts each of those now works. Every one of them would
+have silently done the wrong thing before.
 
-- Research is `Drift` and design is `Unverified` **at the same time** (§3 has
-  six states per stage; the row can hold one)
-- Research failed with one error and design is waiting on a gate (§4 keeps the
-  last error per stage; the row keeps one)
-- A design gate is reopened while research history stays intact (§8 numbers
-  rounds; the row numbers them once)
+### Three things that got simpler rather than more complex
 
-### The shape, when it is wanted
+**The guard that is gone.** `cards.description` is the Linear description;
+`sessions.detail` is the agent's context. They shared a column, so the reader
+needed a CASE to avoid wiping the agent's — first keyed off the bridge column,
+then off `agent_posted_at`. Separate columns mean no guard, and both facts
+survive, which the old shape could not manage at all.
 
-Two tables, and the split follows ownership rather than convenience:
+**`requested_stage` is gone.** The stage *is* the row, so queuing is
+`sessions.requested_at`. A column saying which stage was queued could disagree
+with the stage that was actually queued; now there is nothing to disagree with.
 
-```
-cards     PK issue_key                -- the issue cache + your overrides
-sessions  PK (issue_key, stage)       -- everything transient, and the whole gate
-```
+**The reader writes no sessions.** It used to stamp `status='waiting'` and
+`prompt='Run design research on RYV-84?'` onto every row it discovered — a gate
+on every card that was not a gate. §3's "Not started" is the absence of a
+session now, which is what that state always meant.
 
-Three things make it worth doing properly rather than approximately:
+### The wire did not move
 
-**1. The gate columns move, they do not copy.** `options`, `gate_round`,
-`response*`, `responded_at`, `status`, `prompt` leave `cards` entirely. If they
-exist in both places for even one release, the fact has two homes and this
-document's one rule is broken — which is how every bug in §11 started.
+`lib/card.mjs` flattens a card and its sessions into exactly the shape the board
+has always been sent — **computed per request, never stored**. That is the whole
+difference between it and the row it replaced: a stored flattening is a third
+copy of two facts, and a computed one has no facts of its own to drift.
 
-**2. The wire format does not change on day one.** `/api/agent/sessions` keeps
-returning what it returns: the card, flattened with the active session's fields
-— **computed per request, never stored** — plus a new `stages: { research: {…},
-design: {…} }`. `frontend/board-logic.js` needs no change to keep working, and
-can adopt the per-stage detail when there is a reason to.
+It adds `stages: { research: {…}, design: {…} }` alongside, which is what to
+read when a card needs to say two things at once.
 
-**3. The Linear cache gets a visible age.** §5 permits a cache on three
-conditions, and the one currently missing is "it has a visible age". A
-`linear_read_at` on `cards` costs one column and makes the honest statement the
-board cannot currently make: *this is what Linear said, at this time.*
-
-The test that proves the split is real: **`DELETE FROM` the Linear-owned
-columns and nothing a human decided is lost.** If that is true, the cache is a
-cache. If it is not, it is a second home.
-
-### Why it was not done tonight
-
-§0: *"Audit before deleting, tests before refactoring, refactor last."*
-
-A grain change under a working gate mechanism, on the same night as an identity
-change, with no way to deploy or to verify against production, is two
-refactors stacked with the net still being built. The identity fix stands on
-its own, is covered, and is reversible. This one should go in awake, on its
-own, with the board in front of you.
+`test/grain.test.mjs` asserts every field the board reads is still served, by
+listing them — so removing one from the projection fails a test rather than a
+card.
 
 ---
 
-## Two things found and not fixed
+## §15, answered
 
-Per §13's scope rule: write it down at the end and stop.
+**Does the Manager advance Linear status?** It does, through
+`POST /api/agent/session/:id/complete`, and §6 says it never should.
 
-### The Manager does advance Linear status, and §6 says it must not
+**The document moves, not the code.** §6 exists to stop the Manager *inventing*
+a fact it does not own — deciding by itself that work is finished. A human
+pressing Complete is not that; it is the press being carried to Linear instead
+of you opening Linear to do the same thing by hand.
 
-§15 asks: *"Does the Manager advance Linear status? … Either the Manager moves
-status — contradicting §6 — or the docs state plainly that it never will.
-Currently neither is true."*
+What keeps the exception honest is that nothing else can reach that mutation.
+The cron read, the agent post, stage-done, dismiss and set-aside are each
+asserted never to write issue status. That assertion is the justification —
+if a future change makes any other path complete an issue, the exception stops
+being defensible. `CLAUDE.md` says so where someone will see it.
 
-Currently the **first** one is true. `POST /api/agent/session/:id/complete`
-(`worker/index.js`) resolves the team's earliest completed state and writes it:
+---
 
+## What was verified, and how
+
+527 tests, 0 failing. Every invariant was proved to bite: break it deliberately,
+confirm the named test fails, restore, confirm green.
+
+- 10 breaks for §3/§5/§6/§8/§12/§14 (`test/invariants.test.mjs`)
+- 9 breaks for §2 identity (`test/identity.test.mjs`)
+- 12 breaks for the grain split and the projection (`test/grain.test.mjs`)
+
+One break did **not** bite, and that was the right answer: swapping the order of
+the two lookups in the agent post route changes no behaviour, because once a row
+carrying an issue is named by it, the two cannot disagree. The comment there
+says so rather than claiming the order matters.
+
+`design-ai` is unaffected — 113 client checks and 114 runner tests, unchanged.
+
+---
+
+## Deploying it
+
+**Order matters, and it is in DEPLOY.md.** In short:
+
+```bash
+npx wrangler d1 execute design-hub --remote --file=./migration-003-identity.sql
+npx wrangler d1 execute design-hub --remote --file=./piece10-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece11-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./migration-004-grain.sql
+npx wrangler deploy
 ```
-mutation Complete($id: String!, $stateId: String!) {
-  issueUpdate(id: $id, input: { stateId: $stateId }) { success }
-}
-```
 
-§6 lists what the Manager writes, and says plainly: *"Never issue status,
-title, assignee, cycle, or brand."* The code contradicts the architecture of
-record, and the route is deliberate, documented and useful — it exists to save
-the trip to Linear.
+Migrations first, deploy immediately after, in one sitting. The currently
+deployed Worker reads `agent_sessions` and is unaffected by any of the files, so
+there is no moment where the board is broken — but anything it writes between
+the copy and the deploy lands in the old table and is not carried across. If the
+cron fires in that window, press Read Linear afterwards.
 
-This is a decision, not a bug to fix quietly. Either §6 gains an exception for
-an explicit human press, or the route goes. Untouched either way.
+**Nothing is dropped.** `agent_sessions` is frozen at migration time and is the
+rollback: revert the Worker and it is still there, still correct.
 
-### §3's evidence layer needs two integrations that do not exist
+---
 
-§15 asks which new reads §3 requires. Scoped:
+## Still open
 
-| Evidence | Source | State |
-|---|---|---|
-| Research report, user stories, design spec | Linear comments | **Have it.** `LINEAR_API_KEY` already reads the API; comments are one more query |
-| BCC files written or updated | GitHub | **New.** No credential, no client |
-| Sections named `[ISSUE-KEY] …`, variation counts, user flows | Figma | **New.** No credential, no client |
+**§3's evidence layer needs two integrations that do not exist.** Linear
+comments the Hub already has. GitHub file reads and Figma structure reads are
+new clients with no credentials. `GET /api/diagnostics` already reports both as
+`unknown` rather than absent, which is §14.1's rule for them — so a missing
+Figma token can never read as "the design stage did not run".
 
-`GET /api/diagnostics` already reports both as `unknown` rather than absent,
-which is §14.1's rule for them: *"Reporting absence when you cannot look is
-worse than reporting nothing."* So the honest half of §3 is in place before §3
-is — a missing Figma token can never read as "the design stage did not run".
+**§4's states are expressible now and not yet written.** `blocked` is in the
+`sessions.status` CHECK and nothing writes it; `last_error` and `last_error_at`
+are columns nothing fills. The grain that made them possible is in place, which
+is what was blocking them.

@@ -25,8 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 import { diagnose, accessState, HEARTBEAT_STALE_MIN } from '../lib/diagnostics.mjs';
 import { deriveBrand, deriveTrack, TEAM_BRAND, TEAM_TRACK } from '../lib/derive.mjs';
-import {
-  freshDb, env, call, agentPost, readLinear, issue, stubLinear, d1, one,
+import {  freshDb, env, call, agentPost, readLinear, issue, stubLinear, d1, one, wire, session, sessionsOf,
 } from './helpers.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -135,8 +134,8 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     await readLinear(env(db));
 
     db.prepare(
-      `UPDATE agent_sessions SET title = ?, labels = ?, linear_state = ?, team = ?
-        WHERE linear_id = 'RYV-84'`
+      `UPDATE cards SET title = ?, labels = ?, linear_state = ?, team = ?
+        WHERE issue_key = 'RYV-84'`
     ).run(stale.title, stale.labels, stale.linear_state, stale.team);
 
     stubLinear([issue({
@@ -158,14 +157,20 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     stubLinear([issue({ identifier: 'RYV-84' })]);
     await readLinear(env(db));
 
+    // The card's own overrides…
     db.prepare(
-      `UPDATE agent_sessions
+      `UPDATE cards
           SET figma_url = 'https://figma.com/file/abc',
               set_aside_at = '2026-09-01 10:00:00',
-              requested_stage = 'design',
-              requested_at = '2026-09-01 10:00:00',
-              project = 'conduit'
-        WHERE linear_id = 'RYV-84'`
+              brand = 'conduit'
+        WHERE issue_key = 'RYV-84'`
+    ).run();
+    // …and a run queued on the session, which is a different table now. The
+    // reader must leave both alone, and the two halves are written by
+    // different code, so both are worth asserting.
+    db.prepare(
+      `INSERT INTO sessions (issue_key, stage, requested_at)
+       VALUES ('RYV-84', 'design', '2026-09-01 10:00:00')`
     ).run();
 
     stubLinear([issue({ identifier: 'RYV-84', team: 'Ryve App' })]);
@@ -174,8 +179,8 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     const row = one(db, 'RYV-84');
     assert.equal(row.figma_url, 'https://figma.com/file/abc', 'a read cleared the Figma override');
     assert.equal(row.set_aside_at, '2026-09-01 10:00:00', 'a read un-set-aside a card');
-    assert.equal(row.requested_stage, 'design', 'a read cleared a queued run');
-    assert.equal(row.project, 'conduit', 'a read undid a manual brand reassignment');
+    assert.equal(row.brand, 'conduit', 'a read undid a manual brand reassignment');
+    assert.equal(wire(db, 'RYV-84').requested_stage, 'design', 'a read cleared a queued run');
   });
 
   // The one CLAUDE.md calls out by name, and the one the first pass of this
@@ -342,8 +347,93 @@ describe('§6 — every write to Linear is idempotent', () => {
       { linear_id: 'RYV-84', stage: 'research' });
 
     assert.equal(res.status, 502);
-    assert.equal(one(db, 'RYV-84').requested_stage, 'research',
+    assert.equal(wire(db, 'RYV-84').requested_stage, 'research',
       'a stage whose label could not be written vanished from the queue');
+  });
+});
+
+describe('§6 — issue status moves only when a human presses Complete', () => {
+  // §15 asked whether the Manager advances Linear status. It does, through one
+  // route, and §6 says it never should. The document moves rather than the
+  // code: the rule is there to stop the Manager *inventing* a fact it does not
+  // own — deciding by itself that work is finished — and a human pressing
+  // Complete is not that. It is the press being carried to Linear.
+  //
+  // What keeps that defensible is that it is the only path that can do it.
+  // These are what say so, and they are the reason the exception is safe
+  // rather than the paragraph explaining it.
+  const statusWrites = (queries) =>
+    queries.filter((q) => /issueUpdate/.test(q));
+
+  async function withRecorder(fn) {
+    const db = freshDb();
+    const queries = [];
+    stubLinear([issue({ identifier: 'RYV-84' })], null, { queries });
+    const e = env(db);
+    await readLinear(e);
+    queries.length = 0;          // discovery itself is not what is under test
+    await fn(db, e, queries);
+    return queries;
+  }
+
+  test('a cron read never writes issue status', async () => {
+    const queries = await withRecorder(async (db, e) => {
+      await readLinear(e);
+      await readLinear(e);
+    });
+    assert.deepEqual(statusWrites(queries), [],
+      'the reader moved an issue in Linear — §6 forbids it and §1 says Linear owns it');
+  });
+
+  test('an agent post never writes issue status', async () => {
+    const queries = await withRecorder(async (db, e) => {
+      await agentPost(e, {
+        session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'done',
+      });
+    });
+    assert.deepEqual(statusWrites(queries), [],
+      'an agent reporting done moved the issue in Linear');
+  });
+
+  test('reporting a finished stage never writes issue status', async () => {
+    // The nearest miss of all: the stage is done, so it is tempting. It
+    // applies a label, which §1 says the agent owns, and stops there.
+    const queries = await withRecorder(async (db, e) => {
+      await call(e, 'POST', '/api/agent/stage-done',
+                 { linear_id: 'RYV-84', stage: 'design' }, { 'X-Agent-Secret': 's' });
+    });
+    assert.deepEqual(statusWrites(queries), [],
+      'finishing the design stage moved the issue to Done by itself');
+  });
+
+  test('dismissing and setting aside never write issue status', async () => {
+    const queries = await withRecorder(async (db, e) => {
+      await call(e, 'POST', '/api/agent/session/RYV-84/dismiss');
+      await call(e, 'POST', '/api/agent/session/RYV-84/setaside');
+    });
+    assert.deepEqual(statusWrites(queries), [],
+      'filing a card away closed the issue');
+  });
+
+  test('pressing Complete does write it, which is the whole exception', async () => {
+    const queries = await withRecorder(async (db, e) => {
+      const res = await call(e, 'POST', '/api/agent/session/RYV-84/complete');
+      assert.equal(res.status, 200);
+    });
+    assert.equal(statusWrites(queries).length, 1,
+      'the one route that is supposed to write status stopped doing it');
+  });
+
+  test('and it refuses a card with no Linear issue behind it', async () => {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await agentPost(e, {
+      session_id: 'zztest/probe/design', system: 'design-ai', status: 'active',
+    });
+    const res = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('zztest/probe/design') + '/complete');
+    assert.equal(res.status, 400);
   });
 });
 
@@ -369,7 +459,7 @@ describe('§8 — a response naming no option is never a decision', () => {
   }
 
   const undecided = (db) => {
-    const row = one(db, 'RYV-84');
+    const row = session(db, 'RYV-84');
     assert.equal(row.responded_at, null, 'the gate recorded an answer it should have refused');
     assert.equal(row.response_option_id, null, 'an option id was stored that was never offered');
     assert.equal(row.status, 'waiting', 'the card stopped waiting on a decision nobody made');
@@ -426,7 +516,7 @@ describe('§8 — a response naming no option is never a decision', () => {
       { response_option_id: 'd2', response_note: 'keep the balance visible' });
 
     assert.equal(res.status, 200);
-    const row = one(db, 'RYV-84');
+    const row = session(db, 'RYV-84');
     assert.equal(row.response_option_id, 'd2');
     assert.equal(row.response, 'Split header',
       'the stored answer was typed rather than copied off the chosen option');
@@ -439,7 +529,7 @@ describe('§8 — a response naming no option is never a decision', () => {
       { response_section: 'Wallet v4 — Dave' });
 
     assert.equal(res.status, 200);
-    const row = one(db, 'RYV-84');
+    const row = session(db, 'RYV-84');
     assert.equal(row.response_option_id, null,
       'a section name was stored in the column that only ever holds offered ids');
     assert.equal(row.response_note, 'Wallet v4 — Dave');
@@ -800,8 +890,8 @@ describe('§14.3 — discovery is bounded to open work assigned to the owner', (
     ]);
     await readLinear(env(db));
 
-    const keys = db.prepare(`SELECT linear_id FROM agent_sessions ORDER BY linear_id`)
-      .all().map((r) => r.linear_id);
+    const keys = db.prepare(`SELECT issue_key FROM cards ORDER BY issue_key`)
+      .all().map((r) => r.issue_key);
     assert.deepEqual(keys, ['RYV-84'], "another person's issue reached the board");
   });
 

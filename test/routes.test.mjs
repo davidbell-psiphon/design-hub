@@ -14,8 +14,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, applyPieces,
+import {  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, applyPieces, wire, session, sessionsOf,
 } from './helpers.mjs';
 
 const CARD = 'RYV-84';
@@ -71,7 +70,7 @@ describe('DELETE /api/agent/session/:id', () => {
     await call(e, 'DELETE', '/api/agent/session/' + encodeURIComponent(CARD));
     const left = rows(db);
     assert.equal(left.length, 1);
-    assert.equal(left[0].id, 'RYV-85');
+    assert.equal(left[0].issue_key, 'RYV-85');
   });
 
   // KNOWN GAP, asserted so it cannot change unnoticed.

@@ -58,7 +58,39 @@ npx wrangler d1 execute design-hub --remote --file=./piece8-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece9-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece10-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./migration-003-identity.sql
+npx wrangler d1 execute design-hub --remote --file=./piece11-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./migration-004-grain.sql
 ```
+
+### piece11 and migration-004: the card/session split
+
+`piece11-schema.sql` creates `cards` and `sessions`; `migration-004-grain.sql`
+copies `agent_sessions` into them. **Run both, then deploy, in one sitting.**
+
+The currently deployed Worker reads `agent_sessions` and is unaffected by either
+file, so there is no moment where the board is broken. The window that matters
+is the other one: anything the old Worker writes *between* the copy and the
+deploy lands in the old table and is not carried across. It should be a minute.
+If the cron fires inside it, press Read Linear afterwards — Linear owns almost
+everything in `cards`, and the read puts it back.
+
+Check it landed before deploying. The three numbers must match:
+
+```bash
+npx wrangler d1 execute design-hub --remote --command \
+  "SELECT (SELECT COUNT(*) FROM agent_sessions WHERE linear_id IS NOT NULL) AS was,
+          (SELECT COUNT(*) FROM cards) AS cards,
+          (SELECT COUNT(*) FROM sessions) AS sessions"
+```
+
+And after deploying, the board should look exactly as it did — that is the
+test. Nothing in `frontend/` changed, because `lib/card.mjs` serves the same
+shape it always did.
+
+**Nothing is dropped.** `agent_sessions` is frozen at the moment of the copy and
+is the rollback: revert the Worker and it is still there, still correct. Same
+for `projects` after piece10. Dropping any of them is §13 step 4, which is a
+separate decision on a separate day.
 
 ### migration-003 runs BEFORE the Worker deploy
 

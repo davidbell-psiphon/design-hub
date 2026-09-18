@@ -1,7 +1,13 @@
 import { deriveBrand, deriveTrack, TEAM_TRACK } from '../lib/derive.mjs';
 import { accessIdentity } from '../lib/access.mjs';
-import { linearKeyFromSessionId } from '../lib/session-id.mjs';
+import { linearKeyFromSessionId, stageFromSessionId } from '../lib/session-id.mjs';
 import { diagnose } from '../lib/diagnostics.mjs';
+// The gate lives in lib/gate.mjs so the Worker and lib/card.mjs read one
+// decision the same way. `withGate` is not imported here on purpose: reading a
+// row into the board's shape is the projection's job, and a second reading in
+// this file is the §5 drift the split exists to end.
+import { parseOptions, normaliseOptions, sameOptions } from '../lib/gate.mjs';
+import { toWire, activeSession } from '../lib/card.mjs';
 
 // Allowed origins - your Pages deployments
 const ALLOWED_ORIGINS = [
@@ -33,117 +39,9 @@ function json(data, status = 200, extra = {}) {
 function err(msg, status = 400) { return json({ error: msg }, status); }
 
 // ─── GATES ─────────────────────────────────────────
-// A gate is a question with a fixed set of answers. Free text still exists —
-// it rides alongside the choice as a note, never instead of it.
-//
-// What this closes: a three-option question was answered "Yes". "Yes" names
-// none of the three, the client still reported a decision, and an agent
-// following its own documentation then picked a direction itself — the one
-// thing the gate model exists to prevent. Prose answered against prose will
-// keep producing that, so the answer is constrained to what was offered.
-//
-// Sessions posted without options are untouched by all of it: no options, no
-// constraint, free text exactly as before. There is no backfill.
-
-// Option ids are opaque tokens, not prose. They are compared for equality and
-// nothing else, and they end up inside the board's onclick attributes — so
-// holding them to this alphabet means an id can never carry a quote or markup.
-const OPTION_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
-
-// The options stored on a row, as an array. Tolerant of null, of an array
-// already parsed, and of malformed JSON, for the same reason labelsOf is on
-// the board: one bad row must not take a whole read down with it.
-function parseOptions(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-
-// Options as posted. Returns the normalised array, or a string saying what is
-// wrong with them — the agent gets told at post time, rather than the Hub
-// storing a gate that nobody can answer.
-function normaliseOptions(raw) {
-  if (!Array.isArray(raw) || !raw.length) {
-    return 'options must be a non-empty array of { id, label }';
-  }
-  const seen = new Set();
-  const out = [];
-  for (const o of raw) {
-    if (!o || typeof o !== 'object') return 'each option must be an object with id and label';
-    const id = String(o.id === undefined || o.id === null ? '' : o.id).trim();
-    const label = String(o.label === undefined || o.label === null ? '' : o.label).trim();
-    if (!OPTION_ID.test(id)) {
-      return 'option id ' + JSON.stringify(o.id === undefined ? null : o.id) +
-             ' is not usable — letters, digits and . _ : - only';
-    }
-    if (!label) return "option '" + id + "' needs a label";
-    if (seen.has(id)) return "duplicate option id '" + id + "'";
-    seen.add(id);
-    out.push({ id, label, summary: o.summary ? String(o.summary) : null });
-  }
-  return out;
-}
-
-// Whether two option sets are the same question. Re-posting a gate unchanged
-// is the agent repeating its state and must change nothing; posting a
-// different set is a new question, and a new question cannot keep the old
-// answer.
-function sameOptions(a, b) {
-  const norm = (list) => JSON.stringify(list.map(o => [
-    String(o && o.id), String(o && o.label), o && o.summary ? String(o.summary) : '',
-  ]));
-  return norm(a) === norm(b);
-}
-
-// What an option id resolves to, in words. Null when nothing was chosen, or
-// when the id names nothing in the set currently stored.
-function labelFor(options, optionId) {
-  if (!optionId) return null;
-  const hit = options.find(o => o && o.id === optionId);
-  return hit && hit.label ? hit.label : null;
-}
-
-// What kind of decision a row is carrying, and what it amounts to in words.
-//
-//   'option' — one of the ids the agent offered
-//   'own'    — a design the human already drew, named by its Figma section
-//   'free'   — a gate with no options at all, answered in prose
-//   null     — nothing decided yet
-//
-// The discriminator is derived rather than stored, so no reserved id has to
-// live in the data and `response_option_id` never holds anything that was not
-// on the list. An own-design answer is a decision with no option id, which is
-// exactly what distinguishes it from an open gate.
-function decisionOf(row, options) {
-  if (!row.responded_at) return { kind: null, label: null };
-  if (row.response_option_id) {
-    return { kind: 'option', label: labelFor(options, row.response_option_id) };
-  }
-  if (options.length) {
-    return row.response_note ? { kind: 'own', label: row.response_note }
-                             : { kind: null, label: null };
-  }
-  return { kind: 'free', label: row.response || null };
-}
-
-// A row as anything reading it should see it: options as an array rather than
-// a JSON blob, and the decision resolved into words alongside the id. A run log
-// that says "d2" says nothing about what was decided, and no consumer should
-// have to look that up itself.
-function withGate(row) {
-  if (!row) return row;
-  const options = parseOptions(row.options);
-  const decision = decisionOf(row, options);
-  return {
-    ...row,
-    options: options.length ? options : null,
-    response_kind: decision.kind,
-    response_label: decision.label,
-  };
-}
+// Moved to lib/gate.mjs, imported above. It is read by the projection in
+// lib/card.mjs as well as by the routes here, and two readings of one
+// decision is the §5 drift this whole document is about.
 
 // Close the round a session is on: the decision goes to gate_decisions, the
 // round number moves on, and the session's own answer fields clear. Two paths
@@ -151,7 +49,7 @@ function withGate(row) {
 // options — because they are the same event. The question changed, and the
 // previous answer must neither survive onto the new one nor disappear.
 // Returns the new round number. The caller owns `status`.
-async function closeRound(env, id, row, note) {
+async function closeRound(env, key, stage, row, note) {
   const round = row.gate_round || 1;
   const decided = row.response_option_id || row.response || row.response_note;
   if (decided || note) {
@@ -161,19 +59,25 @@ async function closeRound(env, id, row, note) {
     // is the only place it survives.
     const trail = [row.response_note, note ? 'Reopened: ' + note : null]
       .filter(Boolean).join('\n\n') || null;
+    // `session_id` holds the issue key and `stage` says which session on it.
+    // History is per (issue, stage) because a gate is (§2), and a design
+    // round archived against the issue alone would sit in research's history
+    // as soon as there were two.
     await env.DB.prepare(
       `INSERT INTO gate_decisions
-         (session_id, gate_round, options_snapshot, response_option_id, response_note)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(id, round, row.options || null, row.response_option_id || null, trail).run();
+         (session_id, stage, gate_round, options_snapshot, response_option_id,
+          response_note)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(key, stage, round, row.options || null,
+           row.response_option_id || null, trail).run();
   }
   await env.DB.prepare(
-    `UPDATE agent_sessions
+    `UPDATE sessions
         SET gate_round = COALESCE(gate_round, 1) + 1,
             response = NULL, response_option_id = NULL, response_note = NULL,
             responded_at = NULL, updated_at = datetime('now')
-      WHERE id = ?`
-  ).bind(id).run();
+      WHERE issue_key = ? AND stage = ?`
+  ).bind(key, stage).run();
   return round + 1;
 }
 
@@ -224,78 +128,127 @@ export default {
 };
 
 // ─── ONE CARD PER LINEAR ISSUE (§2) ────────────────
-// Two writers share agent_sessions and used to disagree about the primary key.
+// Two writers share this database and used to disagree about the primary key.
 // The reader keyed rows `linear/RYV-84`; the agent posts `ryve/ryv-84/research`.
-// Neither collided with the other on ON CONFLICT(id), so one Linear issue grew
-// two rows and triggering research added a sibling instead of moving the card.
+// Neither collided with the other, so one Linear issue grew two rows and
+// triggering research added a sibling instead of moving the card.
 //
-// piece6 merged the duplicates and remembered the agent's id in an
-// `agent_session_id` column, so the two conventions could be reconciled after
-// the fact. §2 is explicit that the bridge is the bug rather than the fix: "A
+// piece6 merged the duplicates and remembered the agent's id in a bridging
+// column. §2 is explicit that the bridge is the bug rather than the fix: "A
 // bridge implies two identities, and two identities is how one issue becomes
 // two cards."
 //
-// So there is one identity now — the Linear issue key, in `linear_id`, with a
-// unique index on it (migration-003). A second row for one issue is not
-// reconciled away, it cannot be written. The lookups below are what is left
-// once that is true, and the alias column is read by none of them.
+// So `cards.issue_key` IS the primary key. There is nothing to reconcile and
+// nothing to look up in: a second card for one issue cannot be written. What
+// used to be three cooperating lookups and an alias column is now one parse
+// and one primary-key read.
 //
-// The agent's contract is still untouched. It posts whatever id it likes and
-// the key is parsed back out of it on the way in, which is a different thing
-// from storing a second one.
+// The agent's contract is untouched. It posts whatever id it likes and the key
+// is read back out of it here — parsing an id is a different thing from
+// storing a second one.
 
-// The row an id names outright. Its own primary key and nothing else — an
-// alias is not an identity.
-async function rowById(env, id) {
-  if (!id) return null;
+// Which row an id names. The Linear issue key parsed out of it, or — for a
+// session with no Linear issue behind it — the id exactly as given, which is
+// the key such a row was stored under in the first place.
+//
+// Null when nothing matches, so a route's own "not found" check is what
+// answers rather than a different error here.
+async function resolveKey(env, idOrSegment) {
+  const asked = decodeURIComponent(String(idOrSegment || ''));
+  if (!asked) return null;
+  const key = linearKeyFromSessionId(asked) || asked;
   const row = await env.DB.prepare(
-    `SELECT id FROM agent_sessions WHERE id = ? LIMIT 1`
-  ).bind(id).first();
-  return row ? row.id : null;
+    `SELECT issue_key FROM cards WHERE issue_key = ?`
+  ).bind(key).first();
+  return row ? row.issue_key : null;
 }
 
-// The row that owns a Linear issue key.
+// The key a body or a path is *about*, whether or not a row exists yet. Used
+// by the writes, which have to be able to create the row they are naming.
+function keyFor(idOrSegment) {
+  const asked = decodeURIComponent(String(idOrSegment || ''));
+  return linearKeyFromSessionId(asked) || asked || null;
+}
+
+// The stage a session id names, defaulting to the Hub's first stage.
 //
-// `linear_id` is the identity and is unique, so the first clause is the
-// answer. The second is for one legacy shape: a row the agent created before
-// the reader ever saw the issue, from a time when the insert did not fill
-// `linear_id` in. It reads the key out of the row's own id rather than out of
-// a second column — the same parse this file does on the way in, so there is
-// still only one identity, and the next reader pass fills `linear_id` in and
-// retires the row from this clause for good.
-async function rowIdForLinearKey(env, key) {
+// The Hub does not police this: `stage` is unconstrained in the schema on
+// purpose (CLAUDE.md — the Hub stays generic and does not own another agent
+// system's vocabulary). The trigger route is where 'research' and 'design' are
+// required, because that is the Hub deciding what it will queue.
+function stageFor(sessionId, explicit) {
+  const given = explicit === undefined || explicit === null ? '' : String(explicit).trim();
+  if (given) return given;
+  return stageFromSessionId(sessionId) || STAGES[0];
+}
+
+// A card and every session on it, as the board reads it (lib/card.mjs).
+// Computed per request and never stored — a stored flattening would be a third
+// copy of two facts, which is how §11's bugs started.
+async function cardWire(env, key) {
+  const card = await env.DB.prepare(
+    `SELECT * FROM cards WHERE issue_key = ?`
+  ).bind(key).first();
+  if (!card) return null;
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM sessions WHERE issue_key = ? ORDER BY stage`
+  ).bind(key).all();
+  return toWire(card, results || []);
+}
+
+// Make sure a card row exists for a key, without disturbing one that does.
+// The agent can post about an issue the reader has not discovered yet, and
+// that must not be an error — the next reader pass fills in everything Linear
+// owns.
+async function ensureCard(env, key) {
+  await env.DB.prepare(
+    `INSERT INTO cards (issue_key) VALUES (?) ON CONFLICT(issue_key) DO NOTHING`
+  ).bind(key).run();
+  return key;
+}
+
+// One session row, created on first write. §3's "Not started" is the absence
+// of one of these, so nothing creates them speculatively.
+async function ensureSession(env, key, stage) {
+  await env.DB.prepare(
+    `INSERT INTO sessions (issue_key, stage) VALUES (?, ?)
+     ON CONFLICT(issue_key, stage) DO NOTHING`
+  ).bind(key, stage).run();
+}
+
+// Every session on a card, oldest stage first.
+async function sessionsFor(env, key) {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM sessions WHERE issue_key = ? ORDER BY stage`
+  ).bind(key).all();
+  return results || [];
+}
+
+// Which session a request is about: `{ key, stage, session }`, or null.
+//
+// A card can hold one session per stage now, and two kinds of caller address
+// them differently. The agent names the stage in its session id —
+// `ryve/ryv-84/design` — and means that one. The board sends the card's id and
+// means *the gate it is currently showing you*, because that is the only gate
+// it drew.
+//
+// So an explicit stage wins, and otherwise this picks the same session
+// `lib/card.mjs` flattened onto the card. Deliberately the same function: the
+// board answering a different gate from the one it rendered is §5's drift with
+// the stakes of §8.
+async function resolveSession(env, segment) {
+  const asked = decodeURIComponent(String(segment || ''));
+  const key = await resolveKey(env, asked);
   if (!key) return null;
-  const row = await env.DB.prepare(
-    `SELECT id FROM agent_sessions
-      WHERE linear_id = ?
-         OR (linear_id IS NULL
-             AND '/' || lower(id) || '/' LIKE '%/' || lower(?) || '/%')
-      ORDER BY CASE WHEN linear_id = ? THEN 0 ELSE 1 END, updated_at DESC
-      LIMIT 1`
-  ).bind(key, key, key).first();
-  return row ? row.id : null;
-}
 
-// The row an id refers to, however it is written. Its own id first, then the
-// Linear issue the id names — which is how `ryve/ryv-84/design` reaches the
-// card for RYV-84 whether the row is still called `linear/RYV-84`, has been
-// renamed to `RYV-84` by migration-003, or was created by the agent under its
-// own session id. Null when nothing matches.
-//
-// Because the key is parsed rather than looked up in a bridge, this reads a
-// migrated database and an unmigrated one identically. Deploying this Worker
-// before running migration-003, or after, makes no difference to what resolves.
-async function canonicalId(env, id) {
-  return (await rowById(env, id)) ||
-         (await rowIdForLinearKey(env, linearKeyFromSessionId(id)));
-}
-
-// A path segment as a row id: decoded, then resolved. Falls back to the id as
-// asked for, so a miss still reaches the route's own "not found" check rather
-// than turning into a different error here.
-async function resolveId(env, segment) {
-  const asked = decodeURIComponent(segment || '');
-  return (await canonicalId(env, asked)) || asked;
+  const all = await sessionsFor(env, key);
+  const named = stageFromSessionId(asked);
+  if (named) {
+    const hit = all.find((s) => s.stage === named);
+    return { key, stage: named, session: hit || null };
+  }
+  const active = activeSession(all);
+  return { key, stage: active ? active.stage : null, session: active };
 }
 
 // ─── WHERE ISSUES ARE READ FROM ────────────────────
@@ -334,7 +287,7 @@ async function availableTeams(env) {
   } catch (e) { /* fall through to what we have seen */ }
 
   const { results } = await env.DB.prepare(
-    `SELECT DISTINCT team AS name FROM agent_sessions WHERE team IS NOT NULL ORDER BY team`
+    `SELECT DISTINCT team AS name FROM cards WHERE team IS NOT NULL ORDER BY team`
   ).all();
   return { teams: (results || []).map((r) => r.name).filter(Boolean), from: 'seen' };
 }
@@ -342,7 +295,8 @@ async function availableTeams(env) {
 // ─── LINEAR READER ─────────────────────────────────
 // Pulls every issue assigned to Dave Bell, across all teams, in any open
 // state. No label filter — gathering is not triggering.
-// Writes one agent_sessions row per new issue with status = 'waiting'.
+// Writes one `cards` row per issue. No session is created — §3's
+// "Not started" is the absence of one, and discovery is not a stage running.
 // Idempotent: skips issues whose linear_id already has a row.
 //
 async function readLinear(env) {
@@ -435,92 +389,88 @@ async function readLinear(env) {
     // reconciliation pass is what later writes 'completed' or 'canceled'.
     const linearState = issue.state && issue.state.type;
     // The Linear project's name, for the sidebar's fallback grouping and for
-    // the card to show where its brand section is not self-evident. Note the
-    // prefix: the column called `project` holds the *brand* id, because brands
-    // are rows in the `projects` table and predate the reader by a layer.
+    // the card to show where its brand section is not self-evident. It is the
+    // Linear project, which is a different thing from the brand — the two used
+    // to be `linear_project` and `project`, where `project` meant the brand and
+    // needed a comment to say so every time. The brand column is called `brand`
+    // now (piece11).
     const linearProject = (issue.project && issue.project.name) || null;
     // An issue can arrive already labelled no-design, dismissed in Linear
     // before the Hub ever saw it.
     const dismissedAt = hasNoDesign(issue) ? nowStamp() : null;
+
+    // Whether this is a card the Hub already has, for the counters. The key is
+    // the primary key (§2), so this is a primary-key read and nothing more —
+    // no reconciliation, no alias, no second convention to check.
+    const existing = await env.DB.prepare(
+      `SELECT issue_key FROM cards WHERE issue_key = ?`
+    ).bind(issue.identifier).first();
 
     // Upsert rather than skip. Rows written before the Piece 4 columns existed
     // have no linear_uuid, and without it the trigger button has nothing to
     // apply a label to. Refreshing on every read also keeps linear_state
     // current, which is what sorts a card into Queued vs Backlog.
     //
-    // Only Linear-owned facts get overwritten. Anything the human or the agent
-    // owns — status, phase, prompt, response, triggered_at, figma_url — is left
-    // alone, and a manual brand/track reassignment survives because those two
-    // are only filled in when still null.
+    // ── The §5 pair, and it is the whole shape of this statement ──
     //
-    // The row id is whatever row already owns this issue — including one the
-    // agent created first under its own session id — and falls back to the
-    // issue key itself for an issue nothing has seen yet. Without the lookup,
-    // an agent-first row and a reader row are two cards for one issue.
+    // Every Linear-owned column is REPLACED. Not COALESCEd: a cache that
+    // merges can disagree with its source for ever, and at that point it is
+    // not a cache, it is a second home for a fact Linear owns.
     //
-    // The fallback used to be `linear/<KEY>`, which was a second naming
-    // convention and half of what §2 exists to remove. A new card is called
-    // what it is.
-    const existingId = await rowIdForLinearKey(env, issue.identifier);
-
+    // Every Hub-owned column is absent from the DO UPDATE entirely. Not
+    // "preserved carefully" — simply not mentioned, so there is no version of
+    // this statement that touches your brand correction, your Figma override
+    // or your dismissal. The columns are in different halves of the table now
+    // (piece11) and the two halves are written by different code.
+    //
+    // `description` holds the Linear description and only ever that. It used
+    // to share a column with the agent's own context and needed a guard to
+    // stop a Wednesday read wiping it; the agent's context lives on the
+    // session now, so the guard is gone and cannot be got wrong.
+    //
+    // No session is created here. §3's "Not started" is the absence of one,
+    // and the reader discovering an issue is not a stage having run.
     await env.DB.prepare(
-      `INSERT INTO agent_sessions
-         (id, system, project, track, phase, status, prompt, detail, url,
-          linear_id, team, linear_uuid, linear_state, title, dismissed_at, labels,
-          linear_project)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         project      = COALESCE(agent_sessions.project, excluded.project),
-         track        = COALESCE(agent_sessions.track, excluded.track),
-         -- The Linear description, unless the agent has posted to this row:
-         -- once it has, detail carries the context behind its decision
-         -- prompt, and a Wednesday read must not wipe that.
-         -- agent_posted_at replaces a test on the alias column, which was
-         -- never a fact about the row - only a side effect of the bridge
-         -- that section 2 removes. Same meaning, said outright: an agent
-         -- has written to this row.
-         detail       = CASE WHEN agent_sessions.agent_posted_at IS NULL
-                             THEN excluded.detail ELSE agent_sessions.detail END,
-         url          = excluded.url,
-         team         = excluded.team,
-         -- An agent-first row arrives with no linear_id; this is what links it
-         -- to its issue, so the next read finds it instead of inserting again.
-         linear_id    = excluded.linear_id,
-         linear_uuid  = excluded.linear_uuid,
-         linear_state = excluded.linear_state,
-         title        = excluded.title,
+      `INSERT INTO cards
+         (issue_key, linear_uuid, title, description, url, team, linear_state,
+          labels, linear_project, linear_read_at, brand, track, dismissed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
+       ON CONFLICT(issue_key) DO UPDATE SET
+         -- Linear owns these outright. Replaced, every read.
+         linear_uuid    = excluded.linear_uuid,
+         title          = excluded.title,
+         description    = excluded.description,
+         url            = excluded.url,
+         team           = excluded.team,
+         linear_state   = excluded.linear_state,
+         labels         = excluded.labels,
+         linear_project = excluded.linear_project,
+         linear_read_at = excluded.linear_read_at,
+         -- Derived from the team, and only filled in while still empty, so a
+         -- manual reassignment survives. These two are the Hub's, not Linear's.
+         brand          = COALESCE(cards.brand, excluded.brand),
+         track          = COALESCE(cards.track, excluded.track),
          -- COALESCE, so a read can only ever ADD a dismissal, never clear one.
          -- A dismissed card cannot be resurrected onto the board by the cron
          -- if the label mutation has not propagated yet. Un-dismissing is the
          -- Hub's Undo control, which removes the label first.
-         dismissed_at = COALESCE(agent_sessions.dismissed_at, excluded.dismissed_at),
-         -- Linear owns the label set outright. stage-done writes here too, so
-         -- a card moves the moment a stage finishes; this read reconciles it
-         -- with whatever Linear actually has.
-         labels       = excluded.labels,
-         -- Linear-owned like the rest of these, so it refreshes every pass.
-         linear_project = excluded.linear_project,
-         updated_at   = datetime('now')`
+         dismissed_at   = COALESCE(cards.dismissed_at, excluded.dismissed_at),
+         updated_at     = datetime('now')`
     ).bind(
-      existingId || issue.identifier,
-      'design-ai',
-      brand,
-      track,
-      'research',
-      'waiting',
-      'Run design research on ' + issue.identifier + '?',
+      issue.identifier,
+      issue.id,
+      issue.title,
       detail,
       issue.url,
-      issue.identifier,
       teamName,
-      issue.id,
       linearState || null,
-      issue.title,
-      dismissedAt,
       labelNames,
-      linearProject
+      linearProject,
+      brand,
+      track,
+      dismissedAt
     ).run();
-    if (existingId) { updated++; } else { inserted++; }
+    if (existing) { updated++; } else { inserted++; }
   }
 
   const reconciled = await reconcileTracked(env);
@@ -539,12 +489,12 @@ async function readLinear(env) {
 // picks up labels applied directly in Linear.
 async function reconcileTracked(env) {
   const { results } = await env.DB.prepare(
-    `SELECT id, linear_uuid FROM agent_sessions WHERE linear_uuid IS NOT NULL`
+    `SELECT issue_key, linear_uuid FROM cards WHERE linear_uuid IS NOT NULL`
   ).all();
   const rows = results || [];
   if (!rows.length) return 0;
 
-  const byUuid = new Map(rows.map(r => [r.linear_uuid, r.id]));
+  const byUuid = new Map(rows.map(r => [r.linear_uuid, r.issue_key]));
   const q = `query Reconcile($ids: [ID!]) {
     issues(first: 250, filter: { id: { in: $ids } }) {
       nodes { id state { type } labels { nodes { name } } }
@@ -561,11 +511,12 @@ async function reconcileTracked(env) {
     const state = issue.state && issue.state.type;
     const dismissedAt = hasNoDesign(issue) ? nowStamp() : null;
     await env.DB.prepare(
-      `UPDATE agent_sessions
+      `UPDATE cards
        SET linear_state = COALESCE(?, linear_state),
            dismissed_at = COALESCE(dismissed_at, ?),
+           linear_read_at = datetime('now'),
            updated_at = datetime('now')
-       WHERE id = ?`
+       WHERE issue_key = ?`
     ).bind(state || null, dismissedAt, id).run();
     changed++;
   }
@@ -801,7 +752,14 @@ async function route(request, env) {
     // ─── AGENT SESSION API ─────────────────────────────
     // Generic across systems. The Hub never interprets prompt content.
 
-    // POST /api/agent/session — agent writes or updates its state (upsert by id)
+    // POST /api/agent/session — the agent publishes what it is doing.
+    //
+    // One session, identified by (issue_key, stage) — §2. Both are read out of
+    // the session id the agent posts, so its contract is unchanged: it still
+    // sends `ryve/ryv-84/design` and that still means "the design stage of
+    // RYV-84". The brand segment is read for nothing but a default, because
+    // brand is a Linear fact derived from the team and the Hub does not take
+    // the agent's word for it.
     if (method === 'POST' && path === '/api/agent/session') {
       const secret = request.headers.get('X-Agent-Secret');
       if (!env.AGENT_SECRET || secret !== env.AGENT_SECRET) return err('Forbidden', 403);
@@ -810,13 +768,17 @@ async function route(request, env) {
       if (!b.session_id || !b.system) return err('session_id and system required');
       const status = b.status || 'active';
       if (!['active','waiting','done','error'].includes(status)) return err('invalid status');
+
       // Accepts both the original field names (project/phase/url) and the
       // integration-surface names (brand/stage/figma_url) — same columns.
-      const project = b.project || b.brand || null;
+      const brand = b.project || b.brand || null;
       const track = b.track || null;
-      const phase = b.phase || b.stage || null;
       const url = b.url || null;
       const title = b.title || null;
+
+      const key = String(b.linear_id || '').toUpperCase() || keyFor(b.session_id);
+      if (!key) return err('session_id names nothing to file this under');
+      const stage = stageFor(b.session_id, b.phase || b.stage);
 
       // The gate's options, when this post carries them. A post without
       // `options` leaves whatever is stored alone: the agent posts its gate
@@ -829,116 +791,94 @@ async function route(request, env) {
         options = JSON.stringify(parsed);
       }
 
-      // Which row this post belongs to. The Linear issue its session id names
-      // first, because that is the identity (§2) — which is how
-      // `ryve/ryv-84/research` lands on the card for RYV-84 instead of beside
-      // it. Then the id as given, for a session with no Linear issue behind
-      // it, which is the only case left where a row is named by anything else.
-      //
-      // The two cannot now disagree, and that is the point rather than the
-      // order: a row carrying a Linear issue is named by it, so looking up the
-      // key and looking up the id find the same row or nothing. Swapping these
-      // two lines changes no behaviour and no test, which is exactly what was
-      // not true while a second naming scheme was load-bearing.
-      //
-      // `linear_id` in the body is honoured if sent, but nothing has to send
-      // it — the key is derivable from the session id the agent already posts.
-      const key = String(b.linear_id || linearKeyFromSessionId(b.session_id) || '')
-        .toUpperCase() || null;
-      const target = (key ? await rowIdForLinearKey(env, key) : null) ||
-                     (await rowById(env, b.session_id));
+      // The card first. An agent may post about an issue the reader has not
+      // discovered yet, and that must not be an error — everything Linear owns
+      // is filled in by the next read.
+      await ensureCard(env, key);
+      await ensureSession(env, key, stage);
 
-      if (target) {
-        // A different set of options supersedes a decision that has already
-        // been made, so that decision is archived and cleared rather than left
-        // sitting on the new question: a round-1 `d1` answering a round-2 gate
-        // is the "Yes" bug wearing an id.
-        //
-        // Two things deliberately do not move the round on. The same set
-        // re-posted is the agent repeating its state as it works, and must not
-        // wipe an answer given a second earlier. A new set replacing a gate
-        // nobody has answered yet is just the question being rewritten — there
-        // is no decision to supersede, and no round to archive.
-        const prev = await env.DB.prepare(
-          `SELECT id, options, gate_round, response, response_option_id, response_note
-             FROM agent_sessions WHERE id = ?`
-        ).bind(target).first();
-        if (options && prev && (prev.response_option_id || prev.response) &&
-            !sameOptions(parseOptions(prev.options), parseOptions(options))) {
-          await closeRound(env, target, prev, null);
-        }
-
-        // Agent-owned columns are written straight through, exactly as the
-        // upsert did. The four Linear-owned ones — project, track, url,
-        // title — are only filled in where they are still empty, so merging
-        // onto a Linear card cannot rename it, relink it, or undo a manual
-        // brand reassignment. On a Hub-only session (no Linear issue behind
-        // it) there is nothing to protect and the agent still owns them.
-        await env.DB.prepare(
-          `UPDATE agent_sessions SET
-             agent_posted_at = COALESCE(agent_posted_at, datetime('now')),
-             system    = ?,
-             phase     = ?,
-             status    = ?,
-             prompt    = ?,
-             detail    = COALESCE(?, detail),
-             figma_url = COALESCE(?, figma_url),
-             options   = COALESCE(?, options),
-             project   = CASE WHEN linear_id IS NULL
-                              THEN COALESCE(?, project) ELSE COALESCE(project, ?) END,
-             track     = CASE WHEN linear_id IS NULL
-                              THEN COALESCE(?, track) ELSE COALESCE(track, ?) END,
-             url       = CASE WHEN linear_id IS NULL
-                              THEN COALESCE(?, url) ELSE COALESCE(url, ?) END,
-             title     = CASE WHEN linear_id IS NULL
-                              THEN COALESCE(?, title) ELSE COALESCE(title, ?) END,
-             updated_at = datetime('now')
-           WHERE id = ?`
-        ).bind(
-          b.system, phase, status, b.prompt || null, b.detail || null,
-          b.figma_url || null, options,
-          project, project, track, track, url, url, title, title,
-          target
-        ).run();
-      } else {
-        // A brand-new row. It is named by its Linear issue where there is one
-        // (§2) and only by the agent's own session id where there is not —
-        // which is the difference between a card and a session that merely
-        // exists. `linear/<KEY>` is gone: that was the second convention.
-        await env.DB.prepare(
-          `INSERT INTO agent_sessions
-             (id, agent_posted_at, system, project, track, phase, status,
-              prompt, detail, url, figma_url, title, linear_id, options)
-           VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           -- Unreachable unless two posts for a brand-new session race each
-           -- other, but this route was an upsert before and stays one.
-           ON CONFLICT(id) DO UPDATE SET
-             agent_posted_at=COALESCE(agent_posted_at, datetime('now')),
-             system=excluded.system,
-             project=excluded.project, track=excluded.track, phase=excluded.phase,
-             status=excluded.status, prompt=excluded.prompt, detail=excluded.detail,
-             url=excluded.url, figma_url=excluded.figma_url, title=excluded.title,
-             options=COALESCE(excluded.options, options),
-             updated_at=datetime('now')`
-        ).bind(
-          key || b.session_id, b.system, project, track, phase, status,
-          b.prompt || null, b.detail || null, url, b.figma_url || null, title, key,
-          options
-        ).run();
+      // A different set of options supersedes a decision that has already been
+      // made, so that decision is archived and cleared rather than left sitting
+      // on the new question: a round-1 `d1` answering a round-2 gate is the
+      // "Yes" bug wearing an id.
+      //
+      // Two things deliberately do not move the round on. The same set
+      // re-posted is the agent repeating its state as it works, and must not
+      // wipe an answer given a second earlier. A new set replacing a gate
+      // nobody has answered yet is just the question being rewritten — there is
+      // no decision to supersede, and no round to archive.
+      const prev = await env.DB.prepare(
+        `SELECT issue_key, stage, options, gate_round, response,
+                response_option_id, response_note
+           FROM sessions WHERE issue_key = ? AND stage = ?`
+      ).bind(key, stage).first();
+      if (options && prev && (prev.response_option_id || prev.response) &&
+          !sameOptions(parseOptions(prev.options), parseOptions(options))) {
+        await closeRound(env, key, stage, prev, null);
       }
-      return json({ ok: true, session_id: b.session_id, status });
+
+      // Everything on this statement is the agent's to write, because the
+      // session table holds nothing else. There is no CASE guarding a
+      // Linear-owned column, and no guard stopping a cron read wiping the
+      // agent's detail, because none of those columns are here any more.
+      await env.DB.prepare(
+        `UPDATE sessions SET
+           system          = ?,
+           status          = ?,
+           prompt          = ?,
+           detail          = COALESCE(?, detail),
+           options         = COALESCE(?, options),
+           agent_posted_at = COALESCE(agent_posted_at, datetime('now')),
+           updated_at      = datetime('now')
+         WHERE issue_key = ? AND stage = ?`
+      ).bind(
+        b.system, status, b.prompt || null, b.detail || null, options, key, stage
+      ).run();
+
+      // The three Linear-owned fields an agent may still send are only ever
+      // filled in where the card has nothing, so a post cannot rename a card,
+      // relink it, or undo a manual brand reassignment. `figma_url` is yours
+      // rather than Linear's, and the same rule is the safe one: an agent that
+      // found a file does not get to overwrite a destination you chose.
+      await env.DB.prepare(
+        `UPDATE cards SET
+           brand     = COALESCE(brand, ?),
+           track     = COALESCE(track, ?),
+           url       = COALESCE(url, ?),
+           title     = COALESCE(title, ?),
+           figma_url = COALESCE(figma_url, ?),
+           updated_at = datetime('now')
+         WHERE issue_key = ?`
+      ).bind(brand, track, url, title, b.figma_url || null, key).run();
+
+      return json({ ok: true, session_id: b.session_id, issue_key: key,
+                    stage, status });
     }
 
     // GET /api/agent/session/:id — agent polls for the human's response
     if (method === 'GET' && path.startsWith('/api/agent/session/') && !path.includes('/trigger') && !path.includes('/reassign') && !path.includes('/respond') && !path.includes('/dismiss')) {
       const asked = decodeURIComponent(path.slice('/api/agent/session/'.length));
       if (!asked) return err('session_id required');
-      // The agent polls by the session id it posted; after a merge that id is
-      // an alias for the card's row, so resolve it before reading.
-      const id = (await canonicalId(env, asked)) || asked;
-      const row = await env.DB.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(id).first();
-      if (!row) return err('not found', 404);
-      return json(withGate(row));
+      // The agent polls by the session id it posted. The card comes back
+      // flattened exactly as the board's list serves it — same projection,
+      // same fields — so the agent and the board cannot be looking at two
+      // different readings of one gate (§5).
+      //
+      // `stages` rides along, which is what an agent should read once research
+      // and design can be at different points at the same time.
+      const key = await resolveKey(env, asked);
+      if (!key) return err('not found', 404);
+      const wire = await cardWire(env, key);
+      if (!wire) return err('not found', 404);
+
+      // Asked for one stage by name, answer about that stage. The flattened
+      // fields describe whichever session is most current, and that is the
+      // wrong answer to "how is design doing" when research is the one queued.
+      const named = stageFromSessionId(asked);
+      if (named && wire.stages[named]) {
+        return json({ ...wire, ...wire.stages[named], phase: named });
+      }
+      return json(wire);
     }
 
     // POST /api/agent/session/:id/trigger — human presses a card button.
@@ -956,39 +896,53 @@ async function route(request, env) {
     // still recorded and the work still happens on the next run — the response
     // says so rather than pretending the run began.
     if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
-      const id = await resolveId(env, path.split('/')[4]);
+      const key = await resolveKey(env, path.split('/')[4]);
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      // The Hub's trigger vocabulary, and the one place it is enforced. The
+      // `sessions` table itself does not constrain `stage` — that would put
+      // another agent system's stage names in this Worker's gift, and the Hub
+      // stays generic.
       if (!STAGES.includes(b.stage)) {
         return err(`stage must be one of: ${STAGES.join(', ')}`);
       }
-      const row = await env.DB.prepare(
-        `SELECT linear_uuid, requested_stage FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
-      if (!row) return err('not found', 404);
-      // The runner works from the Linear issue, so a row with nothing behind it
-      // in Linear has nothing to run against.
-      if (!row.linear_uuid) return err('session has no linked Linear issue');
-      if (row.requested_stage) {
-        return err(`already queued for ${row.requested_stage}`, 409);
-      }
+      if (!key) return err('not found', 404);
+      const card = await env.DB.prepare(
+        `SELECT linear_uuid FROM cards WHERE issue_key = ?`
+      ).bind(key).first();
+      if (!card) return err('not found', 404);
+      // The runner works from the Linear issue, so a card with nothing behind
+      // it in Linear has nothing to run against.
+      if (!card.linear_uuid) return err('session has no linked Linear issue');
 
+      // One run per card at a time, still. A card can hold a session per stage
+      // now, but runs are serialised and queuing design while research is
+      // waiting to start would put two rows in the queue for one issue — which
+      // reads on the board as one card in two places.
+      const busy = await env.DB.prepare(
+        `SELECT stage FROM sessions WHERE issue_key = ? AND requested_at IS NOT NULL`
+      ).bind(key).first();
+      if (busy) return err(`already queued for ${busy.stage}`, 409);
+
+      // The stage is the row, so queuing is a timestamp on the row for that
+      // stage — there is no `requested_stage` to disagree with it.
+      await ensureSession(env, key, b.stage);
       await env.DB.prepare(
-        `UPDATE agent_sessions
-         SET requested_stage = ?, requested_at = datetime('now'),
-             updated_at = datetime('now')
-         WHERE id = ?`
-      ).bind(b.stage, id).run();
+        `UPDATE sessions
+            SET requested_at = datetime('now'), updated_at = datetime('now')
+          WHERE issue_key = ? AND stage = ?`
+      ).bind(key, b.stage).run();
 
       // What the runner will find when it reads the queue, including the row
       // just written. Deliberately the same WHERE clause as /api/agent/queue:
       // if the two ever disagreed, the Hub would be telling the runner to take
       // a number of issues it is not going to be shown.
       const queued = await env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM agent_sessions
-           WHERE requested_stage IS NOT NULL
-             AND dismissed_at IS NULL
-             AND set_aside_at IS NULL`
+        `SELECT COUNT(*) AS n FROM sessions s
+           JOIN cards c ON c.issue_key = s.issue_key
+          WHERE s.requested_at IS NOT NULL
+            AND c.dismissed_at IS NULL
+            AND c.set_aside_at IS NULL`
       ).first();
 
       const run = await startRunner(env, queued && queued.n);
@@ -1016,40 +970,74 @@ async function route(request, env) {
     // gate and its history are all untouched. The worst it can do is let you
     // press the button again, which is the entire point.
     if (method === 'DELETE' && path.match(/^\/api\/agent\/session\/[^/]+\/trigger$/)) {
-      const id = await resolveId(env, path.split('/')[4]);
-      const row = await env.DB.prepare(
-        `SELECT requested_stage, status FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
-      if (!row) return err('not found', 404);
+      const key = await resolveKey(env, path.split('/')[4]);
+      if (!key) return err('not found', 404);
 
-      // Both CASEs read the row as it was, so clearing the prompt keys off the
-      // old status rather than the one being written in the same statement.
+      // Every session on the card, because the button is pressed on a card and
+      // means "whatever this is stuck in, stop". A card with a queued research
+      // run and a design session that errored is one card in one bad state,
+      // and clearing half of it would leave the other half showing.
+      //
+      // What is reported back is the queued stage, which is the thing the
+      // press was most likely about.
+      const queued = await env.DB.prepare(
+        `SELECT stage, status FROM sessions
+          WHERE issue_key = ? AND requested_at IS NOT NULL`
+      ).bind(key).first();
+      const errored = await env.DB.prepare(
+        `SELECT stage, status FROM sessions
+          WHERE issue_key = ? AND status = 'error'`
+      ).bind(key).first();
+
+      // Nothing queued and nothing failed is not an error. The button's whole
+      // job is to get a card out of a state it cannot leave, so pressing it
+      // again has simply nothing to do — but the card still has to exist.
+      const exists = await env.DB.prepare(
+        `SELECT issue_key FROM cards WHERE issue_key = ?`
+      ).bind(key).first();
+      if (!exists) return err('not found', 404);
+
+      // Both CASEs read each row as it was, so clearing the prompt keys off
+      // the old status rather than the one being written in the same statement.
       await env.DB.prepare(
-        `UPDATE agent_sessions
-            SET requested_stage = NULL,
-                requested_at    = NULL,
+        `UPDATE sessions
+            SET requested_at = NULL,
                 status = CASE WHEN status = 'error' THEN 'waiting' ELSE status END,
                 prompt = CASE WHEN status = 'error' THEN NULL ELSE prompt END,
+                last_error = CASE WHEN status = 'error' THEN NULL ELSE last_error END,
                 updated_at = datetime('now')
-          WHERE id = ?`
-      ).bind(id).run();
+          WHERE issue_key = ?
+            AND (requested_at IS NOT NULL OR status = 'error')`
+      ).bind(key).run();
 
-      return json({ ok: true, cleared: row.requested_stage || null,
-                    was: row.status || null });
+      const was = queued || errored || {};
+      return json({ ok: true, cleared: (queued && queued.stage) || null,
+                    was: was.status || null });
     }
 
     // GET /api/agent/queue — what the runner asks for instead of polling
     // Linear. Oldest request first, so a button pressed on Monday is not
     // starved by one pressed this morning.
     if (method === 'GET' && path === '/api/agent/queue') {
+      // The runner's shape is unchanged — `requested_stage` is what it reads,
+      // and it is the stage of the queued session rather than a column that
+      // could disagree with one.
       const { results } = await env.DB.prepare(
-        `SELECT id, linear_id, linear_uuid, title, project, track, team,
-                requested_stage, requested_at
-           FROM agent_sessions
-          WHERE requested_stage IS NOT NULL
-            AND dismissed_at IS NULL
-            AND set_aside_at IS NULL
-          ORDER BY requested_at ASC`
+        `SELECT c.issue_key   AS id,
+                c.issue_key   AS linear_id,
+                c.linear_uuid AS linear_uuid,
+                c.title       AS title,
+                c.brand       AS project,
+                c.track       AS track,
+                c.team        AS team,
+                s.stage       AS requested_stage,
+                s.requested_at AS requested_at
+           FROM sessions s
+           JOIN cards c ON c.issue_key = s.issue_key
+          WHERE s.requested_at IS NOT NULL
+            AND c.dismissed_at IS NULL
+            AND c.set_aside_at IS NULL
+          ORDER BY s.requested_at ASC`
       ).all();
       return json(results || []);
     }
@@ -1065,10 +1053,10 @@ async function route(request, env) {
       if (!STAGES.includes(b.stage)) {
         return err(`stage must be one of: ${STAGES.join(', ')}`);
       }
-      const id = await rowIdForLinearKey(env, String(b.linear_id).toUpperCase());
+      const id = await resolveKey(env, String(b.linear_id).toUpperCase());
       if (!id) return err(`no row for Linear issue ${b.linear_id}`, 404);
       const row = await env.DB.prepare(
-        `SELECT linear_uuid, labels FROM agent_sessions WHERE id = ?`
+        `SELECT linear_uuid, labels FROM cards WHERE issue_key = ?`
       ).bind(id).first();
       if (!row) return err('not found', 404);
       if (!row.linear_uuid) return err('session has no linked Linear issue');
@@ -1092,12 +1080,23 @@ async function route(request, env) {
       if (!Array.isArray(labels)) labels = [];
       if (!labels.includes(name)) labels.push(name);
 
+      // Two writes now, because they are two facts. The label is the issue's
+      // and lives on the card; finishing is the session's and lives on the
+      // session for the stage that finished — so reporting design done no
+      // longer marks a research session done along with it.
       await env.DB.prepare(
-        `UPDATE agent_sessions
-         SET labels = ?, requested_stage = NULL, requested_at = NULL,
-             status = 'done', updated_at = datetime('now')
-         WHERE id = ?`
+        `UPDATE cards SET labels = ?, updated_at = datetime('now')
+          WHERE issue_key = ?`
       ).bind(JSON.stringify(labels), id).run();
+
+      await ensureSession(env, id, b.stage);
+      await env.DB.prepare(
+        `UPDATE sessions
+            SET status = 'done', requested_at = NULL,
+                last_error = NULL, last_error_at = NULL,
+                updated_at = datetime('now')
+          WHERE issue_key = ? AND stage = ?`
+      ).bind(id, b.stage).run();
       return json({ ok: true, label: name, stage: b.stage });
     }
 
@@ -1112,9 +1111,9 @@ async function route(request, env) {
     // reconciliation would dismiss it again — a card that flickers.
     if (path.match(/^\/api\/agent\/session\/[^/]+\/dismiss$/) &&
         (method === 'POST' || method === 'DELETE')) {
-      const id = await resolveId(env, path.split('/')[4]);
-      const row = await env.DB.prepare(
-        `SELECT linear_uuid FROM agent_sessions WHERE id = ?`
+      const id = await resolveKey(env, path.split('/')[4]);
+      const row = id && await env.DB.prepare(
+        `SELECT linear_uuid FROM cards WHERE issue_key = ?`
       ).bind(id).first();
       if (!row) return err('not found', 404);
       if (!row.linear_uuid) return err('session has no linked Linear issue');
@@ -1126,10 +1125,10 @@ async function route(request, env) {
         const res = await addLabelToIssue(env, row.linear_uuid, labelId);
         if (res.error) return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
         await env.DB.prepare(
-          `UPDATE agent_sessions
+          `UPDATE cards
            SET dismissed_at = COALESCE(dismissed_at, datetime('now')),
                updated_at = datetime('now')
-           WHERE id = ?`
+           WHERE issue_key = ?`
         ).bind(id).run();
         return json({ ok: true, dismissed: true });
       }
@@ -1137,8 +1136,8 @@ async function route(request, env) {
       const res = await removeLabelFromIssue(env, row.linear_uuid, labelId);
       if (res.error) return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
       await env.DB.prepare(
-        `UPDATE agent_sessions SET dismissed_at = NULL, updated_at = datetime('now')
-         WHERE id = ?`
+        `UPDATE cards SET dismissed_at = NULL, updated_at = datetime('now')
+         WHERE issue_key = ?`
       ).bind(id).run();
       return json({ ok: true, dismissed: false });
     }
@@ -1157,11 +1156,13 @@ async function route(request, env) {
     // half-way the way dismiss can. There is no ordering contract here.
     if (path.match(/^\/api\/agent\/session\/[^/]+\/setaside$/) &&
         (method === 'POST' || method === 'DELETE')) {
-      const id = await resolveId(env, path.split('/')[4]);
-      const row = await env.DB.prepare(
-        `SELECT requested_stage FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
-      if (!row) return err('not found', 404);
+      const id = await resolveKey(env, path.split('/')[4]);
+      if (!id) return err('not found', 404);
+      // Whatever is queued on this card, so setting it aside can report what
+      // it called off. There may be no session at all, which is not an error.
+      const row = (await env.DB.prepare(
+        `SELECT stage FROM sessions WHERE issue_key = ? AND requested_at IS NOT NULL`
+      ).bind(id).first()) || {};
 
       if (method === 'POST') {
         // Setting aside clears any queued run with it. A card you have just
@@ -1172,28 +1173,48 @@ async function route(request, env) {
         // COALESCE so a second press does not move the timestamp: when it was
         // set aside is a fact worth keeping.
         await env.DB.prepare(
-          `UPDATE agent_sessions
+          `UPDATE cards
               SET set_aside_at = COALESCE(set_aside_at, datetime('now')),
-                  requested_stage = NULL,
-                  requested_at = NULL,
                   updated_at = datetime('now')
-            WHERE id = ?`
+            WHERE issue_key = ?`
         ).bind(id).run();
-        return json({ ok: true, set_aside: true, cleared: row.requested_stage || null });
+        await env.DB.prepare(
+          `UPDATE sessions SET requested_at = NULL, updated_at = datetime('now')
+            WHERE issue_key = ? AND requested_at IS NOT NULL`
+        ).bind(id).run();
+        return json({ ok: true, set_aside: true, cleared: row.stage || null });
       }
 
       await env.DB.prepare(
-        `UPDATE agent_sessions SET set_aside_at = NULL, updated_at = datetime('now')
-          WHERE id = ?`
+        `UPDATE cards SET set_aside_at = NULL, updated_at = datetime('now')
+          WHERE issue_key = ?`
       ).bind(id).run();
       return json({ ok: true, set_aside: false });
     }
 
     // POST /api/agent/session/:id/complete — mark the issue done in Linear.
     //
-    // The board could put a card aside and it could file it under No design,
-    // but the one thing it could not say was "this is finished" — that meant
-    // opening Linear, which is the trip the Hub exists to save.
+    // ── The one §6 exception, and it is deliberate ──
+    //
+    // §6 lists what the Manager writes and says plainly: "Never issue status,
+    // title, assignee, cycle, or brand." This route writes issue status. §15
+    // asked which of the two should move; the answer is the document, and this
+    // comment is where the reasoning lives so the next reader does not have to
+    // rediscover it.
+    //
+    // The rule exists to stop the Manager *inventing* a fact it does not own —
+    // deciding on its own that work is finished, from a label or an evidence
+    // read or a timer. That is still forbidden and nothing does it.
+    //
+    // This is not that. It is a human pressing a button that means "this is
+    // finished", and the Hub carrying the press to Linear. The alternative is
+    // opening Linear to do the same thing by hand, which is the trip the Hub
+    // exists to save.
+    //
+    // What keeps the exception honest is that it is the ONLY path here that
+    // can write status. No cron read, no agent post and no stage report can
+    // reach this mutation — test/invariants.test.mjs holds that down, and it
+    // is the assertion that matters rather than this paragraph.
     //
     // It resolves the state rather than naming one: see completedStateFor.
     // Linear first and the local row second, which is the same ordering the
@@ -1201,9 +1222,9 @@ async function route(request, env) {
     // here but not there is put back by the next reconciliation pass, and
     // flickers on and off the board with every read.
     if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/complete$/)) {
-      const id = await resolveId(env, path.split('/')[4]);
-      const row = await env.DB.prepare(
-        `SELECT linear_uuid FROM agent_sessions WHERE id = ?`
+      const id = await resolveKey(env, path.split('/')[4]);
+      const row = id && await env.DB.prepare(
+        `SELECT linear_uuid FROM cards WHERE issue_key = ?`
       ).bind(id).first();
       if (!row) return err('not found', 404);
       if (!row.linear_uuid) return err('session has no linked Linear issue');
@@ -1223,12 +1244,13 @@ async function route(request, env) {
       // should still be handed — it would read the card as ineligible and skip
       // it anyway, and the entry would sit there reading as Working.
       await env.DB.prepare(
-        `UPDATE agent_sessions
-            SET linear_state = 'completed',
-                requested_stage = NULL,
-                requested_at = NULL,
-                updated_at = datetime('now')
-          WHERE id = ?`
+        `UPDATE cards
+            SET linear_state = 'completed', updated_at = datetime('now')
+          WHERE issue_key = ?`
+      ).bind(id).run();
+      await env.DB.prepare(
+        `UPDATE sessions SET requested_at = NULL, updated_at = datetime('now')
+          WHERE issue_key = ? AND requested_at IS NOT NULL`
       ).bind(id).run();
       return json({ ok: true, state: found.state.name, already: !!found.already });
     }
@@ -1329,18 +1351,17 @@ async function route(request, env) {
 
       let n = 0;
       for (const asked of ids) {
-        const id = (await canonicalId(env, String(asked))) || String(asked);
-        const row = await env.DB.prepare(
-          `SELECT id FROM agent_sessions WHERE id = ?`
-        ).bind(id).first();
-        if (!row) continue;
+        const id = await resolveKey(env, String(asked));
+        if (!id) continue;
         await env.DB.prepare(
-          `UPDATE agent_sessions
+          `UPDATE cards
               SET set_aside_at = COALESCE(set_aside_at, datetime('now')),
-                  requested_stage = NULL,
-                  requested_at = NULL,
                   updated_at = datetime('now')
-            WHERE id = ?`
+            WHERE issue_key = ?`
+        ).bind(id).run();
+        await env.DB.prepare(
+          `UPDATE sessions SET requested_at = NULL, updated_at = datetime('now')
+            WHERE issue_key = ? AND requested_at IS NOT NULL`
         ).bind(id).run();
         n++;
       }
@@ -1350,16 +1371,20 @@ async function route(request, env) {
     // PATCH /api/agent/session/:id/reassign — manual brand/track correction
     // for when the Linear Reader's auto-detected brand is wrong.
     if (method === 'PATCH' && path.match(/^\/api\/agent\/session\/[^/]+\/reassign$/)) {
-      const id = await resolveId(env, path.split('/')[4]);
+      const id = await resolveKey(env, path.split('/')[4]);
+      if (!id) return err('not found', 404);
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      // `project` on the wire is the brand — the agent posts it under that
+      // name too. The column is called `brand` now, and this is one of only
+      // two places the old name is translated (the other is lib/card.mjs).
       const fields = []; const values = [];
-      if (b.project !== undefined) { fields.push('project = ?'); values.push(b.project); }
+      if (b.project !== undefined) { fields.push('brand = ?'); values.push(b.project); }
       if (b.track !== undefined) { fields.push('track = ?'); values.push(b.track); }
       if (!fields.length) return err('project or track required');
       fields.push("updated_at = datetime('now')");
       values.push(id);
-      await env.DB.prepare(`UPDATE agent_sessions SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
+      await env.DB.prepare(`UPDATE cards SET ${fields.join(', ')} WHERE issue_key = ?`).bind(...values).run();
       return json({ ok: true });
     }
 
@@ -1378,14 +1403,33 @@ async function route(request, env) {
     // set of controls where none of them could work, and it was tested against
     // once, which produced a false result.
     if (method === 'GET' && path === '/api/agent/sessions') {
-      const rows = await env.DB.prepare(
-        `SELECT * FROM agent_sessions
-          WHERE linear_id IS NOT NULL
-         ORDER BY CASE status WHEN 'waiting' THEN 0 WHEN 'error' THEN 1
-                              WHEN 'active' THEN 2 ELSE 3 END,
-                  updated_at DESC`
+      // Two reads and a join in code rather than SQL, because the sort is a
+      // property of the projection: which session speaks for a card is decided
+      // in lib/card.mjs, and a second copy of that rule in an ORDER BY is
+      // exactly the §5 drift this split exists to end.
+      const { results: cardRows } = await env.DB.prepare(
+        `SELECT * FROM cards WHERE linear_uuid IS NOT NULL`
       ).all();
-      return json((rows.results || []).map(withGate));
+      const { results: sessionRows } = await env.DB.prepare(
+        `SELECT * FROM sessions`
+      ).all();
+
+      const byKey = new Map();
+      for (const r of sessionRows || []) {
+        if (!byKey.has(r.issue_key)) byKey.set(r.issue_key, []);
+        byKey.get(r.issue_key).push(r);
+      }
+
+      const RANK = { waiting: 0, error: 1, active: 2 };
+      const wires = (cardRows || [])
+        .map((c) => toWire(c, byKey.get(c.issue_key) || []))
+        .sort((a, b) => {
+          const ra = RANK[a.status] === undefined ? 3 : RANK[a.status];
+          const rb = RANK[b.status] === undefined ? 3 : RANK[b.status];
+          if (ra !== rb) return ra - rb;
+          return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+        });
+      return json(wires);
     }
 
     // PATCH /api/agent/session/:id/respond — human answers the prompt.
@@ -1395,15 +1439,16 @@ async function route(request, env) {
     // stops "Yes" from reading as a direction. A gate with no options is
     // answered in free text exactly as it always was.
     if (method === 'PATCH' && path.match(/\/respond$/)) {
-      const id = await resolveId(
+      // The session this answers. The board sends the card's id and means
+      // the gate it drew; the agent may name a stage and mean that one.
+      const target = await resolveSession(
         env, path.slice('/api/agent/session/'.length, path.length - '/respond'.length)
       );
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
-      const existing = await env.DB.prepare(
-        `SELECT id, options FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
-      if (!existing) return err('not found', 404);
+      if (!target || !target.session) return err('not found', 404);
+      const { key, stage } = target;
+      const existing = target.session;
 
       const options = parseOptions(existing.options);
       if (options.length) {
@@ -1429,12 +1474,12 @@ async function route(request, env) {
         if (section) {
           if (section.length > 200) return err('section name too long — 200 characters at most');
           await env.DB.prepare(
-            `UPDATE agent_sessions
+            `UPDATE sessions
                 SET response_option_id = NULL, response_note = ?, response = ?,
                     responded_at = datetime('now'),
                     status = 'active', updated_at = datetime('now')
-              WHERE id = ?`
-          ).bind(section, section, id).run();
+              WHERE issue_key = ? AND stage = ?`
+          ).bind(section, section, key, stage).run();
           return json({ ok: true, response_kind: 'own', response_label: section });
         }
 
@@ -1451,23 +1496,23 @@ async function route(request, env) {
         // than typed, so it can no longer say something the question never
         // offered.
         await env.DB.prepare(
-          `UPDATE agent_sessions
+          `UPDATE sessions
               SET response_option_id = ?, response_note = ?, response = ?,
                   responded_at = datetime('now'),
                   status = 'active', updated_at = datetime('now')
-            WHERE id = ?`
-        ).bind(chosen.id, b.response_note || null, chosen.label, id).run();
+            WHERE issue_key = ? AND stage = ?`
+        ).bind(chosen.id, b.response_note || null, chosen.label, key, stage).run();
         return json({ ok: true, response_kind: 'option',
                       response_option_id: chosen.id, response_label: chosen.label });
       }
 
       if (!b.response) return err('response required');
       await env.DB.prepare(
-        `UPDATE agent_sessions
+        `UPDATE sessions
          SET response = ?, response_note = ?, responded_at = datetime('now'),
              status = 'active', updated_at = datetime('now')
-         WHERE id = ?`
-      ).bind(b.response, b.response_note || null, id).run();
+         WHERE issue_key = ? AND stage = ?`
+      ).bind(b.response, b.response_note || null, key, stage).run();
       return json({ ok: true });
     }
 
@@ -1479,17 +1524,15 @@ async function route(request, env) {
     // array for the new round; the old round survives in gate_decisions, so a
     // revised direction does not erase the first one.
     if (method === 'PATCH' && path.startsWith('/api/agent/session/') && path.endsWith('/reopen')) {
-      const id = await resolveId(
+      const target = await resolveSession(
         env, path.slice('/api/agent/session/'.length, path.length - '/reopen'.length)
       );
       // The note is optional, and so is the body that would carry it.
       let b = {};
       try { b = (await request.json()) || {}; } catch { b = {}; }
-      const row = await env.DB.prepare(
-        `SELECT id, options, gate_round, response, response_option_id, response_note
-           FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
-      if (!row) return err('not found', 404);
+      if (!target || !target.session) return err('not found', 404);
+      const { key, stage } = target;
+      const row = target.session;
 
       // A reopen always leaves a trail. Taking a decision back has one to
       // archive already. Rejecting the options outright — "none of these" —
@@ -1502,11 +1545,11 @@ async function route(request, env) {
         return err('note required — rejecting the options with no reason recorded ' +
                    'leaves the agent nothing to go on');
       }
-      const round = await closeRound(env, id, row, note || null);
+      const round = await closeRound(env, key, stage, row, note || null);
       await env.DB.prepare(
-        `UPDATE agent_sessions SET status = 'waiting', updated_at = datetime('now')
-          WHERE id = ?`
-      ).bind(id).run();
+        `UPDATE sessions SET status = 'waiting', updated_at = datetime('now')
+          WHERE issue_key = ? AND stage = ?`
+      ).bind(key, stage).run();
       return json({ ok: true, gate_round: round, status: 'waiting' });
     }
 
@@ -1515,15 +1558,13 @@ async function route(request, env) {
     // means something was actually drawn; handoff_at means a developer can
     // pick it up. The Hub stores all three and interprets none of them.
     if (method === 'PATCH' && path.startsWith('/api/agent/session/') && path.endsWith('/state')) {
-      const id = await resolveId(
+      const target = await resolveSession(
         env, path.slice('/api/agent/session/'.length, path.length - '/state'.length)
       );
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
-      const existing = await env.DB.prepare(
-        `SELECT id FROM agent_sessions WHERE id = ?`
-      ).bind(id).first();
-      if (!existing) return err('not found', 404);
+      if (!target || !target.session) return err('not found', 404);
+      const { key, stage } = target;
 
       // "now" is what the contract's examples send, and it is the only thing
       // an agent reliably knows at the moment it finishes. An explicit
@@ -1545,17 +1586,23 @@ async function route(request, env) {
       }
       if (!fields.length) return err('mockups_url, mockups_at or handoff_at required');
       fields.push("updated_at = datetime('now')");
-      values.push(id);
+      values.push(key, stage);
       await env.DB.prepare(
-        `UPDATE agent_sessions SET ${fields.join(', ')} WHERE id = ?`
+        `UPDATE sessions SET ${fields.join(', ')} WHERE issue_key = ? AND stage = ?`
       ).bind(...values).run();
       return json({ ok: true });
     }
 
     // DELETE /api/agent/session/:id
     if (method === 'DELETE' && path.startsWith('/api/agent/session/')) {
-      const id = await resolveId(env, path.slice('/api/agent/session/'.length));
-      await env.DB.prepare(`DELETE FROM agent_sessions WHERE id = ?`).bind(id).run();
+      const id = await resolveKey(env, path.slice('/api/agent/session/'.length));
+      if (id) {
+        // The sessions go with the card. They are the card's transient state
+        // and nothing else refers to them; leaving them would be the orphaned
+        // rows §11 already lists once, in a new place.
+        await env.DB.prepare(`DELETE FROM sessions WHERE issue_key = ?`).bind(id).run();
+        await env.DB.prepare(`DELETE FROM cards WHERE issue_key = ?`).bind(id).run();
+      }
       return json({ ok: true });
     }
 
@@ -1619,12 +1666,22 @@ async function route(request, env) {
     return json(result);
   }
 
-  // GET /api/sessions — waiting agent_sessions rows, newest first
+  // GET /api/sessions — cards with a session waiting on a human, newest first.
+  //
+  // This used to be every card the reader had ever seen, because the reader
+  // wrote status='waiting' onto all of them. It now means what it says: a
+  // session exists and it is waiting. §3's "Not started" is the absence of a
+  // session, so a card nothing has run on is not waiting for anything.
   if (method === 'GET' && path === '/api/sessions') {
     const { results } = await env.DB.prepare(
-      `SELECT * FROM agent_sessions WHERE status = 'waiting' ORDER BY created_at DESC`
+      `SELECT DISTINCT c.issue_key, c.created_at FROM cards c
+         JOIN sessions s ON s.issue_key = c.issue_key
+        WHERE s.status = 'waiting'
+        ORDER BY c.created_at DESC`
     ).all();
-    return json((results || []).map(withGate));
+    const out = [];
+    for (const c of results || []) out.push(await cardWire(env, c.issue_key));
+    return json(out.filter(Boolean));
   }
 
   return err('not found', 404);

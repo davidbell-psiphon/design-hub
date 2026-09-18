@@ -19,9 +19,8 @@ import assert from 'node:assert/strict';
 import {
   linearKeyFromSessionId, stageFromSessionId, parseSessionId, cardId, sessionKey,
 } from '../lib/session-id.mjs';
-import {
-  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, one,
-  applyPieces, PIECES,
+import {  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, one,
+  applyPieces, PIECES, wire, session, sessionsOf,
 } from './helpers.mjs';
 
 // ──────────────────────────────────────────────────────────────────────
@@ -108,22 +107,38 @@ describe('§2 — one Linear issue can only ever be one card', () => {
     stubLinear([issue({ identifier: 'RYV-84' })]);
     await readLinear(env(db));
 
+    // The issue key IS the primary key now (piece11), so this is not a
+    // constraint bolted on beside the identity — it is the identity.
     assert.throws(
       () => db.prepare(
-        `INSERT INTO agent_sessions (id, system, status, linear_id)
-         VALUES ('a-second-card', 'design-ai', 'active', 'RYV-84')`
+        `INSERT INTO cards (issue_key, title) VALUES ('RYV-84', 'A second card')`
       ).run(),
-      /UNIQUE|constraint/i,
+      /UNIQUE|constraint|PRIMARY KEY/i,
       'a second row for RYV-84 was accepted — that makes §2 reconciliation again, not a rule');
   });
 
-  test('any number of sessions may have no issue at all', () => {
-    // The index is partial on purpose. A session with no Linear issue is not a
-    // card, and there is no reason for two of them to collide.
+  test('one card may hold a session per stage', () => {
+    // The finer grain §2 asks for: (issue_key, stage). Two sessions on one
+    // card is the normal case, and the thing the old row could not express.
     const db = freshDb();
-    db.prepare(`INSERT INTO agent_sessions (id, system, status) VALUES ('a/b/c', 'x', 'active')`).run();
-    db.prepare(`INSERT INTO agent_sessions (id, system, status) VALUES ('d/e/f', 'x', 'active')`).run();
-    assert.equal(rows(db).length, 2);
+    db.prepare(`INSERT INTO cards (issue_key) VALUES ('RYV-84')`).run();
+    db.prepare(`INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'research')`).run();
+    db.prepare(`INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'design')`).run();
+
+    assert.equal(rows(db).length, 1, 'two sessions became two cards');
+    assert.equal(sessionsOf(db, 'RYV-84').length, 2);
+  });
+
+  test('but not two sessions at the same stage', () => {
+    const db = freshDb();
+    db.prepare(`INSERT INTO cards (issue_key) VALUES ('RYV-84')`).run();
+    db.prepare(`INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'design')`).run();
+    assert.throws(
+      () => db.prepare(
+        `INSERT INTO sessions (issue_key, stage) VALUES ('RYV-84', 'design')`
+      ).run(),
+      /UNIQUE|constraint|PRIMARY KEY/i,
+      '(issue_key, stage) is not the key it is supposed to be');
   });
 
   test('the two writers agree on the name without being told', async () => {
@@ -138,7 +153,7 @@ describe('§2 — one Linear issue can only ever be one card', () => {
 
     const all = rows(db);
     assert.equal(all.length, 1, 'two writers produced two rows again');
-    assert.equal(all[0].id, 'RYV-84');
+    assert.equal(all[0].issue_key, 'RYV-84');
   });
 
   test('and in the other order', async () => {
@@ -152,7 +167,7 @@ describe('§2 — one Linear issue can only ever be one card', () => {
     });
 
     assert.equal(rows(db).length, 1, 'the agent post added a sibling card');
-    assert.equal(rows(db)[0].id, 'RYV-84');
+    assert.equal(rows(db)[0].issue_key, 'RYV-84');
   });
 
   test('a stage posted as its own session is still the same card', async () => {
@@ -165,6 +180,11 @@ describe('§2 — one Linear issue can only ever be one card', () => {
     await agentPost(e, { session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'active' });
 
     assert.equal(rows(db).length, 1, 'each stage became its own card');
+
+    // And each stage now keeps its own state, which is the thing the old row
+    // could not do: reporting design active used to overwrite research's done.
+    assert.equal(session(db, 'RYV-84', 'research').status, 'done');
+    assert.equal(session(db, 'RYV-84', 'design').status, 'active');
   });
 });
 
@@ -185,7 +205,7 @@ describe('§2 — brand is not part of the key', () => {
     const e = env(db);
     stubLinear([issue({ identifier: 'RYV-84', team: 'Ryve App' })]);
     await readLinear(e);
-    assert.equal(one(db, 'RYV-84').project, 'ryve');
+    assert.equal(one(db, 'RYV-84').brand, 'ryve');
 
     // The issue changed team in Linear and the agent's id still says otherwise.
     await agentPost(e, {
@@ -194,8 +214,8 @@ describe('§2 — brand is not part of the key', () => {
 
     const all = rows(db);
     assert.equal(all.length, 1, 'a stale brand in the id created a second card');
-    assert.equal(all[0].id, 'RYV-84');
-    assert.equal(all[0].project, 'ryve',
+    assert.equal(all[0].issue_key, 'RYV-84');
+    assert.equal(all[0].brand, 'ryve',
       'a brand segment in a session id overwrote the brand derived from the team');
   });
 
@@ -204,8 +224,11 @@ describe('§2 — brand is not part of the key', () => {
     const e = env(db);
     stubLinear([issue({ identifier: 'RYV-84', team: 'Ryve App' })]);
     await readLinear(e);
-    assert.equal(one(db, 'RYV-84').project, 'ryve');
+    assert.equal(one(db, 'RYV-84').brand, 'ryve');
     assert.equal(one(db, 'RYV-84').team, 'Ryve App');
+    // And the wire still calls it `project`, because the agent posts it under
+    // that name. lib/card.mjs is the only place the two names meet.
+    assert.equal(wire(db, 'RYV-84').project, 'ryve');
   });
 });
 
@@ -248,7 +271,7 @@ describe('§2 — every id anything has ever sent still reaches the card', () =>
       '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger',
       { stage: 'research' });
     assert.equal(res.status, 200);
-    assert.equal(one(db, 'RYV-84').requested_stage, 'research');
+    assert.equal(wire(db, 'RYV-84').requested_stage, 'research');
   });
 
   test('an id naming no issue is a 404 rather than the wrong card', async () => {
@@ -323,54 +346,59 @@ describe('§2 — a record with no issue key is not a card', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('§2 — nothing stores a second identity', () => {
-  test('the bridging column is never written', async () => {
+  test('the bridging column does not exist to be written', async () => {
+    // Stronger than it was. migration-003 stopped writing `agent_session_id`;
+    // piece11 built the new tables without it, so there is no column for a
+    // second identity to live in even by accident.
     const db = freshDb();
-    const e = env(db);
-    stubLinear([issue({ identifier: 'RYV-84' })]);
-    await readLinear(e);
-    await agentPost(e, {
-      session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'active',
-    });
-
-    assert.equal(one(db, 'RYV-84').agent_session_id, null,
-      'agent_session_id was written — §2 forbids a bridge between the two conventions');
+    const cols = db.prepare(`PRAGMA table_info(cards)`).all().map((c) => c.name);
+    assert.ok(!cols.includes('agent_session_id'),
+      'the bridge came back — §2 forbids a column joining the two conventions');
+    assert.ok(cols.includes('issue_key'), 'the card is not keyed by its issue');
   });
 
-  test('what it stood in for is recorded outright instead', async () => {
+  test('what it stood in for is recorded on the session', async () => {
     const db = freshDb();
     const e = env(db);
     stubLinear([issue({ identifier: 'RYV-84' })]);
     await readLinear(e);
-    assert.equal(one(db, 'RYV-84').agent_posted_at, null);
+    assert.equal(session(db, 'RYV-84'), undefined,
+      'discovering an issue created a session — §3 says Not started is the absence of one');
 
     await agentPost(e, {
       session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'active',
       detail: 'why this direction',
     });
-    assert.ok(one(db, 'RYV-84').agent_posted_at, 'an agent post left no mark');
+    assert.ok(session(db, 'RYV-84', 'design').agent_posted_at, 'an agent post left no mark');
   });
 
-  test('and it still protects the agent detail from a cron read', async () => {
-    // The thing the marker is actually for: a Wednesday read must not
-    // overwrite the context behind a decision prompt with the Linear
-    // description. That used to be decided by testing the bridge column.
+  test('the agent detail and the Linear description stop competing', async () => {
+    // This used to need a guard: both lived in one `detail` column, so a
+    // Wednesday read would overwrite the context behind a decision prompt with
+    // the Linear description unless something stopped it. They are separate
+    // columns in separate tables now, so there is no guard to get wrong — and
+    // both facts survive, which the old shape could not manage at all.
     const db = freshDb();
     const e = env(db);
-    stubLinear([issue({ identifier: 'RYV-84' })]);
-    await readLinear(e);
-    await agentPost(e, {
-      session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'active',
-      detail: 'why this direction',
-    });
-
     stubLinear([issue({ identifier: 'RYV-84', description: 'The Linear description' })]);
     await readLinear(e);
+    await agentPost(e, {
+      session_id: 'ryve/ryv-84/design', system: 'design-ai', status: 'active',
+      detail: 'why this direction',
+    });
 
-    assert.equal(one(db, 'RYV-84').detail, 'why this direction',
-      'a cron read wiped the agent detail — the guard that replaced the bridge does not hold');
+    stubLinear([issue({ identifier: 'RYV-84', description: 'Edited in Linear' })]);
+    await readLinear(e);
+
+    assert.equal(session(db, 'RYV-84', 'design').detail, 'why this direction',
+      'a cron read wiped the agent detail');
+    assert.equal(one(db, 'RYV-84').description, 'Edited in Linear',
+      'the card stopped tracking its Linear description');
+    // The board shows one line, and it is the agent's where there is one.
+    assert.equal(wire(db, 'RYV-84').detail, 'why this direction');
   });
 
-  test('a card no agent has touched still refreshes its description', async () => {
+  test('a card no agent has touched shows its Linear description', async () => {
     const db = freshDb();
     const e = env(db);
     stubLinear([issue({ identifier: 'RYV-84', description: 'First' })]);
@@ -378,8 +406,8 @@ describe('§2 — nothing stores a second identity', () => {
     stubLinear([issue({ identifier: 'RYV-84', description: 'Edited in Linear' })]);
     await readLinear(e);
 
-    assert.equal(one(db, 'RYV-84').detail, 'Edited in Linear',
-      'the guard is too broad — a quiet card stopped tracking its Linear description');
+    assert.equal(wire(db, 'RYV-84').detail, 'Edited in Linear',
+      'a quiet card stopped tracking its Linear description');
   });
 });
 
@@ -387,12 +415,18 @@ describe('§2 — nothing stores a second identity', () => {
 // The migration
 // ──────────────────────────────────────────────────────────────────────
 
+// Everything applied after migration-003, which this block replays history
+// from before. piece11 and migration-004 build on the column migration-003
+// adds, so they cannot be in the database while it is being tested.
+const AFTER_003 = ['migration-003-identity.sql', 'piece11-schema.sql',
+                   'migration-004-grain.sql'];
+
 describe('§2 — migration-003 renames without losing anything', () => {
   // The live database as it stands before the migration: a reader row under
   // the old key, with gate history against that key, and a Hub-only session
   // the migration must not touch.
   function beforeMigration() {
-    const db = freshDb(PIECES.filter((p) => p !== 'migration-003-identity.sql'));
+    const db = freshDb(PIECES.filter((p) => !AFTER_003.includes(p)));
     db.prepare(
       `INSERT INTO agent_sessions (id, system, project, phase, status, linear_id,
                                    agent_session_id, updated_at)
@@ -410,11 +444,20 @@ describe('§2 — migration-003 renames without losing anything', () => {
 
   const migrate = (db) => applyPieces(db, ['migration-003-identity.sql']);
 
+  // This block runs against the database as it was *before* piece11, so
+  // `cards` does not exist and the shared helpers cannot be used. These read
+  // the old table directly, which is the point: it is testing what happened
+  // to it.
+  const old = (db, id) =>
+    db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).get(id);
+  const allOld = (db) =>
+    db.prepare(`SELECT * FROM agent_sessions ORDER BY id`).all();
+
   test('the card takes the name of its issue', () => {
     const db = beforeMigration();
     migrate(db);
-    assert.ok(one(db, 'RYV-84'), 'the card was not renamed');
-    assert.equal(one(db, 'linear/RYV-84'), undefined, 'the old row is still there');
+    assert.ok(old(db, 'RYV-84'), 'the card was not renamed');
+    assert.equal(old(db, 'linear/RYV-84'), undefined, 'the old row is still there');
   });
 
   test('gate history follows the card rather than being orphaned', () => {
@@ -429,20 +472,20 @@ describe('§2 — migration-003 renames without losing anything', () => {
   test('a Hub-only session is left exactly where it is', () => {
     const db = beforeMigration();
     migrate(db);
-    assert.ok(one(db, 'conduit/wallet-flow/design'), 'a session with no issue was renamed');
+    assert.ok(old(db, 'conduit/wallet-flow/design'), 'a session with no issue was renamed');
   });
 
   test('the marker is backfilled, so no row changes behaviour', () => {
     const db = beforeMigration();
     migrate(db);
-    assert.ok(one(db, 'RYV-84').agent_posted_at,
+    assert.ok(old(db, 'RYV-84').agent_posted_at,
       'a card an agent had posted to lost that fact across the migration');
   });
 
   test('the data steps are idempotent', () => {
     const db = beforeMigration();
     migrate(db);
-    const after = JSON.stringify(rows(db).map((r) => [r.id, r.linear_id, r.agent_posted_at]));
+    const after = JSON.stringify(allOld(db).map((r) => [r.id, r.linear_id, r.agent_posted_at]));
 
     // The ALTER TABLE fails on a second run, which is what CLAUDE.md asks for:
     // "re-running one fails on a duplicate column instead of destroying data".
@@ -460,7 +503,7 @@ describe('§2 — migration-003 renames without losing anything', () => {
               WHERE linear_id IS NOT NULL AND id <> linear_id`);
 
     assert.equal(
-      JSON.stringify(rows(db).map((r) => [r.id, r.linear_id, r.agent_posted_at])), after,
+      JSON.stringify(allOld(db).map((r) => [r.id, r.linear_id, r.agent_posted_at])), after,
       'a second run moved something');
   });
 
@@ -474,6 +517,6 @@ describe('§2 — migration-003 renames without losing anything', () => {
     assert.throws(() => migrate(db), /UNIQUE|constraint/i,
       'the migration renamed rows with duplicates still in the table');
     // Nothing moved: the index is the first statement for exactly this reason.
-    assert.ok(one(db, 'linear/RYV-84'), 'a failed migration had already renamed a row');
+    assert.ok(old(db, 'linear/RYV-84'), 'a failed migration had already renamed a row');
   });
 });
