@@ -64,10 +64,19 @@ npx wrangler d1 execute design-hub --remote --file=./piece12-schema.sql
 ```
 
 `piece12-schema.sql` adds two columns to `agent_heartbeats` — which machine a
-runner is (`local` or `ci`) and which one you are working from. Order does not
-matter: the Worker reads both defensively, and a runner that has not been
-updated reads as `local` with nothing selected, which is exactly today's
-behaviour.
+runner is (`local` or `ci`) and which one you are working from.
+
+**Order does not matter, and that is tested rather than promised.** Every read
+of the new columns falls back to the pre-piece12 query, so a Worker deployed
+first keeps checking machines in, keeps serving the board, and keeps feeding the
+runner its queue — with nothing selected, which is exactly the behaviour that
+was there before the feature. The one thing that cannot work is *choosing* a
+machine, and that answers 503 saying to apply piece12 rather than 500.
+
+It was not true when this paragraph was first written: deploying first answered
+500 on both heartbeat routes, which would have taken the runner down with it.
+`test/machine.test.mjs` now runs the whole surface against a database without
+piece12, so the claim is checked on every run.
 
 ### piece11 and migration-004: the card/session split
 

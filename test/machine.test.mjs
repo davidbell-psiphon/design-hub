@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  freshDb, env, call, readLinear, issue, stubLinear,
+  freshDb, env, call, readLinear, issue, stubLinear, PIECES,
 } from './helpers.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -325,5 +325,72 @@ describe('the board speaks for the machine you chose, not the freshest', () => {
     const none = rows.map((r) => ({ ...r, selected_at: null }));
     assert.equal(queueDestination(none, NOW).kind, 'any');
     assert.match(queueDestination(none, NOW).text, /whichever runner asks first/);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Deploying this Worker before piece12 is applied
+// ──────────────────────────────────────────────────────────────────────
+
+describe('the Worker survives a database without piece12', () => {
+  // DEPLOY.md says the order does not matter. This is what makes that true,
+  // rather than a sentence somebody has to remember — and it was NOT true
+  // when it was first written: every heartbeat route answered 500, which
+  // would have taken the runner down with it.
+  //
+  // Same shape as readerTeams: a configuration question is not worth a 500 on
+  // the route the runner depends on for all of its work.
+  const unmigrated = () => env(freshDb(PIECES.filter((p) => p !== 'piece12-schema.sql')));
+
+  test('a runner can still check in', async () => {
+    const e = unmigrated();
+    const res = await call(e, 'POST', '/api/agent/heartbeat',
+      { machine: 'DaveBellJrII', capabilities: ['research'], kind: 'local', claim: true },
+      SECRET);
+    assert.equal(res.status, 200, 'the heartbeat broke — the board loses every machine');
+  });
+
+  test('the board can still read the machines', async () => {
+    const e = unmigrated();
+    await call(e, 'POST', '/api/agent/heartbeat',
+      { machine: 'DaveBellJrII', capabilities: ['research'] }, SECRET);
+    const res = await call(e, 'GET', '/api/agent/heartbeat', undefined, SECRET);
+    assert.equal(res.status, 200);
+    const rows = await res.json();
+    assert.equal(rows[0].machine, 'DaveBellJrII');
+    // No columns, so nothing is selected — which is the behaviour that was
+    // there before the feature, and the right answer.
+    assert.ok(!rows[0].selected_at);
+  });
+
+  test('the runner can still read the queue, named or not', async () => {
+    const db = freshDb(PIECES.filter((p) => p !== 'piece12-schema.sql'));
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await readLinear(e);
+    await call(e, 'POST', '/api/agent/session/RYV-84/trigger', { stage: 'research' });
+    await call(e, 'POST', '/api/agent/heartbeat',
+      { machine: 'DaveBellJrII', capabilities: ['research'] }, SECRET);
+
+    assert.equal((await (await call(e, 'GET', '/api/agent/queue?machine=DaveBellJrII',
+      undefined, SECRET)).json()).length, 1, 'the runner was starved of its own work');
+    assert.equal((await (await call(e, 'GET', '/api/agent/queue',
+      undefined, SECRET)).json()).length, 1);
+  });
+
+  test('choosing a machine says what is missing rather than failing', async () => {
+    // This one genuinely cannot work without the columns. What it must not do
+    // is answer 500, which tells nobody anything.
+    const e = unmigrated();
+    await call(e, 'POST', '/api/agent/heartbeat',
+      { machine: 'DaveBellJrII', capabilities: ['research'] }, SECRET);
+    const res = await call(e, 'PUT', '/api/agent/working-from', { machine: 'DaveBellJrII' });
+    assert.equal(res.status, 503);
+    assert.match((await res.json()).error, /piece12/);
+  });
+
+  test('and clearing it succeeds, because there is nothing to clear', async () => {
+    const res = await call(unmigrated(), 'PUT', '/api/agent/working-from', { machine: null });
+    assert.equal(res.status, 200);
   });
 });

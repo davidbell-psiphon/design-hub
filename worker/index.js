@@ -225,26 +225,45 @@ async function ensureSession(env, key, stage) {
 // Exactly one machine holds the selection, which is why this clears the others
 // in the same breath as setting one. Two selected machines is not a state
 // anything downstream knows how to read.
+// The try/catch on each of these is for the window between deploying this
+// Worker and applying piece12 — no columns, no selection, and the board
+// behaves exactly as it did before the feature existed. Same reasoning as
+// readerTeams: a configuration question is not worth a 500 on the route the
+// runner depends on for all of its work.
+//
+// Delete the fallbacks once piece12 is applied everywhere. They are marked so
+// they can be found.
 async function selectMachine(env, machine) {
-  await env.DB.prepare(
-    `UPDATE agent_heartbeats SET selected_at = NULL
-      WHERE selected_at IS NOT NULL AND machine <> ?`
-  ).bind(machine).run();
-  await env.DB.prepare(
-    `UPDATE agent_heartbeats
-        SET selected_at = COALESCE(selected_at, datetime('now'))
-      WHERE machine = ?`
-  ).bind(machine).run();
+  try {
+    await env.DB.prepare(
+      `UPDATE agent_heartbeats SET selected_at = NULL
+        WHERE selected_at IS NOT NULL AND machine <> ?`
+    ).bind(machine).run();
+    await env.DB.prepare(
+      `UPDATE agent_heartbeats
+          SET selected_at = COALESCE(selected_at, datetime('now'))
+        WHERE machine = ?`
+    ).bind(machine).run();
+    return true;
+  } catch (e) {
+    return false;   // pre-piece12: nothing to select, and nothing reads it
+  }
 }
 
-// The machine you are working from, or null when you have not said.
+// The machine you are working from, or null when you have not said — which is
+// also the answer before piece12, and it is the right one: no selection means
+// the queue is not filtered, which is the behaviour that was there before.
 async function workingFrom(env) {
-  const row = await env.DB.prepare(
-    `SELECT machine FROM agent_heartbeats
-      WHERE selected_at IS NOT NULL
-      ORDER BY selected_at DESC LIMIT 1`
-  ).first();
-  return row ? row.machine : null;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT machine FROM agent_heartbeats
+        WHERE selected_at IS NOT NULL
+        ORDER BY selected_at DESC LIMIT 1`
+    ).first();
+    return row ? row.machine : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // Every session on a card, oldest stage first.
@@ -1074,9 +1093,17 @@ async function route(request, env) {
       const asking = url.searchParams.get('machine');
       let me = null;
       if (asking) {
-        me = await env.DB.prepare(
-          `SELECT machine, capabilities, kind FROM agent_heartbeats WHERE machine = ?`
-        ).bind(asking).first();
+        try {
+          me = await env.DB.prepare(
+            `SELECT machine, capabilities, kind FROM agent_heartbeats WHERE machine = ?`
+          ).bind(asking).first();
+        } catch (e) {
+          // pre-piece12: no kind column. Capability filtering still works,
+          // and with nothing selectable there is no selection to apply.
+          me = await env.DB.prepare(
+            `SELECT machine, capabilities FROM agent_heartbeats WHERE machine = ?`
+          ).bind(asking).first();
+        }
 
         const chosen = await workingFrom(env);
         // An unknown machine is treated as local and as not the chosen one.
@@ -1351,14 +1378,27 @@ async function route(request, env) {
       // cannot quietly keep taking work you have pointed at another machine.
       const kind = b.kind === 'ci' ? 'ci' : 'local';
 
-      await env.DB.prepare(
-        `INSERT INTO agent_heartbeats (machine, capabilities, kind, last_seen, first_seen)
-           VALUES (?, ?, ?, datetime('now'), datetime('now'))
-         ON CONFLICT(machine) DO UPDATE SET
-           capabilities = excluded.capabilities,
-           kind         = excluded.kind,
-           last_seen    = excluded.last_seen`
-      ).bind(b.machine, capabilities, kind).run();
+      try {
+        await env.DB.prepare(
+          `INSERT INTO agent_heartbeats (machine, capabilities, kind, last_seen, first_seen)
+             VALUES (?, ?, ?, datetime('now'), datetime('now'))
+           ON CONFLICT(machine) DO UPDATE SET
+             capabilities = excluded.capabilities,
+             kind         = excluded.kind,
+             last_seen    = excluded.last_seen`
+        ).bind(b.machine, capabilities, kind).run();
+      } catch (e) {
+        // pre-piece12. Checking in is how the board knows a machine is alive
+        // at all, and losing that to a column the deploy has not caught up
+        // with would be worse than losing the one field.
+        await env.DB.prepare(
+          `INSERT INTO agent_heartbeats (machine, capabilities, last_seen, first_seen)
+             VALUES (?, ?, datetime('now'), datetime('now'))
+           ON CONFLICT(machine) DO UPDATE SET
+             capabilities = excluded.capabilities,
+             last_seen    = excluded.last_seen`
+        ).bind(b.machine, capabilities).run();
+      }
 
       // `claim` is the automatic half of "which machine am I at". Running
       // design-local.bat means you are sitting at that machine — that is what
@@ -1384,16 +1424,30 @@ async function route(request, env) {
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
 
       if (b.machine === null || b.machine === '') {
-        await env.DB.prepare(
-          `UPDATE agent_heartbeats SET selected_at = NULL WHERE selected_at IS NOT NULL`
-        ).run();
+        try {
+          await env.DB.prepare(
+            `UPDATE agent_heartbeats SET selected_at = NULL WHERE selected_at IS NOT NULL`
+          ).run();
+        } catch (e) {
+          // pre-piece12: there is nothing selected to clear, so clearing it
+          // has already succeeded.
+        }
         return json({ ok: true, machine: null });
       }
       if (!b.machine) return err('machine required, or null to clear');
 
-      const row = await env.DB.prepare(
-        `SELECT machine, kind FROM agent_heartbeats WHERE machine = ?`
-      ).bind(b.machine).first();
+      let row;
+      try {
+        row = await env.DB.prepare(
+          `SELECT machine, kind FROM agent_heartbeats WHERE machine = ?`
+        ).bind(b.machine).first();
+      } catch (e) {
+        // pre-piece12. Say so rather than 500 — this one genuinely cannot work
+        // without the columns, and "apply the migration" is a far more useful
+        // thing for the board to show than a server error.
+        return err('the Hub has not been migrated yet — apply piece12-schema.sql ' +
+                   'to choose which machine work goes to', 503);
+      }
       // Only a machine that has actually checked in. Selecting one that never
       // has would silently route every queued run to nothing at all.
       if (!row) return err(`no machine called "${b.machine}" has ever checked in`, 404);
@@ -1401,7 +1455,10 @@ async function route(request, env) {
         return err('that is a CI runner, not a machine you sit at');
       }
 
-      await selectMachine(env, b.machine);
+      if (!(await selectMachine(env, b.machine))) {
+        return err('the Hub has not been migrated yet — apply piece12-schema.sql ' +
+                   'to choose which machine work goes to', 503);
+      }
       return json({ ok: true, machine: b.machine });
     }
 
@@ -1410,10 +1467,20 @@ async function route(request, env) {
     // local-only work will actually be picked up, or is sitting there with
     // nobody listening.
     if (method === 'GET' && path === '/api/agent/heartbeat') {
-      const { results } = await env.DB.prepare(
-        `SELECT machine, capabilities, kind, selected_at, last_seen, first_seen
-           FROM agent_heartbeats ORDER BY last_seen DESC`
-      ).all();
+      let results;
+      try {
+        ({ results } = await env.DB.prepare(
+          `SELECT machine, capabilities, kind, selected_at, last_seen, first_seen
+             FROM agent_heartbeats ORDER BY last_seen DESC`
+        ).all());
+      } catch (e) {
+        // pre-piece12: every machine reads as local with nothing selected,
+        // which is exactly the board that was there before.
+        ({ results } = await env.DB.prepare(
+          `SELECT machine, capabilities, last_seen, first_seen
+             FROM agent_heartbeats ORDER BY last_seen DESC`
+        ).all());
+      }
       return json(results.map((r) => ({ ...r, capabilities: parseOptions(r.capabilities) })));
     }
 
