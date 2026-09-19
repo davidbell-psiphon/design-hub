@@ -180,7 +180,13 @@ describe('the sidebar lists teams, not brands', () => {
   // team is the context an issue arrives with; brand stays what the board is
   // built from.
   test('All teams first, then the teams that have open work, alphabetically', () => {
-    const names = [...sidebar.matchAll(/sb-name">([^<]+)</g)].map(m => m[1]);
+    // Scoped to the Teams section. The sidebar carries a settings section
+    // below it now, and reading every .sb-name in the whole sidebar would make
+    // this test fail whenever one is added — which says nothing about teams.
+    const teamsSection = sidebar.slice(0, sidebar.indexOf('Figma paths') >= 0
+      ? sidebar.indexOf('<div class="sb-section">', 1)
+      : sidebar.length);
+    const names = [...teamsSection.matchAll(/sb-name">([^<]+)</g)].map(m => m[1]);
     assert.deepEqual(names, ['All teams', 'Conduit App', 'Ryve App']);
     // Websites has two rows and both are closed, so it is not a team with open
     // work and does not appear.

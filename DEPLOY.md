@@ -61,7 +61,22 @@ npx wrangler d1 execute design-hub --remote --file=./migration-003-identity.sql
 npx wrangler d1 execute design-hub --remote --file=./piece11-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./migration-004-grain.sql
 npx wrangler d1 execute design-hub --remote --file=./piece12-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece13-schema.sql
 ```
+
+`piece13-schema.sql` adds `figma_paths`, two override columns on `cards`, and
+seeds the destinations that were already live in
+`.design-ai/config/routing.json`.
+
+**Apply it before deploying the Worker.** Unlike piece12 this is not tested to
+be order-free, and the honest reason is that it does not need to be: the board
+treats a failed `/api/figma-paths` as "keep what I had" and renders the whole
+rest of itself, and the runner falls back to `routing.json` and routes exactly
+as it did before. Deploying first costs you the editor until the schema lands,
+not the board and not a run.
+
+The seed uses `ON CONFLICT DO NOTHING`, so re-running it cannot undo a path
+edited from the board.
 
 `piece12-schema.sql` adds two columns to `agent_heartbeats` — which machine a
 runner is (`local` or `ci`) and which one you are working from.

@@ -87,7 +87,8 @@ ever, and then it is not a cache, it is a second home.
 `linear_project`, `linear_uuid`, `linear_read_at`.
 
 **You own it** → `cards`, and **a reader pass must not mention it**.
-`brand`, `track`, `figma_url`, `dismissed_at`, `set_aside_at`.
+`brand`, `track`, `figma_url`, `dismissed_at`, `set_aside_at`,
+`figma_file_key`, `figma_page`.
 
 **A run owns it** → `stage_sessions`, per stage.
 `status`, `prompt`, `detail`, `options`, `gate_round`, `response*`,
@@ -103,6 +104,41 @@ Two traps worth naming:
   `sessions.requested_at` on the row for that stage. The wire still carries
   `requested_stage` because the board and the runner read it — derived, in
   `lib/card.mjs`.
+- **`figma_url` is where the work ENDED UP. `figma_file_key` and `figma_page`
+  are where the next run SHOULD GO.** piece11 labels `figma_url` "your
+  destination override", which is what it was meant to be and not what it
+  became — the agent writes it through the session post once a design run has
+  drawn something. Folding the three together would let a finished design
+  silently redirect the next one.
+
+### Where Figma work lands
+
+`figma_paths` (team, brand) → file, file_key, page, plus the per-card override
+above. The runner reads them in that order and falls back to
+`.design-ai/config/routing.json` only when the Hub is unreachable — an
+unreachable Hub must not stop every issue for having no destination when the
+destination has been in the repo all along.
+
+**This used to live only in `routing.json`.** It moved because it is edited
+from the board now, and a browser cannot commit to a git repository. The file
+is still there, is still the fallback, and was what piece13 seeded these rows
+from.
+
+Two things to keep straight:
+
+- **The key is the pair, never the team.** `Websites` carries four brands and
+  they are four different files; `forge` appears under both `Forge` and
+  `Websites` pointing at two more. Either half alone answers a different
+  question.
+- **A row with no `file_key` is not a destination.** It is a half-filled form,
+  and treating it as one aims a design run at a file that does not exist. The
+  runner skips it and falls through, and an unmapped pair blocking the card is
+  better than either.
+
+It is on the right side of "the Hub stays generic": a destination is not a
+stage, a gate or an agent role. It is the same kind of fact as `figma_url`,
+which the Hub has held all along, and another agent system would want the same
+answer.
 
 ### The wire is a projection, never a stored row
 
@@ -242,6 +278,7 @@ node --test test/identity.test.mjs   # §2, the one identity
 node --test test/grain.test.mjs      # the card/session split, and the projection
 node --test test/machine.test.mjs    # which machine you are at, and queue routing
 node --test test/handlers.test.mjs   # the board's own handlers (§14.5)
+node --test test/figma.test.mjs      # Figma paths: defaults, overrides, ownership
 node --test test/sql.test.mjs        # the pieces, against a production-shaped database
 ```
 

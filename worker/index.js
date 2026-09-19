@@ -1962,6 +1962,125 @@ async function route(request, env) {
       return json(await legacyBrands(env));
     }
 
+    // ---- Figma paths --------------------------------------------------
+    //
+    // Where a team's work lands in Figma. This used to be a checked-in file in
+    // the sibling Design AI repo, which was fine while the only way to change
+    // it was to edit the repo; it stopped being fine once it is edited from
+    // the board, because a browser cannot commit to git. See piece13-schema.sql.
+    //
+    // Two levels, and the runner reads them in this order:
+    //   1. the card's own override, if it has one
+    //   2. the default for its (team, brand)
+    //   3. routing.json in the Design AI repo, if the Hub is unreachable
+
+    // GET /api/figma-paths — both levels in one read, because the editor shows
+    // both and two round trips could show you a half-updated picture.
+    if (method === 'GET' && path === '/api/figma-paths') {
+      const [defaults, overrides] = await Promise.all([
+        env.DB.prepare(
+          `SELECT team, brand, file, file_key AS fileKey, page, updated_at AS updatedAt
+             FROM figma_paths ORDER BY team, brand`
+        ).all(),
+        // Only cards that actually carry one. An override list that included
+        // every card would be a card list.
+        env.DB.prepare(
+          `SELECT issue_key AS id, title, brand, team,
+                  figma_file_key AS fileKey, figma_page AS page
+             FROM cards
+            WHERE linear_uuid IS NOT NULL
+              AND (figma_file_key IS NOT NULL OR figma_page IS NOT NULL)
+            ORDER BY issue_key`
+        ).all(),
+      ]);
+      return json({ defaults: defaults.results || [], overrides: overrides.results || [] });
+    }
+
+    // PUT /api/figma-paths — upsert one (team, brand) default.
+    //
+    // One row per call rather than a whole-list replace. The editor saves a row
+    // at a time, and a replace would mean a stale tab wiping a pair somebody
+    // else added — `reader_teams` can be replaced wholesale because the board
+    // sends back exactly the set it is showing; this is not that.
+    if (method === 'PUT' && path === '/api/figma-paths') {
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      const team = String(b.team || '').trim();
+      const brand = String(b.brand || '').trim();
+      if (!team || !brand) return err('team and brand are both required');
+      if (team.length > 200 || brand.length > 200) return err('team or brand too long');
+
+      // The file key is what actually resolves a Figma file; the name beside it
+      // is for reading. Rejecting a URL here rather than storing it is
+      // deliberate — pasting the whole Figma URL is the obvious mistake, and
+      // silently storing it would fail much later, in a design run.
+      const fileKey = String(b.fileKey || '').trim();
+      if (/^https?:/i.test(fileKey)) {
+        return err('fileKey is the key from the Figma URL, not the whole URL');
+      }
+      if (fileKey.length > 100) return err('fileKey too long');
+
+      await env.DB.prepare(
+        `INSERT INTO figma_paths (team, brand, file, file_key, page, updated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(team, brand) DO UPDATE SET
+           file = excluded.file,
+           file_key = excluded.file_key,
+           page = excluded.page,
+           updated_at = excluded.updated_at`
+      ).bind(team, brand, String(b.file || '').trim() || null,
+             fileKey || null, String(b.page || '').trim() || null).run();
+
+      return json({ ok: true, team, brand });
+    }
+
+    // DELETE /api/figma-paths?team=X&brand=Y — remove a default.
+    //
+    // A pair with no row is not an error: route() in the runner treats an
+    // unmapped pair as blocking and says so on the card, which is the correct
+    // behaviour and better than guessing a destination.
+    if (method === 'DELETE' && path === '/api/figma-paths') {
+      const team = (url.searchParams.get('team') || '').trim();
+      const brand = (url.searchParams.get('brand') || '').trim();
+      if (!team || !brand) return err('team and brand are both required');
+      const res = await env.DB.prepare(
+        `DELETE FROM figma_paths WHERE team = ? AND brand = ?`
+      ).bind(team, brand).run();
+      return json({ ok: true, removed: res.meta ? res.meta.changes : null });
+    }
+
+    // PATCH /api/agent/session/:id/figma — the per-card override.
+    //
+    // Sending null or an empty string for both clears it, which is how a card
+    // goes back to following its team's default. There is no separate "clear"
+    // route, because a control that only ever does one thing is how the board
+    // grew its ad-hoc buttons.
+    if (method === 'PATCH' && path.startsWith('/api/agent/session/') && path.endsWith('/figma')) {
+      // resolveKey is async, takes the env, and decodes the segment itself —
+      // it also answers null for a card that is not there, which is what makes
+      // the 404 below the honest answer rather than a silent no-op.
+      const key = await resolveKey(env,
+        path.slice('/api/agent/session/'.length, -'/figma'.length));
+      if (!key) return err('No such card', 404);
+
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      const fileKey = String(b.fileKey || '').trim();
+      if (/^https?:/i.test(fileKey)) {
+        return err('fileKey is the key from the Figma URL, not the whole URL');
+      }
+      if (fileKey.length > 100) return err('fileKey too long');
+      const page = String(b.page || '').trim();
+      if (page.length > 200) return err('page too long');
+
+      const res = await env.DB.prepare(
+        `UPDATE cards SET figma_file_key = ?, figma_page = ? WHERE issue_key = ?`
+      ).bind(fileKey || null, page || null, key).run();
+      if (!res.meta || !res.meta.changes) return err('No such card', 404);
+
+      return json({ ok: true, id: key, fileKey: fileKey || null, page: page || null });
+    }
+
     // POST /api/read-linear — run the Linear Reader on demand
   if (method === 'POST' && path === '/api/read-linear') {
     const result = await readLinear(env);

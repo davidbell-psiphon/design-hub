@@ -481,6 +481,57 @@
   .toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 16px; font-size: 13px; color: var(--text); z-index: 200; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
 
+  /* ── MODAL ───────────────────────────────────────────────────────────
+     The board's first one. Built from the same tokens as everything else —
+     the surface ramp for elevation by tone, the shape scale, the emphasized
+     easing for something arriving. */
+  .modal-scrim { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    z-index: 100; align-items: flex-start; justify-content: center; padding: 6vh 16px 24px;
+    overflow-y: auto; }
+  .modal-scrim.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--shape-lg); width: 100%; max-width: 780px;
+    box-shadow: 0 24px 64px rgba(0,0,0,.5);
+    animation: modal-in var(--dur-medium) var(--ease-emphasized); }
+  @keyframes modal-in { from { opacity: 0; transform: translateY(12px) scale(.985); } }
+  @media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
+
+  .modal-head { display: flex; align-items: flex-start; gap: 12px;
+    padding: 20px 22px 14px; border-bottom: 1px solid var(--border); }
+  .modal-title { font: var(--type-display); flex: 1; }
+  .modal-sub { font: var(--type-body); color: var(--text-muted); margin-top: 4px; }
+  .modal-body { padding: 6px 22px 22px; }
+  .modal-x { background: none; border: none; color: var(--text-muted); cursor: pointer;
+    font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: var(--shape-full);
+    position: relative; overflow: hidden; }
+  .modal-x:hover { color: var(--text); }
+
+  .fp-section { margin-top: 22px; }
+  .fp-section h3 { font: var(--type-title); margin-bottom: 4px; }
+  .fp-note { font: var(--type-body); color: var(--text-muted); margin-bottom: 12px; }
+  .fp-row { display: grid; grid-template-columns: 1.1fr 1.3fr .8fr auto; gap: 8px;
+    align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
+  .fp-row.fp-head { border-top: none; padding-bottom: 2px; }
+  .fp-row.fp-head span { font: var(--type-meta); color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: .07em; }
+  .fp-pair { font: var(--type-label); color: var(--text); }
+  .fp-pair small { display: block; font: var(--type-meta); color: var(--text-muted); }
+  .fp-input { width: 100%; background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--shape-sm);
+    padding: 7px 9px; font: var(--type-label); font-family: var(--font); min-height: 32px; }
+  /* No :focus-visible rule here on purpose — the global one already draws the
+     ring, and a second definition is a second thing to forget to update. */
+  .fp-input::placeholder { color: var(--text-dim); }
+  .fp-acts { display: flex; gap: 6px; }
+  .fp-empty { font: var(--type-body); color: var(--text-muted); padding: 14px 0; }
+
+  @media (max-width: 720px) {
+    .modal-scrim { padding: 0; }
+    .modal { border-radius: 0; min-height: 100%; max-width: none; }
+    .fp-row { grid-template-columns: 1fr; gap: 6px; }
+    .fp-row.fp-head { display: none; }
+  }
+
   /* ── MOBILE ──────────────────────────────────────────────────────────
      Below 900px the page scrolls as one document instead of three
      independently-scrolling columns: sidebar becomes a drawer, the side
@@ -563,6 +614,19 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="modal-scrim" id="figma-scrim" onclick="if (event.target === this) closeFigmaPaths()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="figma-title">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="figma-title">Figma paths</div>
+        <div class="modal-sub">Where design work lands. A card follows its team's default unless it has its own.</div>
+      </div>
+      <button class="modal-x" onclick="closeFigmaPaths()" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body" id="figma-body"></div>
+  </div>
+</div>
+
 <script src="board-logic.js"></script>
 
 <script>
@@ -606,6 +670,14 @@ let heartbeats = [];
 // is the context an issue arrives with. groupOf falls back to the Linear
 // project for a row with no team.
 let filterTeam = null;
+
+// Where each team's work lands in Figma, and the cards that go somewhere else.
+//
+// Loaded with the board rather than when the editor opens, because the sidebar
+// shows the override count — a badge that appeared a second after you clicked
+// would be a badge you never see. Defaults to empty rather than null so the
+// sidebar renders before the first fetch lands.
+let figmaPaths = { defaults: [], overrides: [] };
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -910,6 +982,17 @@ async function loadBoard() {
     // was on failure is more honest than either blanking it or refusing the
     // rest of the board over it.
     try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep the last known value */ }
+    // Same treatment, same reason: a Hub without piece13 applied yet answers
+    // 500 here, and losing the whole board over a deploy-ordering mistake
+    // would be the piece12 lesson learned twice.
+    // Shape-checked rather than trusted, the same way readerConfig is: a Hub
+    // without piece13 applied, or a proxy returning something unexpected,
+    // would otherwise replace this with an object that has no lists on it and
+    // take the sidebar down with it.
+    try {
+      const fp = await api('/figma-paths');
+      if (fp && Array.isArray(fp.defaults) && Array.isArray(fp.overrides)) figmaPaths = fp;
+    } catch (e) { /* keep the last known value */ }
     renderBoard();
     // Say which machine this browser is on, if it knows and the Hub disagrees.
     // After renderBoard so the board never waits on it, and it settles by
@@ -1060,8 +1143,243 @@ function renderSidebar() {
       <span class="sb-badge">${open.length}</span>
     </button>`;
 
+  // Figma paths is a settings section, not a filter, so it carries no dot and
+  // does not take the `active` state — pressing it opens an editor and leaves
+  // the board showing whatever it was showing.
+  // Defensive rather than trusting the shape: this renders on every board
+  // draw, including before the first fetch and after a failed one.
+  const overrides = ((figmaPaths && figmaPaths.overrides) || []).length;
+  const figmaSection = `<div class="sb-section">
+      <div class="sb-label">Figma paths</div>
+      <button class="sb-item" onclick="openFigmaPaths()"
+              title="Where each team's design work lands in Figma">
+        <span class="sb-name">Edit paths</span>
+        ${overrides
+          ? `<span class="sb-badge" title="${overrides} card${overrides > 1 ? 's' : ''} with an override">${overrides}</span>`
+          : ''}
+      </button>
+    </div>`;
+
   document.getElementById('sidebar').innerHTML =
-    `<div class="sb-section"><div class="sb-label">Teams</div>${allItem}${teams.map(item).join('')}</div>`;
+    `<div class="sb-section"><div class="sb-label">Teams</div>${allItem}${teams.map(item).join('')}</div>`
+    + figmaSection;
+}
+
+// ── Figma paths ───────────────────────────────────────────────────────────
+//
+// Two levels, in the order the runner reads them: the default for a card's
+// (team, brand) pair, and the card's own override if it has one. Both are
+// edited here because both answer the same question, and splitting them across
+// two screens would mean checking one to understand the other.
+//
+// The pair is the key, not the team alone: Websites carries four brands and
+// they are four different Figma files, and `forge` appears under both Forge and
+// Websites pointing at different ones.
+
+function openFigmaPaths() {
+  document.getElementById('figma-scrim').classList.add('open');
+  closeMenu();
+  renderFigmaPaths();
+  // Refreshed on open as well as with the board: this is the screen where
+  // being one poll out of date is most likely to be noticed, and most annoying.
+  refreshFigmaPaths();
+}
+
+function closeFigmaPaths() {
+  document.getElementById('figma-scrim').classList.remove('open');
+}
+
+async function refreshFigmaPaths() {
+  try {
+    figmaPaths = await api('/figma-paths');
+    renderFigmaPaths();
+    renderSidebar();
+  } catch (e) {
+    // The editor keeps showing what it had. Saying so beats a blank panel.
+    toast('Could not reload Figma paths');
+  }
+}
+
+// Rows are addressed by their INDEX in figmaPaths.defaults, not by the pair.
+// An element id cannot contain whitespace and half these team names have a
+// space in them ("Ryve App", "Conduit App"), so a composite key would have to
+// be slugified — and two teams that slugify the same would then share a field.
+// The index is unambiguous and the pair is read back from the array.
+function figmaRow(d, i) {
+  const who = `${esc(d.team)} ${esc(d.brand)}`;
+  return `<div class="fp-row">
+    <div class="fp-pair">${esc(d.team)}<small>${esc(d.brand)}</small></div>
+    <input class="fp-input" id="fp-file-${i}" value="${esc(d.file || '')}"
+           placeholder="Figma file name" aria-label="Figma file name for ${who}">
+    <input class="fp-input" id="fp-page-${i}" value="${esc(d.page || '')}"
+           placeholder="page or YYYY-MM" aria-label="Page for ${who}">
+    <div class="fp-acts">
+      <button class="btn" onclick="saveFigmaDefault(${i})">Save</button>
+      <button class="btn btn-reset" onclick="removeFigmaDefault(${i})"
+              title="An unmapped pair stops a run rather than guessing a destination">Remove</button>
+    </div>
+    <input class="fp-input" id="fp-fkey-${i}" value="${esc(d.fileKey || '')}"
+           placeholder="file key from the Figma URL"
+           aria-label="File key for ${who}"
+           style="grid-column: 2 / -1">
+  </div>`;
+}
+
+function figmaOverrideRow(o) {
+  const id = jsq(o.id);
+  return `<div class="fp-row">
+    <div class="fp-pair">${esc(o.id)}<small>${esc(o.title || '').slice(0, 44)}</small></div>
+    <input class="fp-input" id="fo-fkey-${id}" value="${esc(o.fileKey || '')}"
+           placeholder="file key" aria-label="File key for ${esc(o.id)}">
+    <input class="fp-input" id="fo-page-${id}" value="${esc(o.page || '')}"
+           placeholder="page" aria-label="Page for ${esc(o.id)}">
+    <div class="fp-acts">
+      <button class="btn" onclick="saveFigmaOverride('${id}')">Save</button>
+      <button class="btn btn-reset" onclick="clearFigmaOverride('${id}')"
+              title="Back to this card's team default">Clear</button>
+    </div>
+  </div>`;
+}
+
+function renderFigmaPaths() {
+  const body = document.getElementById('figma-body');
+  if (!body) return;
+
+  const defaults = (figmaPaths && figmaPaths.defaults) || [];
+  const overrides = (figmaPaths && figmaPaths.overrides) || [];
+
+  // Every card the board is holding, so an override can be added for one that
+  // does not have one yet. Sorted by id because that is how you look for one.
+  const known = new Set(overrides.map(o => o.id));
+  const candidates = sessions
+    .filter(r => r.id && !known.has(r.id))
+    .map(r => ({ id: r.id, title: r.title || '' }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  body.innerHTML = `
+    <div class="fp-section">
+      <h3>Default paths</h3>
+      <div class="fp-note">One per Linear team and brand. This is what a card
+        uses unless it has its own. A pair with no row stops a run and says so
+        on the card, rather than guessing somewhere plausible.</div>
+      <div class="fp-row fp-head"><span>Team / brand</span><span>File</span><span>Page</span><span></span></div>
+      ${defaults.length ? defaults.map((d, i) => figmaRow(d, i)).join('') : '<div class="fp-empty">No defaults yet.</div>'}
+      <div class="fp-row">
+        <input class="fp-input" id="fp-new-team" placeholder="Linear team" aria-label="New team">
+        <input class="fp-input" id="fp-new-brand" placeholder="brand" aria-label="New brand">
+        <input class="fp-input" id="fp-new-page" placeholder="page" aria-label="New page">
+        <div class="fp-acts"><button class="btn btn-primary" onclick="addFigmaDefault()">Add</button></div>
+        <input class="fp-input" id="fp-new-fkey" placeholder="file key" aria-label="New file key"
+               style="grid-column: 2 / -1">
+      </div>
+    </div>
+
+    <div class="fp-section">
+      <h3>Individual changes</h3>
+      <div class="fp-note">Cards that go somewhere other than their team's
+        default. Clearing one puts it back on the default.</div>
+      ${overrides.length
+        ? `<div class="fp-row fp-head"><span>Card</span><span>File key</span><span>Page</span><span></span></div>
+           ${overrides.map(figmaOverrideRow).join('')}`
+        : '<div class="fp-empty">No cards override their team default.</div>'}
+      <div class="fp-row">
+        <select class="fp-input" id="fo-new-id" aria-label="Card to override">
+          <option value="">Choose a card…</option>
+          ${candidates.map(c => `<option value="${esc(c.id)}">${esc(c.id)} — ${esc(c.title.slice(0, 50))}</option>`).join('')}
+        </select>
+        <input class="fp-input" id="fo-new-fkey" placeholder="file key" aria-label="Override file key">
+        <input class="fp-input" id="fo-new-page" placeholder="page" aria-label="Override page">
+        <div class="fp-acts"><button class="btn btn-primary" onclick="addFigmaOverride()">Add</button></div>
+      </div>
+    </div>`;
+}
+
+// `api()` serialises `body` itself, so these pass an object. Passing a string
+// would send a JSON-encoded JSON string, and the Worker would read every field
+// as undefined while answering 200.
+async function putFigmaDefault(team, brand, file, fileKey, page, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await api('/figma-paths', { method: 'PUT', body: { team, brand, file, fileKey, page } });
+    await refreshFigmaPaths();
+    toast(`${team} · ${brand} saved`);
+  } catch (e) {
+    toast(String(e.message || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// The pair comes from the array rather than from a field, because it is the
+// primary key: editing it in place would silently write a second row and leave
+// the first behind.
+function saveFigmaDefault(i) {
+  const d = ((figmaPaths && figmaPaths.defaults) || [])[i];
+  if (!d) return;
+  const val = (p) => (document.getElementById(`fp-${p}-${i}`) || {}).value || '';
+  putFigmaDefault(d.team, d.brand, val('file'), val('fkey'), val('page'), event && event.target);
+}
+
+function addFigmaDefault() {
+  const team = (document.getElementById('fp-new-team').value || '').trim();
+  const brand = (document.getElementById('fp-new-brand').value || '').trim();
+  if (!team || !brand) { toast('A team and a brand are both needed'); return; }
+  putFigmaDefault(team, brand, '',
+    document.getElementById('fp-new-fkey').value,
+    document.getElementById('fp-new-page').value, event && event.target);
+}
+
+async function removeFigmaDefault(i) {
+  const d = ((figmaPaths && figmaPaths.defaults) || [])[i];
+  if (!d) return;
+  if (!confirm(`Remove the Figma path for ${d.team} · ${d.brand}?\n\n` +
+    'Work for that pair will then stop and say it has no destination, rather ' +
+    'than landing somewhere plausible.')) return;
+  try {
+    await api(`/figma-paths?team=${encodeURIComponent(d.team)}&brand=${encodeURIComponent(d.brand)}`,
+      { method: 'DELETE' });
+    await refreshFigmaPaths();
+    toast(`${d.team} · ${d.brand} removed`);
+  } catch (e) {
+    toast(String(e.message || e));
+  }
+}
+
+async function putFigmaOverride(id, fileKey, page, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/figma`,
+      { method: 'PATCH', body: { fileKey, page } });
+    await refreshFigmaPaths();
+    toast(fileKey || page ? `${id} overridden` : `${id} back on its team default`);
+  } catch (e) {
+    toast(String(e.message || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function saveFigmaOverride(id) {
+  putFigmaOverride(id,
+    (document.getElementById(`fo-fkey-${id}`) || {}).value || '',
+    (document.getElementById(`fo-page-${id}`) || {}).value || '',
+    event && event.target);
+}
+
+// Clearing both fields is how a card goes back to its default — there is no
+// separate route for it, because a control that only ever does one thing is
+// how this board grew its ad-hoc buttons.
+function clearFigmaOverride(id) {
+  putFigmaOverride(id, '', '', event && event.target);
+}
+
+async function addFigmaOverride() {
+  const id = document.getElementById('fo-new-id').value;
+  if (!id) { toast('Choose a card first'); return; }
+  const fileKey = document.getElementById('fo-new-fkey').value;
+  const page = document.getElementById('fo-new-page').value;
+  if (!fileKey.trim() && !page.trim()) { toast('An override needs a file key or a page'); return; }
+  await putFigmaOverride(id, fileKey, page, event && event.target);
 }
 
 // Tapping a team narrows the board to it; the chip and "All teams" both undo
@@ -1727,7 +2045,14 @@ if (document.addEventListener) {
 // answer and the only one either of them can know.
 window.addEventListener('focus', () => { if (heartbeats.length) assertMachine(); });
 window.addEventListener('resize', () => { if (sessions.length) renderTopbar(); });
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+// Escape closes the topmost thing. The modal first, so dismissing it does not
+// also collapse the menu you opened it from.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const modal = document.getElementById('figma-scrim');
+  if (modal && modal.classList.contains('open')) { closeFigmaPaths(); return; }
+  closeMenu();
+});
 
 loadBoard();
 </script>
