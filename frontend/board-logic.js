@@ -275,6 +275,35 @@ function actionFor(r) {
   return { stage: 'research', label: 'Run Research' };
 }
 
+// Everything the card offers, primary first.
+//
+// Some design work needs no research at all — the design agent is built for
+// it, works from the description, the BCC and the design bible, and records
+// the absence as an assumption. The board could not say so: a card sits in
+// Backlog until something declares research is not coming, because absence
+// means "not yet" and nothing else (§12).
+//
+// So Backlog offers a second action. It is NOT "Run Design on a Backlog card"
+// — §11 lists that as a bug, and it was one, because the button and the column
+// disagreed about where the card was. This one says what it does: it skips
+// research, which is a decision, which is why it writes the label §12 already
+// reserves for it. Press it and the card moves to Research skipped and runs
+// design from there, so the column and the button never disagree.
+//
+// Derived from the same stageOf as the column, like everything else here.
+function actionsFor(r) {
+  var primary = actionFor(r);
+  if (!primary) return [];
+  if (stageOf(r) !== 'backlog') return [primary];
+  return [primary, {
+    stage: 'design',
+    label: 'Skip to Design',
+    skips: 'research',
+    title: 'Mark research skipped and run the design stage. ' +
+           'The design agent works from the description and the brand documents.',
+  }];
+}
+
 // ─── WHAT A CARD IS ACTUALLY DOING ─────────────────
 // One derivation, read by the pill, the card's tint, the stage button's text
 // and the activity panel — so those four cannot disagree with each other the

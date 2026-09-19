@@ -235,6 +235,12 @@
 
   /* Which machine you are working from. Only rendered when there is more than
      one to choose between — one machine and nothing chosen is the old board. */
+  /* The second stage action. Quieter than the primary but not a ghost — it
+     writes a label to Linear, so it has to look like a real control rather
+     than something you might press by accident. */
+  .btn-skip { border-style: dashed; }
+  .btn-skip:hover { border-style: solid; }
+
   .cn-machines { flex-shrink: 0; border-bottom: 1px solid var(--border);
     padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 2px; }
   .cn-machine { display: flex; align-items: center; gap: 7px; width: 100%;
@@ -508,11 +514,22 @@ function sessionCard(r) {
                    ? 'Take this out of the queue. The runner checks before each issue, so it is skipped unless it is the one being worked on right now'
                    : 'Clear the queued run and the error, so the stage can be pressed again'}">${clear}</button>`
       : '';
-    const action = actionFor(r);
-    const stageBtn = action
+    // Primary first, then anything else the card offers. Today that second
+    // action exists on one column only: Backlog, where "Skip to Design" is for
+    // work that needs no research. It is a decision, so it writes the label
+    // §12 reserves for it rather than quietly running design on a card the
+    // board still shows in Backlog — which is the bug §11 lists.
+    const actions = actionsFor(r);
+    const stageBtn = actions.length
       ? (working
           ? `<button class="btn btn-primary" disabled>${esc((pill && pill.text) || RUN_STATE_TEXT[state] || 'Working\u2026')}</button>`
-          : `<button class="btn btn-primary" onclick="triggerSession('${esc(id)}', '${action.stage}', this)">${esc(action.label)}</button>`)
+          : actions.map((a, i) => a.skips
+              ? `<button class="btn btn-skip"
+                   onclick="skipToStage('${esc(id)}', '${a.skips}', '${a.stage}', this)"
+                   title="${esc(a.title || '')}">${esc(a.label)}</button>`
+              : `<button class="btn ${i === 0 ? 'btn-primary' : ''}"
+                   onclick="triggerSession('${esc(id)}', '${a.stage}', this)"
+                   >${esc(a.label)}</button>`).join('\n          '))
       : '';
     actionsHtml = `
       ${stageBtn}
@@ -1130,6 +1147,41 @@ async function triggerSession(id, stage, btn) {
 // Nothing in Linear moves and no label changes. It clears the queue entry and
 // an error status, and leaves the row, its stage, its brand and its gate
 // exactly as they were. The card goes quiet and its stage button comes back.
+// Skip a stage, then run the next one. Two calls, in that order, because they
+// are two facts: one says a stage is not going to happen, the other asks for
+// the one after it.
+//
+// The skip goes first and a failure stops there. Queuing design on a card the
+// board still shows in Backlog is exactly the disagreement §11 lists as a bug —
+// better to have done nothing than half of it.
+async function skipToStage(id, skipStage, runStage, btn) {
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Working\u2026'; }
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/skip`, {
+      method: 'POST', body: { stage: skipStage },
+    });
+  } catch (e) {
+    toast(`Could not skip ${skipStage} — ` + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+    return;
+  }
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/trigger`, {
+      method: 'POST', body: { stage: runStage },
+    });
+    toast(res && res.started === false
+      ? `${skipStage} skipped, ${runStage} queued — but the run did not start. ${res.detail || ''}`.trim()
+      : `${skipStage} skipped — ${runStage} started`);
+  } catch (e) {
+    // The skip stuck and the run did not. Say both, because the card has moved
+    // and the button it now offers is the one to press again.
+    toast(`${skipStage} skipped, but could not start ${runStage} — ` +
+          String(e.message || e).slice(0, 100));
+  }
+  await loadBoard();
+}
+
 async function resetSession(id, btn, label) {
   const word = label || 'Reset';
   if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }

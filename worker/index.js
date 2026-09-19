@@ -99,6 +99,19 @@ const STAGE_LABEL = {
   design: 'AI-design done',
 };
 
+// §12's other half. `AI-… done` is the record that a stage RAN; these are the
+// record that one was deliberately passed over, and the difference is the
+// whole of §3: absence means "not yet" and nothing else, so a stage nobody is
+// going to run needs something written or the card sits in Backlog for ever.
+//
+// Skipping design is what the No design control already writes, which is why
+// this table and that route name the same label. One fact, one label — the
+// route is a different door into it, not a second meaning.
+const SKIP_LABEL = {
+  research: 'no-research',
+  design: 'no-design',
+};
+
 // Where the runner lives. Overridable by env vars so a fork or a rename does
 // not need a code change, but the defaults are the real thing.
 const RUNNER_REPO = 'davidbell-psiphon/design-ai';
@@ -1225,6 +1238,68 @@ async function route(request, env) {
           WHERE issue_key = ? AND stage = ?`
       ).bind(id, b.stage).run();
       return json({ ok: true, label: name, stage: b.stage });
+    }
+
+    // POST /api/agent/session/:id/skip — "do not run this stage; move on".
+    //
+    // §7 lists Skip a stage as one of the card's actions and nothing
+    // implemented it. §1 says the label is the Manager's to write, but only
+    // "when you press it" — so this route exists and no automatic path may
+    // reach it.
+    //
+    // What it is FOR: a design task that needs no research. The design agent
+    // already handles that case — it works from the description, the BCC and
+    // the design bible and records the absence as an assumption — but the
+    // board could not express it, because a card sits in Backlog until
+    // something says research is not coming. Absence means "not yet" and
+    // nothing else (§12), so "not going to happen" has to be written down.
+    //
+    // Deliberately a label and not a Hub-only flag: skipping is a fact about
+    // the issue, it is visible to everyone in Linear, and §3 reads it back as
+    // `skipped` — a state that renders differently from both done and not
+    // started, which is the whole reason it was given a label in the first
+    // place.
+    if (path.match(/^\/api\/agent\/session\/[^/]+\/skip$/) &&
+        (method === 'POST' || method === 'DELETE')) {
+      const key = await resolveKey(env, path.split('/')[4]);
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      if (!STAGES.includes(b.stage)) {
+        return err(`stage must be one of: ${STAGES.join(', ')}`);
+      }
+      const row = key && await env.DB.prepare(
+        `SELECT linear_uuid, labels FROM cards WHERE issue_key = ?`
+      ).bind(key).first();
+      if (!row) return err('not found', 404);
+      if (!row.linear_uuid) return err('session has no linked Linear issue');
+
+      const name = SKIP_LABEL[b.stage];
+      const labelId = await getLabelId(env, name);
+      if (!labelId) return err(`Linear label "${name}" not found`, 502);
+
+      // Linear first, the local copy second — the same ordering the dismiss
+      // route follows, and for the same reason: a card moved here but not
+      // there is put back by the next reconciliation and flickers.
+      const res = method === 'POST'
+        ? await addLabelToIssue(env, row.linear_uuid, labelId)
+        : await removeLabelFromIssue(env, row.linear_uuid, labelId);
+      if (res.error) {
+        return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+      }
+
+      let labels = [];
+      try { labels = JSON.parse(row.labels || '[]'); } catch { labels = []; }
+      if (!Array.isArray(labels)) labels = [];
+      labels = method === 'POST'
+        ? (labels.includes(name) ? labels : [...labels, name])
+        : labels.filter((l) => l !== name);
+
+      await env.DB.prepare(
+        `UPDATE cards SET labels = ?, updated_at = datetime('now') WHERE issue_key = ?`
+      ).bind(JSON.stringify(labels), key).run();
+
+      return json({ ok: true, stage: b.stage, label: name,
+                    skipped: method === 'POST' });
     }
 
     // POST /api/agent/session/:id/dismiss — "this needs no design".
