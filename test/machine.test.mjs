@@ -28,7 +28,8 @@ import {
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
-const { agentList, workingFrom, queueDestination, heartbeatStatus } = board;
+const { agentList, workingFrom, queueDestination, heartbeatStatus,
+        machineToAssert } = board;
 
 const SECRET = { 'X-Agent-Secret': 's' };
 
@@ -395,6 +396,67 @@ describe('a check-in never overwrites what is already known about a machine', ()
     await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
     await beat(e, 'unknown-laptop');
     assert.deepEqual(await (await queue(e, 'unknown-laptop')).json(), []);
+  });
+});
+
+describe('a browser says which machine it is on', () => {
+  // The Hub cannot see it: it never reaches out to anything, and a page cannot
+  // read its own hostname. What a browser CAN do is remember, because a
+  // browser only ever runs on one machine. So "connect to whatever computer
+  // loads this site" is the site remembering, per browser, and saying so on
+  // every load.
+  const NOW = Date.parse('2026-09-19T02:00:00Z');
+  const ago = (m) => new Date(NOW - m * 60000).toISOString().replace('T', ' ').slice(0, 19);
+
+  const two = (selected) => [
+    { machine: 'DaveBellJrII', kind: 'local', capabilities: ['research', 'design'],
+      last_seen: ago(3), selected_at: selected === 'DaveBellJrII' ? ago(2) : null },
+    { machine: 'dave-bell-jr', kind: 'local', capabilities: ['research'],
+      last_seen: ago(1), selected_at: selected === 'dave-bell-jr' ? ago(2) : null },
+  ];
+
+  test('it asserts the machine it remembers', () => {
+    assert.equal(machineToAssert(two('dave-bell-jr'), 'DaveBellJrII'), 'DaveBellJrII');
+  });
+
+  test('it says nothing when the Hub already agrees', () => {
+    // Returning a value here is what would turn every page load into an
+    // assert loop.
+    assert.equal(machineToAssert(two('DaveBellJrII'), 'DaveBellJrII'), null);
+  });
+
+  test('it says nothing when this browser has not been told', () => {
+    // Guessing is worse than asking once. The picker is how it gets told.
+    assert.equal(machineToAssert(two(null), null), null);
+    assert.equal(machineToAssert(two(null), ''), null);
+  });
+
+  test('it refuses to select a machine that has never checked in', () => {
+    // Selecting one would route every queued run at nothing at all, silently —
+    // the same reason the API refuses it.
+    assert.equal(machineToAssert(two(null), 'a-laptop-that-never-connected'), null);
+  });
+
+  test('it asserts even when the remembered machine is the stale one', () => {
+    // Stale is not wrong. You have just sat down at a machine whose runner has
+    // not woken up yet, and pointing work at it is exactly right — the board
+    // says separately that it has not checked in lately.
+    const rows = two('dave-bell-jr');
+    rows[0].last_seen = ago(60 * 5);
+    assert.equal(machineToAssert(rows, 'DaveBellJrII'), 'DaveBellJrII');
+  });
+
+  test('it never asserts a CI runner', () => {
+    const rows = [...two(null),
+      { machine: 'gh-runner-7', kind: 'ci', capabilities: ['research'],
+        last_seen: ago(1), selected_at: null }];
+    assert.equal(machineToAssert(rows, 'gh-runner-7'), null,
+      'a browser claimed to be running on a GitHub runner');
+  });
+
+  test('with no machines at all it says nothing', () => {
+    assert.equal(machineToAssert([], 'DaveBellJrII'), null);
+    assert.equal(machineToAssert(null, 'DaveBellJrII'), null);
   });
 });
 

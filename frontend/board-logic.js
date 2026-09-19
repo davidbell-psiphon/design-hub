@@ -764,6 +764,37 @@ function agentList(rows, now) {
   });
 }
 
+// Which machine this browser should assert on load, or null for "leave it".
+//
+// The Hub cannot see which machine a page is on: it never reaches out to
+// anything, and a browser cannot read its own hostname. What a browser CAN do
+// is remember which machine it is on, because a browser only ever runs on one.
+// So the answer to "connect to whatever computer loads this site" is that the
+// site remembers, per browser, and says so on every load.
+//
+// Null in three cases, and each one matters:
+//
+//   nothing remembered   this browser has not been told yet. The picker is
+//                        how it gets told, and guessing would be worse than
+//                        asking once.
+//   never checked in     the remembered machine has never reached the Hub, so
+//                        selecting it would route every queued run at nothing
+//                        at all — silently.
+//   already selected     no work to do, and returning a value here is what
+//                        would turn a page load into an assert loop.
+function machineToAssert(rows, remembered) {
+  if (!remembered) return null;
+  var local = localAgents(rows);
+  var known = false;
+  for (var i = 0; i < local.length; i++) {
+    if (local[i].machine === remembered) { known = true; break; }
+  }
+  if (!known) return null;
+  var chosen = workingFrom(rows);
+  if (chosen && chosen.machine === remembered) return null;
+  return remembered;
+}
+
 // Where a queued run will actually be picked up, in one sentence.
 //
 // There are three answers and they are genuinely different, which is why this

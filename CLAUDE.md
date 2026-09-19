@@ -184,6 +184,26 @@ Asking with **no** `machine` returns everything, exactly as before. The runner
 is fed entirely by this route, so a runner that has not been updated has to
 keep working.
 
+### Staying connected
+
+Two separate problems, and they were both being solved by accident:
+
+**Being visible.** The heartbeat fires when the RUNNER runs, so a machine goes
+quiet the moment its work finishes and the board stops believing in it. That is
+what "it keeps disconnecting" was. `hub.mjs here` (and `here.bat`) is the same
+check-in with none of the work — double-click it, or put it on a logon task.
+
+**Being chosen.** The browser remembers which machine it is on
+(`localStorage`, key `design-hub:working-from`) and re-asserts it on page load
+and on window focus. A browser only ever runs on one machine, so this is the
+closest a page can get to knowing where it is — and focus is the strongest
+signal available for "the computer somebody is actually using".
+
+`machineToAssert` is the whole rule and it is pure, so it is tested rather than
+reasoned about. It returns null when the Hub already agrees, which is what
+stops a page load becoming an assert loop, and when the remembered machine has
+never checked in, which is what stops work being routed at nothing.
+
 ## What the Hub writes to Linear
 
 Four things, and no more: stage labels (`AI-research done`, `AI-design done`)

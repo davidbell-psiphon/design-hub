@@ -703,6 +703,10 @@ async function loadBoard() {
     // rest of the board over it.
     try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep the last known value */ }
     renderBoard();
+    // Say which machine this browser is on, if it knows and the Hub disagrees.
+    // After renderBoard so the board never waits on it, and it settles by
+    // itself — machineToAssert returns null the moment the Hub agrees.
+    assertMachine();
   } catch (e) {
     document.getElementById('board').innerHTML =
       `<div class="empty">Could not load the board.<br>${esc(String(e.message || e))}</div>`;
@@ -1009,8 +1013,53 @@ async function chooseMachine(machine) {
     toast(`Could not set the machine — ${e.message}`);
     return;
   }
+  // Remember it for this browser. A browser only ever runs on one machine, so
+  // this is the closest thing to the page knowing where it is — and it is why
+  // the answer survives the next time you open the board here.
+  rememberMachine(next);
   try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep what we have */ }
   render();
+}
+
+// ─── WHICH MACHINE THIS BROWSER IS ON ──────────────
+// The Hub cannot see it and a page cannot read its own hostname, so the
+// browser remembers, and says so on every load. Picking a machine once on a
+// computer is what makes opening the board there enough from then on.
+//
+// Every access is wrapped: storage throws in private browsing and in some
+// embedded views, and a board that will not render because it could not read a
+// preference is a far worse failure than one that forgets which machine it is.
+const MACHINE_KEY = 'design-hub:working-from';
+
+function rememberedMachine() {
+  try { return localStorage.getItem(MACHINE_KEY) || null; } catch (e) { return null; }
+}
+
+function rememberMachine(machine) {
+  try {
+    if (machine) localStorage.setItem(MACHINE_KEY, machine);
+    else localStorage.removeItem(MACHINE_KEY);
+  } catch (e) { /* nothing to do, and not worth a toast */ }
+}
+
+// Say it, if it needs saying. Runs on load and whenever the window is focused,
+// because focus is the strongest signal a browser gets for "this is the
+// computer somebody is actually using" — which is the question being answered.
+//
+// machineToAssert returns null once the Hub already agrees, so this settles
+// rather than looping, and two boards open on two machines simply mean the one
+// you touched last is the one work goes to.
+async function assertMachine() {
+  const want = machineToAssert(heartbeats, rememberedMachine());
+  if (!want) return;
+  try {
+    await api('/agent/working-from', { method: 'PUT', body: { machine: want } });
+    heartbeats = await api('/agent/heartbeat');
+    render();
+  } catch (e) {
+    // Worth one line, because the alternative is work quietly going elsewhere.
+    toast(`Could not point work at ${want} — ${e.message}`);
+  }
 }
 
 // Where the board's Linear issues come from, in one line.
@@ -1427,6 +1476,12 @@ if (document.addEventListener) {
 
 // The two global listeners had been pasted inside triggerSession by mistake,
 // so they were registered on every button press and never at page load.
+// Focus is the strongest signal a browser gets for "this is the computer
+// somebody is actually using", which is exactly the question. So coming back
+// to this window re-asserts its machine — two boards open on two machines then
+// mean the one you touched last is the one work goes to, which is the right
+// answer and the only one either of them can know.
+window.addEventListener('focus', () => { if (heartbeats.length) assertMachine(); });
 window.addEventListener('resize', () => { if (sessions.length) renderTopbar(); });
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
