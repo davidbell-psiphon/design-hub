@@ -88,7 +88,7 @@ const stripBom = (s) => s.replace(/^<U+FEFF>/, '');   // runner.mjs
 An actual invisible U+FEFF inside the regex — `od -c` shows `357 273 277`.
 `hub.mjs` had a comment three files away saying exactly why not to do that.
 
-The replacement **acquired the same bug on its first write**: `﻿` turned
+The replacement **acquired the same bug on its first write**: the escape turned
 back into a real U+FEFF somewhere on the way to disk. The new test caught it in
 its own file. It is `String.fromCharCode(0xFEFF)` now — the way `runner.mjs`
 already spells its path separator — and the test spells it that way too, so the
@@ -150,33 +150,68 @@ make it safe to attempt; they do not make it a good idea to attempt unannounced.
 
 ## What the first pass missed
 
-The write-up above claimed both repos had been read. They had been *inventoried*;
-the reading was targeted. Asked directly whether everything found had been fixed,
-a proper sweep turned up four more things — three of them worse than anything in
-the original list.
+Everything above was written after a *targeted* read. The opening line called it
+a read through both repos, which overstated it — the 9,800 lines were
+inventoried, and the reading followed specific suspicions.
 
-**Carry-forward was silently dropping the gate question.**  in
- looked up one session by reading the whole collection, and the 
-sat inside the  — so a list not containing the id returned null and never
-fell through to the single-session route.  filters on
-, so for any session with no Linear issue behind it,
-carry-forward carried nothing, and the Hub POST being a full replace then blanked
-the prompt. Real cards were never affected; the runner’s own probe was exactly
-the shape that was.
+Asked directly whether every problem found had been fixed, a proper sweep turned
+up four more, three of them worse than anything in the original list.
 
-**93 orphaned rows in the live database.** The same lookup was used by the test
-suite’s cleanup, so it found nothing, deleted nothing and reported success. 60 of
-the 93 were created while chasing this. All removed, after checking every one was
-under the reserved  brand with no Linear issue; 62 real cards untouched.
-A full run now leaves zero.
+### Carry-forward was silently dropping the gate question
 
-** had been failing 15 checks** since the identity work and is not in
-the default run, so nobody saw it. Now 167 passing, 0 failing.
+`fetchExisting()` in `hub.mjs` looked up one session by reading the whole
+collection, and the `return` sat **inside** the `try`:
 
-**Seven more literal BOMs**, including in the file written to fix the first one.
-The lesson is the one the route fixes should have taught: fixing instances is how
-there came to be eight. There is now a check for the class, across every source
-file in both repos.
+```js
+try {
+  const rows = await get('/api/agent/sessions');
+  if (Array.isArray(rows)) return rows.find(r => r.id === sessionId) ?? null;
+} catch { /* fall through to the single-session route */ }
+```
+
+A list that did not contain the id returned `null` and never fell through. And
+`/api/agent/sessions` filters on `linear_uuid IS NOT NULL` by design — so for
+any session with no Linear issue behind it, carry-forward carried nothing, and
+because the Hub's POST is a full replace, a status-only update then **blanked the
+gate question**.
+
+Real cards were never affected: they have a `linear_uuid` and appear in the
+list. The runner's own reachability probe is exactly the shape that was.
+
+The comment justifying the collection — "the single-session route omits detail
+and url" — was true when written and stopped being true at piece11, when both
+routes started sharing `lib/card.mjs`.
+
+### 93 orphaned rows in the live database
+
+The test suite's cleanup used the same lookup, so it found nothing, deleted
+nothing, and reported success. `hub.test.mjs` had been failing 15 checks and
+leaking every row it created since the identity work — and it is not in the
+default run, so nobody saw it.
+
+Sixty of the 93 were created while chasing this. All removed through the DELETE
+route, after checking every one was under the reserved `zztest/` brand with no
+Linear issue behind it. 62 real cards untouched. A full run now leaves zero.
+
+`hub.test.mjs` is 167 passing, 0 failing — green for the first time since the
+identity work.
+
+### Seven more literal BOMs
+
+One was fixed and seven were left, including one in the file written to fix it.
+That is the lesson the route fixes should already have taught: fixing instances
+is how there came to be eight of them.
+
+There is now a check for the **class** — no invisible character in any `.mjs`,
+`.js`, `.html` or `.sql` file in either repo — and where one is genuinely
+needed it is built with `String.fromCharCode`.
+
+### And a fifth .env reader
+
+`attach-report.mjs` matched `LINEAR_API_KEY=` only at the start of a line, so it
+missed `export LINEAR_API_KEY=` — the same gap `doctor.mjs` had, in a file
+audited an hour earlier for exactly that.
+
 ## Checks
 
 | | before | after |
