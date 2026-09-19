@@ -1018,7 +1018,7 @@ async function chooseMachine(machine) {
   // the answer survives the next time you open the board here.
   rememberMachine(next);
   try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep what we have */ }
-  render();
+  renderBoard();
 }
 
 // ─── WHICH MACHINE THIS BROWSER IS ON ──────────────
@@ -1055,7 +1055,7 @@ async function assertMachine() {
   try {
     await api('/agent/working-from', { method: 'PUT', body: { machine: want } });
     heartbeats = await api('/agent/heartbeat');
-    render();
+    renderBoard();
   } catch (e) {
     // Worth one line, because the alternative is work quietly going elsewhere.
     toast(`Could not point work at ${want} — ${e.message}`);

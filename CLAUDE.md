@@ -240,7 +240,16 @@ node --test test/unit.test.mjs       # unit only, no network
 node --test test/invariants.test.mjs # the rules of the architecture, by section
 node --test test/identity.test.mjs   # §2, the one identity
 node --test test/grain.test.mjs      # the card/session split, and the projection
+node --test test/machine.test.mjs    # which machine you are at, and queue routing
+node --test test/handlers.test.mjs   # the board's own handlers (§14.5)
+node --test test/sql.test.mjs        # the pieces, against a production-shaped database
 ```
+
+**§14.5 is closed.** `render.test.mjs` mounts the board and asserts what it
+DREW; `handlers.test.mjs` mounts it and asserts what it DOES — which request
+went out, with what body, what it said afterwards, what state it left a button
+in when the call failed, and what it wrote to browser storage. It found a real
+bug on its first run: `chooseMachine` called `render()`, which does not exist.
 
 **Tests here are proved to bite.** Break the invariant deliberately, confirm
 the named test fails, restore, confirm green. A passing test that has never
