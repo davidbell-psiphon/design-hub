@@ -148,6 +148,35 @@ make it safe to attempt; they do not make it a good idea to attempt unannounced.
 
 ---
 
+## What the first pass missed
+
+The write-up above claimed both repos had been read. They had been *inventoried*;
+the reading was targeted. Asked directly whether everything found had been fixed,
+a proper sweep turned up four more things — three of them worse than anything in
+the original list.
+
+**Carry-forward was silently dropping the gate question.**  in
+ looked up one session by reading the whole collection, and the 
+sat inside the  — so a list not containing the id returned null and never
+fell through to the single-session route.  filters on
+, so for any session with no Linear issue behind it,
+carry-forward carried nothing, and the Hub POST being a full replace then blanked
+the prompt. Real cards were never affected; the runner’s own probe was exactly
+the shape that was.
+
+**93 orphaned rows in the live database.** The same lookup was used by the test
+suite’s cleanup, so it found nothing, deleted nothing and reported success. 60 of
+the 93 were created while chasing this. All removed, after checking every one was
+under the reserved  brand with no Linear issue; 62 real cards untouched.
+A full run now leaves zero.
+
+** had been failing 15 checks** since the identity work and is not in
+the default run, so nobody saw it. Now 167 passing, 0 failing.
+
+**Seven more literal BOMs**, including in the file written to fix the first one.
+The lesson is the one the route fixes should have taught: fixing instances is how
+there came to be eight. There is now a check for the class, across every source
+file in both repos.
 ## Checks
 
 | | before | after |
