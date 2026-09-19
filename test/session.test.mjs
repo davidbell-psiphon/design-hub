@@ -1111,8 +1111,12 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
   // was before piece6 ran, so none of them can be present: migration-003
   // reads the column piece6 adds, and piece11/migration-004 move the data out
   // of the table this is about entirely.
+  // piece13 is in this list for the same reason piece11 is: it ALTERs `cards`,
+  // which does not exist yet at this point in history. It has nothing to do
+  // with piece6's merge.
   const AFTER_006 = ['piece6-schema.sql', 'migration-003-identity.sql',
-                     'piece11-schema.sql', 'migration-004-grain.sql'];
+                     'piece11-schema.sql', 'migration-004-grain.sql',
+                     'piece13-schema.sql'];
 
   // `agent_sessions` directly, because `cards` does not exist at this point in
   // history and the shared helpers read it. That is the point of the block.

@@ -272,3 +272,122 @@ describe('controls behave like Material controls', () => {
       'the primary button fill stopped taking its colour from the brand section');
   });
 });
+
+describe('the Figma paths editor is usable without a mouse or a screen', () => {
+  // The board's first modal. A dialog is the easiest thing to build
+  // inaccessibly — no role, no label, no way out but the mouse — and the one
+  // most worth getting right, because it is now the only way to change where
+  // design work lands.
+
+  test('it announces itself as a dialog', () => {
+    const at = css.indexOf('id="figma-scrim"');
+    assert.ok(at >= 0, 'the editor is gone');
+    // Sliced FORWARD from the scrim by a fixed amount. 'modal-head' also names
+    // a CSS rule far above the markup, so an unanchored indexOf ends the slice
+    // before it starts and hands back an empty string that matches nothing.
+    const block = css.slice(at, at + 700);
+    assert.match(block, /role="dialog"/);
+    assert.match(block, /aria-modal="true"/);
+    assert.match(block, /aria-labelledby="figma-title"/,
+      'the dialog has no accessible name, so it is announced as "dialog"');
+  });
+
+  test('and the element it points at exists', () => {
+    // aria-labelledby naming an id that is not there is worse than no label:
+    // it looks correct in the markup and announces nothing.
+    assert.match(css, /id="figma-title"/);
+  });
+
+  test('the close button says what it does', () => {
+    // Its text is a multiplication sign. Without a label it is announced as
+    // "times, button".
+    const at = css.indexOf('class="modal-x"');
+    assert.ok(at >= 0, 'the close button is gone');
+    assert.match(css.slice(at, css.indexOf('>', at)), /aria-label="Close"/);
+  });
+
+  test('there are three ways out, not one', () => {
+    // A modal you can only leave with a precise click on a small glyph is a
+    // trap on a phone and with a keyboard.
+    assert.match(css, /onclick="closeFigmaPaths\(\)"/, 'no close button');
+    assert.match(css, /if \(event\.target === this\) closeFigmaPaths\(\)/,
+      'clicking the backdrop does not close it');
+    assert.match(css, /closeFigmaPaths\(\); return;/, 'Escape does not close it');
+  });
+
+  test('clicking inside the dialog does not close it', () => {
+    // The backdrop handler fires for every click that bubbles to it, so it has
+    // to check the target — otherwise typing in a field and releasing the
+    // mouse over the edge throws away what you were doing.
+    const at = css.indexOf('id="figma-scrim"');
+    const open = css.slice(at, css.indexOf('>', at));
+    assert.match(open, /event\.target === this/);
+  });
+
+  test('every field the editor draws is labelled', () => {
+    // They are bare inputs in a grid — no <label> elements, and a placeholder
+    // is not a label. aria-label is what makes them announceable.
+    const body = css.slice(css.indexOf('function renderFigmaPaths'),
+                           css.indexOf('function splitPairKey') >= 0
+                             ? css.indexOf('function splitPairKey')
+                             : css.indexOf('async function putFigmaDefault'));
+    const inputs = [...body.matchAll(/<(input|select)\b[^>]*>/g)].map((m) => m[0]);
+    assert.ok(inputs.length >= 6, `only found ${inputs.length} fields to check`);
+    for (const el of inputs) {
+      assert.match(el, /aria-label=/, `a field has no accessible name: ${el.slice(0, 90)}`);
+    }
+  });
+
+  test('the row builders label their fields with the pair they belong to', () => {
+    // Six identical "file key" fields on one screen are six fields called
+    // "file key". The team and brand are what tell them apart.
+    const row = css.slice(css.indexOf('function figmaRow'), css.indexOf('function figmaOverrideRow'));
+    for (const m of row.matchAll(/aria-label="([^"]*)"/g)) {
+      assert.match(m[1], /\$\{who\}|\$\{esc\(d\./,
+        `"${m[1]}" is the same on every row, so the rows are indistinguishable`);
+    }
+  });
+
+  test('the editor honours reduced motion', () => {
+    // It animates in. M3E motion is the part people notice and the part that
+    // makes some people ill.
+    // There are two of these blocks — the global one and the modal own one —
+    // so this asserts the rule exists rather than that it sits in the first.
+    assert.ok(css.includes('.modal { animation: none; }'),
+      'the modal animates regardless of what the reader asked for');
+  });
+
+  test('it fits a phone', () => {
+    // The row is a four-column grid on a desktop. Left alone it is unusable at
+    // 360px, which is where the board already gets used.
+    const at = css.indexOf('@media (max-width: 720px)');
+    const block = css.slice(at, css.indexOf('}\n', css.indexOf('.fp-row', at)));
+    assert.match(block, /\.fp-row \{ grid-template-columns: 1fr/,
+      'the editor keeps its desktop grid on a phone');
+  });
+
+  test('its inputs clear the touch-target floor', () => {
+    const rule = css.slice(css.indexOf('.fp-input {'), css.indexOf('}', css.indexOf('.fp-input {')));
+    const m = rule.match(/min-height:\s*(\d+)px/);
+    assert.ok(m, '.fp-input has no min-height');
+    assert.ok(Number(m[1]) >= 24, `.fp-input is ${m[1]}px, under the WCAG 2.5.8 floor`);
+  });
+
+  test('it defines no focus ring of its own', () => {
+    // The global :focus-visible rule already draws one. A second definition is
+    // a second thing to forget, and `var(--focus)` — which does not exist —
+    // was in here once and silently drew nothing.
+    assert.ok(!/\.fp-input:focus-visible/.test(css),
+      'the editor redefines its own focus ring');
+    assert.ok(!css.includes('var(--focus)'),
+      'var(--focus) is not a token that exists, so the rule paints nothing');
+  });
+
+  test('the editor sits above the board, and the board cannot be reached past it', () => {
+    const modal = css.slice(css.indexOf('.modal-scrim {'), css.indexOf('}', css.indexOf('.modal-scrim {')));
+    const sidebar = css.slice(css.indexOf('.sidebar { position: fixed'));
+    const modalZ = Number((modal.match(/z-index:\s*(\d+)/) || [])[1]);
+    const sidebarZ = Number((sidebar.match(/z-index:\s*(\d+)/) || [])[1]);
+    assert.ok(modalZ > sidebarZ, `the modal (${modalZ}) is under the sidebar (${sidebarZ})`);
+  });
+});

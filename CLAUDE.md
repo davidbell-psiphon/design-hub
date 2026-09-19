@@ -279,6 +279,7 @@ node --test test/grain.test.mjs      # the card/session split, and the projectio
 node --test test/machine.test.mjs    # which machine you are at, and queue routing
 node --test test/handlers.test.mjs   # the board's own handlers (§14.5)
 node --test test/figma.test.mjs      # Figma paths: defaults, overrides, ownership
+node --test test/a11y.test.mjs       # tokens, contrast, focus, the editor dialog
 node --test test/sql.test.mjs        # the pieces, against a production-shaped database
 ```
 

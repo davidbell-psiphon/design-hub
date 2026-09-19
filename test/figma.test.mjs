@@ -25,7 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  freshDb, env, call, issue, stubLinear, readLinear, one,
+  freshDb, env, call, issue, stubLinear, readLinear, one, PIECES,
 } from './helpers.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -278,5 +278,111 @@ describe('the board can reach all of it', () => {
     const handler = html.slice(html.indexOf("if (e.key !== 'Escape') return;"));
     assert.ok(handler.indexOf('closeFigmaPaths()') < handler.indexOf('closeMenu()'),
       'Escape closes the menu before the modal');
+  });
+});
+
+describe('who may read and change a Figma path', () => {
+  // Access configured. Both halves present is what turns enforcement on —
+  // with neither, the Hub runs open, exactly as it did before Access existed.
+  const GUARDED = { ACCESS_TEAM: 'testteam', ACCESS_AUD: 'aud-tag-1234' };
+
+  async function guarded() {
+    const db = freshDb();
+    const e = env(db, GUARDED);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await call(e, 'POST', '/api/read-linear', undefined, SECRET);
+    return { db, e };
+  }
+
+  test('the runner can read them with the agent secret', async () => {
+    // hub.mjs sends X-Agent-Secret and has no Access session. If this route
+    // stops accepting it, every run silently falls back to routing.json and
+    // every edit made on the board stops taking effect.
+    const { e } = await guarded();
+    const res = await call(e, 'GET', '/api/figma-paths', undefined, SECRET);
+    assert.equal(res.status, 200);
+    assert.ok((await res.json()).defaults.length > 0);
+  });
+
+  test('an anonymous browser cannot read them', async () => {
+    const { e } = await guarded();
+    assert.equal((await call(e, 'GET', '/api/figma-paths')).status, 403);
+  });
+
+  test('nor write one', async () => {
+    const { e } = await guarded();
+    const res = await call(e, 'PUT', '/api/figma-paths',
+      { team: 'Forge', brand: 'forge', fileKey: 'SNEAKY' });
+    assert.equal(res.status, 403);
+  });
+
+  test('nor delete one', async () => {
+    const { e } = await guarded();
+    assert.equal((await call(e, 'DELETE', '/api/figma-paths?team=Forge&brand=forge')).status, 403);
+  });
+
+  test('nor set a per-card override', async () => {
+    const { e } = await guarded();
+    assert.equal((await call(e, 'PATCH', '/api/agent/session/RYV-84/figma',
+      { fileKey: 'SNEAKY' })).status, 403);
+  });
+
+  test('a refused write changes nothing', async () => {
+    // A 403 that still wrote would be the worst of both.
+    const { e, db } = await guarded();
+    await call(e, 'PUT', '/api/figma-paths', { team: 'Forge', brand: 'forge', fileKey: 'SNEAKY' });
+    const row = db.prepare(`SELECT file_key FROM figma_paths WHERE team='Forge' AND brand='forge'`).get();
+    assert.equal(row.file_key, 'yAeyC9MEWstRdafKqHRwjA');
+  });
+
+  test('a wrong secret is not a secret', async () => {
+    const { e } = await guarded();
+    const res = await call(e, 'GET', '/api/figma-paths', undefined, { 'X-Agent-Secret': 'not-it' });
+    assert.equal(res.status, 403);
+  });
+});
+
+describe('deploying the Worker before the schema', () => {
+  // DEPLOY.md claims this costs you the editor and not the board. Unlike
+  // piece12 it is not engineered to be order-free, so the claim is narrower —
+  // and a claim in a deploy doc is worth checking rather than believing.
+  const WITHOUT_13 = PIECES.filter((p) => p !== 'piece13-schema.sql');
+
+  async function old() {
+    const db = freshDb(WITHOUT_13);
+    const e = env(db);
+    stubLinear([issue({ identifier: 'RYV-84' })]);
+    await call(e, 'POST', '/api/read-linear', undefined, SECRET);
+    return { db, e };
+  }
+
+  test('the board still loads every route it needs', async () => {
+    const { e } = await old();
+    for (const path of ['/api/brands', '/api/agent/sessions', '/api/reader/teams',
+                        '/api/agent/heartbeat']) {
+      const res = await call(e, 'GET', path, undefined, SECRET);
+      assert.equal(res.status, 200, `${path} broke without piece13`);
+    }
+  });
+
+  test('the runner still gets its queue', async () => {
+    // The one that matters most: a Worker deployed early must not stop work.
+    const { e } = await old();
+    assert.equal((await call(e, 'GET', '/api/agent/queue', undefined, SECRET)).status, 200);
+  });
+
+  test('and an agent can still post a session', async () => {
+    const { e } = await old();
+    const res = await call(e, 'POST', '/api/agent/session', {
+      session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'active',
+    }, SECRET);
+    assert.equal(res.status, 200);
+  });
+
+  test('only the Figma routes fail, and they fail rather than lying', async () => {
+    const { e } = await old();
+    const res = await call(e, 'GET', '/api/figma-paths', undefined, SECRET);
+    assert.equal(res.status, 500,
+      'a missing table answered 200, so the board would show no paths and call that the truth');
   });
 });

@@ -1214,8 +1214,8 @@ function figmaRow(d, i) {
     <input class="fp-input" id="fp-page-${i}" value="${esc(d.page || '')}"
            placeholder="page or YYYY-MM" aria-label="Page for ${who}">
     <div class="fp-acts">
-      <button class="btn" onclick="saveFigmaDefault(${i})">Save</button>
-      <button class="btn btn-reset" onclick="removeFigmaDefault(${i})"
+      <button class="btn" onclick="saveFigmaDefault(${i}, this)">Save</button>
+      <button class="btn btn-reset" onclick="removeFigmaDefault(${i}, this)"
               title="An unmapped pair stops a run rather than guessing a destination">Remove</button>
     </div>
     <input class="fp-input" id="fp-fkey-${i}" value="${esc(d.fileKey || '')}"
@@ -1234,8 +1234,8 @@ function figmaOverrideRow(o) {
     <input class="fp-input" id="fo-page-${id}" value="${esc(o.page || '')}"
            placeholder="page" aria-label="Page for ${esc(o.id)}">
     <div class="fp-acts">
-      <button class="btn" onclick="saveFigmaOverride('${id}')">Save</button>
-      <button class="btn btn-reset" onclick="clearFigmaOverride('${id}')"
+      <button class="btn" onclick="saveFigmaOverride('${id}', this)">Save</button>
+      <button class="btn btn-reset" onclick="clearFigmaOverride('${id}', this)"
               title="Back to this card's team default">Clear</button>
     </div>
   </div>`;
@@ -1268,7 +1268,7 @@ function renderFigmaPaths() {
         <input class="fp-input" id="fp-new-team" placeholder="Linear team" aria-label="New team">
         <input class="fp-input" id="fp-new-brand" placeholder="brand" aria-label="New brand">
         <input class="fp-input" id="fp-new-page" placeholder="page" aria-label="New page">
-        <div class="fp-acts"><button class="btn btn-primary" onclick="addFigmaDefault()">Add</button></div>
+        <div class="fp-acts"><button class="btn btn-primary" onclick="addFigmaDefault(this)">Add</button></div>
         <input class="fp-input" id="fp-new-fkey" placeholder="file key" aria-label="New file key"
                style="grid-column: 2 / -1">
       </div>
@@ -1289,7 +1289,7 @@ function renderFigmaPaths() {
         </select>
         <input class="fp-input" id="fo-new-fkey" placeholder="file key" aria-label="Override file key">
         <input class="fp-input" id="fo-new-page" placeholder="page" aria-label="Override page">
-        <div class="fp-acts"><button class="btn btn-primary" onclick="addFigmaOverride()">Add</button></div>
+        <div class="fp-acts"><button class="btn btn-primary" onclick="addFigmaOverride(this)">Add</button></div>
       </div>
     </div>`;
 }
@@ -1313,28 +1313,34 @@ async function putFigmaDefault(team, brand, file, fileKey, page, btn) {
 // The pair comes from the array rather than from a field, because it is the
 // primary key: editing it in place would silently write a second row and leave
 // the first behind.
-function saveFigmaDefault(i) {
+function saveFigmaDefault(i, btn) {
   const d = ((figmaPaths && figmaPaths.defaults) || [])[i];
   if (!d) return;
   const val = (p) => (document.getElementById(`fp-${p}-${i}`) || {}).value || '';
-  putFigmaDefault(d.team, d.brand, val('file'), val('fkey'), val('page'), event && event.target);
+  // Returned, not fired and forgotten: a caller that cannot await this cannot
+  // know when the save finished, and neither can a test.
+  return putFigmaDefault(d.team, d.brand, val('file'), val('fkey'), val('page'), btn);
 }
 
-function addFigmaDefault() {
+function addFigmaDefault(btn) {
   const team = (document.getElementById('fp-new-team').value || '').trim();
   const brand = (document.getElementById('fp-new-brand').value || '').trim();
   if (!team || !brand) { toast('A team and a brand are both needed'); return; }
-  putFigmaDefault(team, brand, '',
+  return putFigmaDefault(team, brand, '',
     document.getElementById('fp-new-fkey').value,
-    document.getElementById('fp-new-page').value, event && event.target);
+    document.getElementById('fp-new-page').value, btn);
 }
 
-async function removeFigmaDefault(i) {
+async function removeFigmaDefault(i, btn) {
   const d = ((figmaPaths && figmaPaths.defaults) || [])[i];
   if (!d) return;
-  if (!confirm(`Remove the Figma path for ${d.team} · ${d.brand}?\n\n` +
+  // Guarded the way the other destructive control on this board is: a bare
+  // `confirm` throws where the host has not got one, and takes the handler
+  // down with it rather than merely skipping the question.
+  const ask = `Remove the Figma path for ${d.team} · ${d.brand}?\n\n` +
     'Work for that pair will then stop and say it has no destination, rather ' +
-    'than landing somewhere plausible.')) return;
+    'than landing somewhere plausible.';
+  if (typeof window.confirm === 'function' && !window.confirm(ask)) return;
   try {
     await api(`/figma-paths?team=${encodeURIComponent(d.team)}&brand=${encodeURIComponent(d.brand)}`,
       { method: 'DELETE' });
@@ -1359,27 +1365,27 @@ async function putFigmaOverride(id, fileKey, page, btn) {
   }
 }
 
-function saveFigmaOverride(id) {
-  putFigmaOverride(id,
+function saveFigmaOverride(id, btn) {
+  return putFigmaOverride(id,
     (document.getElementById(`fo-fkey-${id}`) || {}).value || '',
     (document.getElementById(`fo-page-${id}`) || {}).value || '',
-    event && event.target);
+    btn);
 }
 
 // Clearing both fields is how a card goes back to its default — there is no
 // separate route for it, because a control that only ever does one thing is
 // how this board grew its ad-hoc buttons.
-function clearFigmaOverride(id) {
-  putFigmaOverride(id, '', '', event && event.target);
+function clearFigmaOverride(id, btn) {
+  return putFigmaOverride(id, '', '', btn);
 }
 
-async function addFigmaOverride() {
+async function addFigmaOverride(btn) {
   const id = document.getElementById('fo-new-id').value;
   if (!id) { toast('Choose a card first'); return; }
   const fileKey = document.getElementById('fo-new-fkey').value;
   const page = document.getElementById('fo-new-page').value;
   if (!fileKey.trim() && !page.trim()) { toast('An override needs a file key or a page'); return; }
-  await putFigmaOverride(id, fileKey, page, event && event.target);
+  await putFigmaOverride(id, fileKey, page, btn);
 }
 
 // Tapping a team narrows the board to it; the chip and "All teams" both undo
