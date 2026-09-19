@@ -29,7 +29,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
 const { agentList, workingFrom, queueDestination, heartbeatStatus,
-        machineToAssert } = board;
+        machineToAssert, agentLine } = board;
 
 const SECRET = { 'X-Agent-Secret': 's' };
 
@@ -457,6 +457,65 @@ describe('a browser says which machine it is on', () => {
   test('with no machines at all it says nothing', () => {
     assert.equal(machineToAssert([], 'DaveBellJrII'), null);
     assert.equal(machineToAssert(null, 'DaveBellJrII'), null);
+  });
+});
+
+describe('chosen and checked-in are different facts, and the board says which', () => {
+  // These two get confused constantly, including by the person reading the
+  // board. A chosen machine that has gone quiet is NOT disconnected: the work
+  // is reserved for it and will wait until something on it wakes up. Saying
+  // "may not be running right now" for that case answers a question nobody
+  // asked and reads as a fault.
+  const NOW = Date.parse('2026-09-19T04:00:00Z');
+  const ago = (m) => new Date(NOW - m * 60000).toISOString().replace('T', ' ').slice(0, 19);
+  const m = (o) => [{ machine: 'DaveBellJrII', kind: 'local',
+    capabilities: ['research', 'design', 'figma', 'mobbin'],
+    last_seen: ago(o.seen), selected_at: o.sel === undefined ? null : ago(o.sel) }];
+
+  test('chosen and fresh says it is ready', () => {
+    const l = agentLine(m({ seen: 3, sel: 3 }), NOW);
+    assert.equal(l.chosen, true);
+    assert.match(l.text, /work goes here, ready now/);
+  });
+
+  test('chosen and quiet still says work goes here', () => {
+    // The exact state that read as a fault: selected, nothing checked in for
+    // half an hour because nothing on that machine runs on a schedule.
+    const l = agentLine(m({ seen: 33, sel: 33 }), NOW);
+    assert.match(l.text, /work goes here/);
+    assert.ok(!/may not be running/.test(l.text),
+      'a chosen machine was reported as possibly not running, which is the wrong question');
+    assert.match(l.text, /33m/, 'it stopped saying how long it had been');
+  });
+
+  test('chosen and long gone says what to do about it', () => {
+    const l = agentLine(m({ seen: 60 * 24 * 20, sel: 60 }), NOW);
+    assert.match(l.text, /20d/);
+    assert.match(l.text, /here\.bat|choose another machine/);
+  });
+
+  test('not chosen keeps the old wording, because the question is different', () => {
+    // With nothing selected, work goes to whoever asks first — so whether
+    // anything is listening really is the only thing worth saying.
+    const l = agentLine(m({ seen: 3 }), NOW);
+    assert.equal(l.chosen, false);
+    assert.match(l.text, /connected — checked in 3m ago/);
+
+    const stale = agentLine(m({ seen: 33 }), NOW);
+    assert.match(stale.text, /may not be running right now/);
+  });
+
+  test('no machines at all is its own state', () => {
+    assert.equal(agentLine([], NOW).state, 'never');
+    assert.match(agentLine([], NOW).text, /no machine has ever connected/);
+  });
+
+  test('freshness is still reported even when the headline is reassuring', () => {
+    // The dot keeps the real state, so a machine that has genuinely stopped is
+    // still visible rather than hidden behind "work goes here".
+    assert.equal(agentLine(m({ seen: 33, sel: 33 }), NOW).state, 'stale');
+    assert.equal(agentLine(m({ seen: 3, sel: 3 }), NOW).state, 'fresh');
+    assert.equal(agentLine(m({ seen: 60 * 24 * 20, sel: 60 }), NOW).state, 'gone');
   });
 });
 

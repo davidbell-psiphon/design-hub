@@ -795,6 +795,61 @@ function machineToAssert(rows, remembered) {
   return remembered;
 }
 
+// What the board should say about the machine it speaks for.
+//
+// Two facts get confused here constantly, including by the person reading the
+// board, so this separates them on purpose:
+//
+//   chosen        work goes to this machine. Does not expire, and is true the
+//                 moment you pick it or run design-local on it.
+//   checked in    something on that machine said so recently. Decays, because
+//                 a check-in is a moment and not a state.
+//
+// A chosen machine that has not checked in lately is NOT disconnected — the
+// work is still reserved for it. It just will not start until something on
+// that machine wakes up and asks for it. Saying "may not be running right now"
+// for that case answers a question nobody asked and reads as a fault.
+//
+// So the headline is whichever fact the reader needs, and the other one is the
+// qualifier.
+function agentLine(rows, now) {
+  var s = heartbeatStatus(rows, now);
+  if (s.state === 'never') {
+    return { state: 'never', chosen: false,
+             text: 'no machine has ever connected — local work will not run' };
+  }
+
+  var caps = (s.row.capabilities || []).length
+    ? s.row.capabilities.join(', ') : 'research only';
+  var mins = s.minsAgo;
+  var ago = mins < 90 ? mins + 'm'
+          : mins < 60 * 48 ? Math.floor(mins / 60) + 'h'
+          : Math.floor(mins / 1440) + 'd';
+
+  // Not chosen: freshness is the only thing to report, and the old wording is
+  // right, because the question really is whether anything is listening.
+  if (!s.chosen) {
+    return { state: s.state, chosen: false, machine: s.row.machine, text:
+      s.state === 'fresh'
+        ? s.row.machine + ' connected — checked in ' + ago + ' ago (' + caps + ')'
+        : s.state === 'stale'
+        ? s.row.machine + ' last checked in ' + ago + ' ago — may not be running right now'
+        : s.row.machine + ' has not checked in for ' + ago + ' — presumed offline' };
+  }
+
+  // Chosen: lead with the fact that is true, and qualify it with the one that
+  // decays. "Ready" rather than "connected", because nothing is connected to
+  // anything — the Hub never reaches out, and this is a machine that asked.
+  return { state: s.state, chosen: true, machine: s.row.machine, text:
+    s.state === 'fresh'
+      ? s.row.machine + ' — work goes here, ready now (' + caps + ')'
+      : s.state === 'stale'
+      ? s.row.machine + ' — work goes here. Nothing has checked in for ' + ago +
+        ', so a run will wait until something on it wakes up'
+      : s.row.machine + ' — work goes here, but nothing has checked in for ' + ago +
+        '. Run here.bat on it, or choose another machine' };
+}
+
 // Where a queued run will actually be picked up, in one sentence.
 //
 // There are three answers and they are genuinely different, which is why this

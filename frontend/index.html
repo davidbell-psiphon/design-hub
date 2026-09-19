@@ -946,29 +946,30 @@ function renderConsole() {
 // runner.mjs, which posts here on every wake, whether or not it found
 // anything queued.
 function localAgentLine() {
-  const s = heartbeatStatus(heartbeats);
+  const line = agentLine(heartbeats);
 
-  if (s.state === 'never') {
+  if (line.state === 'never') {
     return `<div class="cn-agent cn-agent-never" title="No machine has ever posted to POST /api/agent/heartbeat">
       <span class="cn-agent-dot"></span>
       no local agent has ever connected — Figma/Mobbin work will not run
     </div>`;
   }
 
-  const caps = (s.row.capabilities || []).length ? s.row.capabilities.join(', ') : 'research only';
-  const text = s.state === 'fresh'
-    ? `${esc(s.row.machine)} connected — checked in ${timeAgo(s.row.last_seen)} ago (${esc(caps)})`
-    : s.state === 'stale'
-    ? `${esc(s.row.machine)} last checked in ${timeAgo(s.row.last_seen)} ago — may not be running right now`
-    : `${esc(s.row.machine)} hasn't checked in for ${timeAgo(s.row.last_seen)} — presumed offline`;
+  // A chosen machine reads as fine even when it has gone quiet, because it IS
+  // fine: the work is reserved for it and will wait. The dot still shows how
+  // long it has been, so a machine that has genuinely stopped is still visible.
+  const tone = line.chosen && line.state !== 'gone' ? 'fresh' : line.state;
+  const title = line.chosen
+    ? 'Queued work is reserved for this machine'
+    : 'Local machine that can run Figma/Mobbin design work';
 
   // One machine and nothing chosen is the old board exactly: a line, no list,
   // nothing to decide. The picker only appears once there is a choice to make.
   const list = agentList(heartbeats);
   const needsPicker = list.length > 1 || list.some(a => a.selected);
 
-  return `<div class="cn-agent cn-agent-${s.state}" title="Local machine that can run Figma/Mobbin design work">
-    <span class="cn-agent-dot"></span> ${text}
+  return `<div class="cn-agent cn-agent-${tone}" title="${title}">
+    <span class="cn-agent-dot cn-dot-${line.state}"></span> ${esc(line.text)}
   </div>` + (needsPicker ? machinePicker(list) : '');
 }
 
