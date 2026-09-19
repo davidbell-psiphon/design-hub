@@ -367,3 +367,113 @@ describe('a subroute is never mistaken for a session id', () => {
       `these session routes are not anchored at the start: ${loose.join(', ')}`);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Stop on a stage that never started puts it back to NOT STARTED
+//
+// The trigger creates the session row with ensureSession(), and the table's
+// default status is 'active'. Stop used to clear requested_at and leave that
+// status standing — so press-then-stop left a session saying 'active' for ever
+// with nothing behind it: no agent post, no gate, nothing running. FOR-48's
+// design stage sat exactly like that in production. §3 says not-started is the
+// ABSENCE of a row, so that is what Stop restores.
+// ──────────────────────────────────────────────────────────────────────
+
+describe('Stop on a never-started stage removes the phantom row', () => {
+  const CARD = 'RYV-84';
+  const AGENT = { 'X-Agent-Secret': 's' };
+  const sessionsOf = (db, key) =>
+    db.prepare(`SELECT * FROM stage_sessions WHERE issue_key = ? ORDER BY stage`).all(key);
+
+  async function board() {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: CARD })]);
+    await readLinear(e);
+    return { db, e, card: `/api/agent/session/${CARD}` };
+  }
+
+  test('press then Stop leaves no session row behind', async () => {
+    const { db, e, card } = await board();
+    assert.equal((await call(e, 'POST', `${card}/trigger`, { stage: 'design' })).status, 200);
+    assert.equal(sessionsOf(db, CARD).length, 1, 'the trigger did not create the row');
+    assert.equal(sessionsOf(db, CARD)[0].status, 'active', 'fixture assumption: default status is active');
+
+    assert.equal((await call(e, 'DELETE', `${card}/trigger`)).status, 200);
+    assert.equal(sessionsOf(db, CARD).length, 0,
+      "a stage nobody ever ran is still on the card as 'active'");
+  });
+
+  test('and the agent reads it as not started, not as active', async () => {
+    const { e, card } = await board();
+    await call(e, 'POST', `${card}/trigger`, { stage: 'design' });
+    await call(e, 'DELETE', `${card}/trigger`);
+    const res = await call(e, 'GET', `${card}`, undefined, AGENT);
+    // The card itself still exists, so the read answers — but with no session
+    // on it, the projection must not carry a phantom 'active' design stage.
+    const body = await res.json();
+    assert.ok(!(body.stages && body.stages.design && body.stages.design.status === 'active'),
+      `the wire still shows design as active: ${JSON.stringify(body.stages)}`);
+  });
+
+  test('the stage can be pressed again straight after', async () => {
+    const { e, card } = await board();
+    await call(e, 'POST', `${card}/trigger`, { stage: 'design' });
+    await call(e, 'DELETE', `${card}/trigger`);
+    assert.equal((await call(e, 'POST', `${card}/trigger`, { stage: 'design' })).status, 200);
+  });
+
+  test('a row an agent has posted to is kept, not deleted', async () => {
+    // The agent posting 'active' is what makes it a real run. Everything an
+    // agent or a person has touched keeps its history.
+    const { db, e, card } = await board();
+    await call(e, 'POST', `${card}/trigger`, { stage: 'research' });
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'active' }, AGENT);
+    await call(e, 'DELETE', `${card}/trigger`);
+    const rows = sessionsOf(db, CARD);
+    assert.equal(rows.length, 1, 'Stop deleted a session an agent had written to');
+    assert.equal(rows[0].requested_at, null, 'Stop did not clear the queue entry');
+  });
+
+  test('a row with a gate answer is kept', async () => {
+    const { db, e, card } = await board();
+    await call(e, 'POST', `${card}/trigger`, { stage: 'research' });
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'waiting',
+        prompt: 'Which?', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] }, AGENT);
+    // The route's field is response_option_id — the first draft of this test
+    // sent option_id, got a 400 nothing checked, and then watched the row be
+    // deleted as a phantom: a test failing for the reason it exists to catch.
+    const answered = await call(e, 'PATCH', `${card}/respond`, { response_option_id: 'a' });
+    assert.equal(answered.status, 200, await answered.text());
+    await call(e, 'DELETE', `${card}/trigger`);
+    assert.equal(sessionsOf(db, CARD).length, 1, 'Stop deleted a decided gate');
+    assert.equal(sessionsOf(db, CARD)[0].response_option_id, 'a', 'the decision was lost');
+  });
+
+  test('an errored row is reset, as before, not deleted', async () => {
+    const { db, e, card } = await board();
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'error',
+        prompt: 'Research failed — boom' }, AGENT);
+    await call(e, 'DELETE', `${card}/trigger`);
+    const rows = sessionsOf(db, CARD);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'waiting');
+    assert.equal(rows[0].prompt, null);
+  });
+
+  test('a queued stage next to a finished one: only the phantom goes', async () => {
+    // Research is done (agent posted, stage-done), design was pressed and
+    // stopped. The finished research row must survive its neighbour's removal.
+    const { db, e, card } = await board();
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'done' }, AGENT);
+    await call(e, 'POST', `${card}/trigger`, { stage: 'design' });
+    await call(e, 'DELETE', `${card}/trigger`);
+    const rows = sessionsOf(db, CARD);
+    assert.deepEqual(rows.map((r) => r.stage), ['research'],
+      `expected only research to remain, got ${rows.map((r) => r.stage + ':' + r.status)}`);
+  });
+});

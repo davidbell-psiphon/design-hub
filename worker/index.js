@@ -1107,6 +1107,30 @@ async function route(request, env) {
       ).bind(key).first();
       if (!exists) return err('not found', 404);
 
+      // A stage that was asked for and never started goes back to NOT STARTED,
+      // which per §3 is the absence of a row — so the row goes.
+      //
+      // The trigger creates the row with ensureSession(), and the table's
+      // default status is 'active'. Stop used to clear requested_at and leave
+      // that status standing, so a press-then-stop left a session that said
+      // 'active' for ever with nothing behind it: no agent had posted, no gate
+      // had opened, nothing was running. FOR-48's design stage sat exactly like
+      // that. The board read it as idle, so nobody saw it — but `hub get`, the
+      // runner's own decision reads and the wire all carried a run that never
+      // was.
+      //
+      // Only a row nothing ever wrote to qualifies: no agent post, no gate
+      // answer, still on the default status. Anything an agent or a person has
+      // touched keeps its history and is handled below, as before.
+      await env.DB.prepare(
+        `DELETE FROM stage_sessions
+          WHERE issue_key = ?
+            AND status = 'active'
+            AND agent_posted_at IS NULL
+            AND response IS NULL
+            AND responded_at IS NULL`
+      ).bind(key).run();
+
       // Both CASEs read each row as it was, so clearing the prompt keys off
       // the old status rather than the one being written in the same statement.
       await env.DB.prepare(
