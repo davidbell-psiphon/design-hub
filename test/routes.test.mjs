@@ -13,10 +13,14 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {  freshDb, env, call, agentPost, readLinear, issue, stubLinear, rows, applyPieces, wire, session, sessionsOf,
 } from './helpers.mjs';
 
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CARD = 'RYV-84';
 const AGENT_ID = 'ryve/ryv-84/design';
 
@@ -236,5 +240,130 @@ describe('the CORS preflight', () => {
     for (const m of ['GET', 'POST', 'PATCH', 'DELETE']) {
       assert.match(allowed, new RegExp(m), m + ' is not allowed by the preflight');
     }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Route matching — a subroute must never fall into a catch-all
+//
+// `route()` is one long function of sequential `if`s, so which handler answers
+// a request depends on DECLARATION ORDER, and nothing enforces that order.
+// Two of those handlers used to match the whole `/api/agent/session/` prefix:
+// the GET that answers as a session, and the DELETE that removes the card.
+//
+// The DELETE one was the dangerous half. resolveKey() parses an issue key out
+// of anything — `RYV-84/figma`, `RYV-84/skipp`, `RYV-84/anything/at/all` all
+// come back as `RYV-84` — so any DELETE under that prefix which was not caught
+// by an earlier block deleted the card and every session on it, and answered
+// `{ ok: true }`. Nothing did that, because every real DELETE subroute is
+// declared above it. "Correct as long as nobody adds a route below this line"
+// is not a property worth relying on when the failure is silent data loss.
+// ──────────────────────────────────────────────────────────────────────
+
+describe('a subroute is never mistaken for a session id', () => {
+  const CARD = 'RYV-84';
+
+  async function board() {
+    const db = freshDb();
+    const e = env(db);
+    stubLinear([issue({ identifier: CARD })]);
+    await readLinear(e);
+    return { db, e };
+  }
+
+  const alive = (db) =>
+    !!db.prepare(`SELECT issue_key FROM cards WHERE issue_key = ?`).get(CARD);
+
+  // Every subroute the Worker serves, plus shapes that do not exist. A DELETE
+  // to any of them must not destroy the card.
+  const SUBROUTES = ['figma', 'skip', 'setaside', 'dismiss', 'complete',
+                     'state', 'reopen', 'reassign', 'respond', 'trigger',
+                     'skipp', 'nonesuch', 'anything/at/all'];
+
+  for (const sub of SUBROUTES) {
+    test(`DELETE …/${sub} does not delete the card`, async () => {
+      const { db, e } = await board();
+      assert.ok(alive(db), 'fixture did not create the card');
+      await call(e, 'DELETE', `/api/agent/session/${CARD}/${sub}`, undefined,
+                 { 'X-Agent-Secret': 's' });
+      assert.ok(alive(db),
+        `DELETE …/${sub} destroyed the card and every session on it`);
+    });
+  }
+
+  test('and the real delete still works', async () => {
+    // The tightening is worthless if it also broke the route.
+    const { db, e } = await board();
+    const res = await call(e, 'DELETE', `/api/agent/session/${CARD}`, undefined,
+                           { 'X-Agent-Secret': 's' });
+    assert.equal(res.status, 200);
+    assert.ok(!alive(db), 'the card survived its own delete');
+  });
+
+  test('an id with slashes still deletes, because clients encode it', async () => {
+    const { db, e } = await board();
+    await call(e, 'DELETE',
+      '/api/agent/session/' + encodeURIComponent('ryve/ryv-84/design'),
+      undefined, { 'X-Agent-Secret': 's' });
+    assert.ok(!alive(db), 'the encoded agent id form stopped resolving');
+  });
+
+  test('the sessions go with the card, and only that card', async () => {
+    const { db, e } = await board();
+    await call(e, 'POST', '/api/agent/session',
+      { session_id: 'ryve/ryv-84/research', system: 'design-ai', status: 'active' },
+      { 'X-Agent-Secret': 's' });
+    await call(e, 'DELETE', `/api/agent/session/${CARD}`, undefined, { 'X-Agent-Secret': 's' });
+    const left = db.prepare(`SELECT COUNT(*) AS n FROM stage_sessions`).get().n;
+    assert.equal(left, 0, 'the sessions outlived the card they belonged to');
+  });
+
+  test('GET of a subroute does not answer as if it were a session', async () => {
+    // The GET catch-all carried an exclusion list — trigger, reassign,
+    // respond, dismiss — that had to grow by hand for every subroute added
+    // since, and had fallen six behind. It only held because all six are
+    // non-GET, which is a coincidence rather than a design.
+    const { e } = await board();
+    for (const sub of ['figma', 'skip', 'complete', 'state', 'nonesuch']) {
+      const res = await call(e, 'GET', `/api/agent/session/${CARD}/${sub}`,
+                             undefined, { 'X-Agent-Secret': 's' });
+      assert.notEqual(res.status, 200,
+        `GET …/${sub} was answered as the session for ${CARD}`);
+    }
+  });
+
+  test('a real session GET still answers', async () => {
+    const { e } = await board();
+    const res = await call(e, 'GET', `/api/agent/session/${CARD}`, undefined,
+                           { 'X-Agent-Secret': 's' });
+    assert.equal(res.status, 200);
+  });
+
+  test('neither route matches by bare prefix any more', () => {
+    // The structural half. A future `startsWith('/api/agent/session/')` on a
+    // GET or DELETE puts the trap straight back, and no behavioural test above
+    // would notice until somebody added the subroute that falls into it.
+    const src = fs.readFileSync(path.join(ROOT, 'worker/index.js'), 'utf8');
+    for (const method of ['GET', 'DELETE']) {
+      const bad = new RegExp(
+        `method === '${method}' && path\\.startsWith\\('/api/agent/session/'\\)`);
+      assert.ok(!bad.test(src),
+        `the ${method} handler matches the whole session prefix again`);
+    }
+  });
+
+  test('every session subroute is anchored at both ends', () => {
+    // `path.match(/\/respond$/)` matches any path ending in /respond,
+    // anywhere. Anchoring both ends is what makes the route mean one thing.
+    const src = fs.readFileSync(path.join(ROOT, 'worker/index.js'), 'utf8');
+    const loose = [...src.matchAll(/path\.match\(\/([^/\n]*(?:\\\/[^/\n]*)*)\/\)/g)]
+      .map((m) => m[1])
+      .filter((re) => re.includes('respond') || re.includes('trigger') ||
+                      re.includes('skip') || re.includes('dismiss') ||
+                      re.includes('setaside') || re.includes('complete') ||
+                      re.includes('reassign'))
+      .filter((re) => !re.startsWith('^'));
+    assert.deepEqual(loose, [],
+      `these session routes are not anchored at the start: ${loose.join(', ')}`);
   });
 });

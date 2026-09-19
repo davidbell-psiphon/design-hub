@@ -93,6 +93,18 @@ async function closeRound(env, key, stage, row, note) {
 // for as long as it sat there. A stage the Hub will queue is a stage something
 // has to run, so it is out of this list until something does. Requesting it
 // now answers 400, which is the honest response and the one the board can show.
+// A session id on its own, with no subroute after it.
+//
+// Ids are multi-segment (`ryve/ryv-84/design`) but are always percent-encoded
+// on the wire — hub.mjs and the board both send `%2F`, and URL.pathname keeps
+// it encoded — so a real id is exactly one path segment and anything with a
+// raw slash in it is a subroute, not an id.
+//
+// Declared once because the two routes that use it are the two that must never
+// swallow a subroute by accident: the GET that answers as a session, and the
+// DELETE that removes the card.
+const SESSION_ID_PATH = /^\/api\/agent\/session\/[^/]+$/;
+
 const STAGES = ['research', 'design'];
 const STAGE_LABEL = {
   research: 'AI-research done',
@@ -941,7 +953,20 @@ async function route(request, env) {
     }
 
     // GET /api/agent/session/:id — agent polls for the human's response
-    if (method === 'GET' && path.startsWith('/api/agent/session/') && !path.includes('/trigger') && !path.includes('/reassign') && !path.includes('/respond') && !path.includes('/dismiss')) {
+    //
+    // Matched on ONE path segment, not on a prefix with a list of subroutes to
+    // avoid. The old spelling was `startsWith(...) && !path.includes('/trigger')
+    // && !includes('/reassign') && !includes('/respond') && !includes('/dismiss')`
+    // — an exclusion list that had to grow by hand for every subroute added
+    // since, and had already fallen four behind (`/skip`, `/setaside`,
+    // `/complete`, `/state`, `/reopen`, `/figma`). It only held because all six
+    // of those are non-GET.
+    //
+    // A single segment is the right test because ids are always percent-encoded
+    // on the wire: hub.mjs and the board both send `ryve%2Fryv-84%2Fdesign`, and
+    // URL.pathname keeps it that way. So a real id never contains a raw slash,
+    // and anything that does is a subroute this route should decline.
+    if (method === 'GET' && SESSION_ID_PATH.test(path)) {
       const asked = decodeURIComponent(path.slice('/api/agent/session/'.length));
       if (!asked) return err('session_id required');
       // The agent polls by the session id it posted. The card comes back
@@ -1740,7 +1765,12 @@ async function route(request, env) {
     // on its own is never a decision: that is the whole point, and it is what
     // stops "Yes" from reading as a direction. A gate with no options is
     // answered in free text exactly as it always was.
-    if (method === 'PATCH' && path.match(/\/respond$/)) {
+    // Anchored at both ends, like the other session subroutes. `/\/respond$/`
+    // matched ANY path ending in `/respond` — including one under a prefix
+    // this route knows nothing about — and then sliced it as though it began
+    // with `/api/agent/session/`, which for anything else produces a garbage
+    // id rather than a 404.
+    if (method === 'PATCH' && path.match(/^\/api\/agent\/session\/[^/]+\/respond$/)) {
       // The session this answers. The board sends the card's id and means
       // the gate it drew; the agent may name a stage and mean that one.
       const target = await resolveSession(
@@ -1895,8 +1925,20 @@ async function route(request, env) {
       return json({ ok: true });
     }
 
-    // DELETE /api/agent/session/:id
-    if (method === 'DELETE' && path.startsWith('/api/agent/session/')) {
+    // DELETE /api/agent/session/:id — removes the card and everything on it.
+    //
+    // ONE SEGMENT, and this is the route where that matters most. It used to
+    // match the whole prefix, and resolveKey() parses the issue key out of
+    // anything: `RYV-84/figma`, `RYV-84/skipp`, `RYV-84/anything/at/all` all
+    // come back as `RYV-84`. So any DELETE under this prefix that was not
+    // matched by an earlier block deleted the card and every session on it,
+    // silently, and answered `{ ok: true }`.
+    //
+    // Nothing did that today — every real DELETE subroute is declared above
+    // this line — but "correct as long as nobody adds a route below here or
+    // mistypes one" is not a property worth relying on when the failure is
+    // silent data loss.
+    if (method === 'DELETE' && SESSION_ID_PATH.test(path)) {
       const id = await resolveKey(env, path.slice('/api/agent/session/'.length));
       if (id) {
         // The sessions go with the card. They are the card's transient state
