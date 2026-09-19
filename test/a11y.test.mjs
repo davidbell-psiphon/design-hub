@@ -165,3 +165,110 @@ describe('motion and target size', () => {
     assert.match(css, /--dur-short:/);
   });
 });
+
+describe('state colours are read from their tokens, never retyped', () => {
+  // The split into five colours changed nothing visible at first, because the
+  // pills, the card rings, the sidebar badge and the gate all carried the old
+  // values as literal rgba(). A token nothing reads is a comment.
+  const STATE_RGBA = [
+    ['rgba(224,120,100', 'the old error/stalled red'],
+    ['rgba(240,184,74',  'the old working/waiting amber'],
+    ['rgba(239,159,39',  'the old amber, second spelling'],
+    ['rgba(111,191,139', 'the old done green'],
+  ];
+
+  for (const [literal, what] of STATE_RGBA) {
+    test(`${what} is not hardcoded anywhere`, () => {
+      assert.ok(!css.includes(literal),
+        `${literal}…) is written literally in the stylesheet. Change the token ` +
+        `and this will not follow it — which is exactly how five run-state ` +
+        `colours produced a board that still showed three.`);
+    });
+  }
+
+  test('the things that show a run state all derive from a token', () => {
+    // Each of these is a place the state is visible. If one stops mentioning
+    // its token it has been given a literal again.
+    for (const [selector, token] of [
+      ['.status-pill.status-waiting', 'run-waiting'],
+      ['.status-pill.status-stalled', 'run-stalled'],
+      ['.status-pill.status-error', 'run-error'],
+      ['.session-card.state-stalled', 'run-stalled'],
+      ['.session-card.state-waiting', 'run-waiting'],
+      ['.card-note.note-stalled', 'run-stalled'],
+      ['.sb-badge.waiting', 'run-waiting'],
+    ]) {
+      // Sliced rather than matched with a built regex: a selector full of
+      // dots needs escaping, and getting that wrong makes a test that looks
+      // strict pass on nothing at all.
+      const at = css.indexOf(selector + ' {');
+      assert.ok(at >= 0, `${selector} is gone`);
+      const rule = css.slice(at, css.indexOf('}', at));
+      assert.ok(rule.includes('--' + token),
+        `${selector} no longer reads --${token}, so it cannot follow it`);
+    }
+  });
+});
+
+describe('the shape and type scales are used, not just declared', () => {
+  // Nine ad-hoc radii and eight ad-hoc font sizes were the finding. Declaring
+  // scales and then not using them would be the same problem with more tokens.
+  test('buttons and pills are fully round', () => {
+    const btn = css.match(/\.btn \{([^}]*)\}/);
+    assert.match(btn[1], /--shape-full/, 'the button lost its Expressive shape');
+    const pill = css.match(/\.status-pill \{([^}]*)\}/);
+    assert.match(pill[1], /--shape-full/);
+  });
+
+  test('the card uses the shape scale', () => {
+    const card = css.match(/\.session-card \{([^}]*)\}/);
+    assert.match(card[1], /--shape-md/, 'the card went back to an ad-hoc radius');
+  });
+
+  test('titles and headers use type roles', () => {
+    assert.match(css.match(/\.session-title \{([^}]*)\}/)[1], /--type-title/);
+    assert.match(css.match(/\.brand-name \{([^}]*)\}/)[1], /--type-display/);
+    assert.match(css.match(/\.btn \{([^}]*)\}/)[1], /--type-label/);
+  });
+
+  test('a brand header is clearly bigger than a card title', () => {
+    // 15px against 14px was one step — not enough for the eye to read them as
+    // different kinds of thing.
+    const size = (role) => {
+      const at = css.indexOf('--type-' + role + ':');
+      assert.ok(at >= 0, `--type-${role} is gone`);
+      const decl = css.slice(at, css.indexOf(';', at));
+      return Number(decl.split('px')[0].trim().split(/\s+/).pop());
+    };
+    assert.ok(size('display') - size('title') >= 4,
+      `display is ${size('display')}px and title is ${size('title')}px — too close to read as a different level`);
+  });
+});
+
+describe('controls behave like Material controls', () => {
+  test('there is a state layer, not a swapped background', () => {
+    assert.match(css, /\.btn::before/,
+      'the state layer is gone, so hover and press are ad-hoc again');
+    assert.match(css.match(/\.btn::before \{([^}]*)\}/)[1], /currentColor/,
+      'the state layer is a fixed colour, so a coloured button gets the wrong overlay');
+  });
+
+  test('press is distinct from hover', () => {
+    assert.match(css, /--state-hover:/);
+    assert.match(css, /--state-press:/);
+    assert.match(css, /\.btn:active/);
+  });
+
+  test('the primary action follows the brand it sits in', () => {
+    const at = css.indexOf('.btn-primary {');
+    assert.ok(at >= 0, '.btn-primary is gone');
+    const rule = css.slice(at, css.indexOf('}', at));
+    // The FILL specifically, not merely a mention of --brand somewhere in the
+    // rule — a border that still reads the brand while the background has been
+    // hardcoded back to a grey is exactly the half-change worth catching.
+    const bg = rule.split('background:')[1];
+    assert.ok(bg, '.btn-primary has no background, so it is not a filled button');
+    assert.match(bg.split(';')[0], /--brand/,
+      'the primary button fill stopped taking its colour from the brand section');
+  });
+});

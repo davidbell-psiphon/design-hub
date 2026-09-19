@@ -35,8 +35,44 @@
        which is how the nine border-radius values happened. */
     --ease-standard: cubic-bezier(.2, 0, 0, 1);
     --ease-emphasized: cubic-bezier(.3, 0, 0, 1);
+    /* Expressive motion overshoots slightly on the way in. It is the
+       difference between a thing appearing and a thing arriving. */
+    --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
     --dur-short: 120ms;
     --dur-medium: 240ms;
+
+    /* ── SHAPE ────────────────────────────────────────────────────────────
+       Was nine values chosen one at a time: 1, 2, 4, 5, 6, 8, 10, 50%, 100px.
+       Material Expressive treats shape as a signal rather than a finish —
+       rounder reads softer and more interactive, squarer reads structural —
+       and nine ad-hoc values cannot signal anything.
+
+       The fully-round button is the most recognisable thing M3 Expressive
+       did, and it is the reason the board reads as current rather than as a
+       2019 admin panel. */
+    --shape-xs: 4px;      /* bars, dots, small chips */
+    --shape-sm: 10px;     /* inputs, drawers inside a card */
+    --shape-md: 16px;     /* cards */
+    --shape-lg: 22px;     /* panels, the console */
+    --shape-full: 999px;  /* buttons and pills */
+
+    /* ── TYPE ─────────────────────────────────────────────────────────────
+       Was 8 sizes across 55 declarations, each chosen where it was needed —
+       which is how a card title (14px) ended up one step from a brand header
+       (15px), too close for the eye to read them as different kinds of thing.
+       Roles, with a real jump between them. */
+    --type-display: 700 19px/1.25 var(--font);   /* brand headers */
+    --type-title:   600 14px/1.35 var(--font);   /* card titles */
+    --type-body:    400 13px/1.5 var(--font);    /* prose and notes */
+    --type-label:   600 12px/1 var(--font);      /* buttons */
+    --type-meta:    500 11px/1.3 var(--font);    /* counts, times, capabilities */
+
+    /* ── STATE LAYERS ─────────────────────────────────────────────────────
+       Material's interaction model: a translucent overlay of the foreground
+       colour, not a different background per state. One rule covers hover,
+       focus and press on every control, which is why they all feel the same. */
+    --state-hover: .08;
+    --state-press: .12;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
 
@@ -97,7 +133,7 @@
   .sb-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .sb-name { flex: 1; }
   .sb-badge { font-size: 10px; font-weight: 600; min-width: 16px; height: 15px; border-radius: 8px; background: var(--surface-3); color: var(--text-muted); display: flex; align-items: center; justify-content: center; padding: 0 4px; }
-  .sb-badge.waiting { background: rgba(239,159,39,.2); color: #f0b84a; }
+  .sb-badge.waiting { background: color-mix(in srgb, var(--run-waiting) 20%, transparent); color: var(--run-waiting); }
 
   /* BOARD */
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -111,14 +147,37 @@
      hardest thing to hit on a phone — which this board is used on.
      Radius 6px -> 8px is the shape scale in the audit, and is most of what
      makes a control read as current. */
-  .btn { font-size: 12px; font-weight: 500; padding: 5px 12px; min-height: 32px;
-    border-radius: 8px; border: 1px solid var(--border-strong); background: none;
-    color: var(--text-muted); cursor: pointer; font-family: var(--font);
+  /* ── BUTTONS, Material Expressive ────────────────────────────────────
+     Fully round, which is the single most recognisable thing M3 Expressive
+     did, and a state layer rather than a swapped background — the same
+     overlay model every Material control uses, which is why they all feel
+     like one family.
+
+     They also morph on press: the radius drops from full to --shape-sm for
+     the moment the pointer is down. That is Expressive's shape-morph idea at
+     its smallest useful size, and it costs one line.
+
+     min-height 32px rather than Material's 48: this is a dashboard for sixty
+     cards and the row of six actions has to stay dense. 32 clears WCAG
+     2.5.8's 24px floor with room. */
+  .btn { font: var(--type-label); letter-spacing: .01em; padding: 6px 14px;
+    min-height: 32px; border-radius: var(--shape-full);
+    border: 1px solid var(--border-strong); background: none;
+    color: var(--text-muted); cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center;
-    transition: background var(--dur-short) var(--ease-standard),
-                color var(--dur-short) var(--ease-standard),
-                border-color var(--dur-short) var(--ease-standard); }
-  .btn:hover { background: var(--surface-2); color: var(--text); }
+    position: relative; isolation: isolate; overflow: hidden;
+    transition: color var(--dur-short) var(--ease-standard),
+                border-color var(--dur-short) var(--ease-standard),
+                border-radius var(--dur-short) var(--ease-spring); }
+  /* The state layer. currentColor, so a button that changes colour changes
+     its overlay with it and nothing has to be kept in step by hand. */
+  .btn::before { content: ''; position: absolute; inset: 0; z-index: -1;
+    background: currentColor; opacity: 0;
+    transition: opacity var(--dur-short) var(--ease-standard); }
+  .btn:hover { color: var(--text); }
+  .btn:hover::before { opacity: var(--state-hover); }
+  .btn:active { border-radius: var(--shape-sm); }
+  .btn:active::before { opacity: var(--state-press); }
   .btn:disabled { opacity: .5; cursor: default; }
 
   /* ── KEYBOARD FOCUS ──────────────────────────────────────────────────
@@ -155,13 +214,28 @@
       scroll-behavior: auto !important;
     }
   }
-  .btn-primary { background: var(--surface-2); color: var(--text); }
+  /* The filled tonal button — Material's primary action. It takes the brand
+     colour of the section it sits in, which is the colour that already means
+     something on this board rather than a new accent competing with the five
+     run states and the four brand colours.
+
+     color-mix rather than a hardcoded rgba, so it follows --brand wherever
+     the card is and cannot drift out of step with it. */
+  .btn-primary { color: var(--text); font-weight: 700;
+    border-color: color-mix(in srgb, var(--brand, var(--text-muted)) 55%, transparent);
+    background: color-mix(in srgb, var(--brand, var(--surface-3)) 26%, transparent); }
+  .btn-primary:hover { border-color: color-mix(in srgb, var(--brand, var(--text)) 75%, transparent); }
 
   /* BRAND SECTION — the primary structure of the board */
   .brand-section { display: flex; flex-direction: column; gap: 14px; scroll-margin-top: 12px; }
   .brand-header { display: flex; align-items: center; gap: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--border); }
-  .brand-bar { width: 4px; height: 20px; border-radius: 2px; background: var(--brand); flex-shrink: 0; }
-  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text); }
+  .brand-bar { width: 5px; height: 24px; border-radius: var(--shape-xs); background: var(--brand); flex-shrink: 0; }
+  /* The only thing on the board that shouts. It was 15px against a 14px card
+     title — one step apart, which is not enough for the eye to read them as
+     different kinds of thing. The jump is what makes a section read as a
+     section. */
+  .brand-name { font: var(--type-display); letter-spacing: .04em;
+    text-transform: uppercase; color: var(--text); }
   .brand-meta { margin-left: auto; font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
   .brand-waiting { color: #f0b84a; font-weight: 600; }
 
@@ -171,28 +245,64 @@
   .bucket-label { font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); }
 
   /* SESSION CARD — the card itself carries the brand colour */
-  .session-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); border-left-width: 3px; border-left-style: solid; }
-  .session-card.state-working,
-  .session-card.state-waiting { box-shadow: 0 0 0 1px rgba(240,184,74,.3); }
-  .session-card.state-error,
-  .session-card.state-stalled { box-shadow: 0 0 0 1px rgba(224,120,100,.3); }
-  .session-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
-  .session-id { font-size: 11px; font-family: var(--mono); color: var(--text-muted); }
-  .session-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; min-width: 100px; }
-  .stage-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; background: var(--surface-3); color: var(--text-muted); white-space: nowrap; }
+  /* The card. Rounder (10 -> 16) and lifted onto a tonal surface rather than a
+     drop shadow, which is Material's elevation model: height is expressed by
+     tone on a dark theme, not by a blur.
+
+     The brand edge grows 3 -> 4px to survive the larger radius. */
+  .session-card { border-radius: var(--shape-md); overflow: hidden;
+    border: 1px solid var(--border); background: var(--surface);
+    border-left-width: 4px; border-left-style: solid;
+    transition: background var(--dur-short) var(--ease-standard),
+                border-color var(--dur-short) var(--ease-standard),
+                transform var(--dur-medium) var(--ease-spring); }
+  .session-card:hover { background: var(--surface-2); }
+  /* Each state ringed in its OWN colour. These were two hardcoded rgba values
+     covering four states, so error looked like stalled and working looked like
+     needs-you — which undid the token split entirely, because the ring is what
+     you see from across the board. color-mix keeps them tied to the tokens. */
+  .session-card.state-working { box-shadow: 0 0 0 1px color-mix(in srgb, var(--run-working) 40%, transparent); }
+  .session-card.state-waiting { box-shadow: 0 0 0 2px color-mix(in srgb, var(--run-waiting) 50%, transparent); }
+  .session-card.state-error   { box-shadow: 0 0 0 1px color-mix(in srgb, var(--run-error) 45%, transparent); }
+  .session-card.state-stalled { box-shadow: 0 0 0 1px color-mix(in srgb, var(--run-stalled) 45%, transparent); }
+  .session-top { display: flex; align-items: center; gap: 8px; padding: 12px 14px 7px; flex-wrap: wrap; }
+  .session-id { font: var(--type-meta); font-family: var(--mono); color: var(--text-muted); }
+  .session-title { font: var(--type-title); color: var(--text); flex: 1; min-width: 100px; }
+  /* Chips. Filled tonal, which is Material's assist-chip, rather than a grey
+     box with rounded ends. */
+  .stage-pill { font: var(--type-meta); font-weight: 600; padding: 3px 9px;
+    border-radius: var(--shape-full); background: var(--surface-3);
+    color: var(--text-muted); white-space: nowrap; }
   /* A stage that was passed over rather than run. Outlined instead of filled:
      the card is at that level, but nothing was done to get it there. */
   .stage-pill.is-skipped { background: none; border: 1px dashed var(--border-strong); color: var(--text-dim); }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
-  .status-pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--border-strong); color: var(--text-muted); white-space: nowrap; }
-  .status-pill.status-working { border-color: rgba(239,159,39,.45); color: var(--run-working); }
+  /* The run-state chip. Every colour derived from its token with color-mix —
+     these were five hardcoded rgba values, three of which no longer matched
+     the token they were supposed to be showing, so splitting the state colours
+     changed nothing visible until this changed too. */
+  .status-pill { font: var(--type-meta); font-weight: 700; padding: 3px 9px;
+    border-radius: var(--shape-full); border: 1px solid var(--border-strong);
+    color: var(--text-muted); white-space: nowrap;
+    transition: background var(--dur-medium) var(--ease-standard),
+                border-color var(--dur-medium) var(--ease-standard),
+                color var(--dur-medium) var(--ease-standard); }
+  .status-pill.status-working { border-color: color-mix(in srgb, var(--run-working) 45%, transparent);
+    color: var(--run-working); }
   /* Needs you is the only one that fills: it is the only one you can act on. */
-  .status-pill.status-waiting { border-color: rgba(239,159,39,.55); background: rgba(240,184,74,.15); color: var(--run-waiting); }
+  .status-pill.status-waiting { border-color: color-mix(in srgb, var(--run-waiting) 60%, transparent);
+    background: color-mix(in srgb, var(--run-waiting) 18%, transparent);
+    color: var(--run-waiting); }
   /* Dashed, for the same reason a skipped stage is dashed: the card is
      claiming a state it has stopped earning. */
-  .status-pill.status-stalled { border-style: dashed; border-color: rgba(224,120,100,.55); color: var(--run-stalled); }
-  .status-pill.status-error { border-color: rgba(224,120,100,.5); color: var(--run-error); }
-  .status-pill.status-done { border-color: rgba(111,191,139,.35); color: var(--run-done); }
+  .status-pill.status-stalled { border-style: dashed;
+    border-color: color-mix(in srgb, var(--run-stalled) 60%, transparent);
+    color: var(--run-stalled); }
+  .status-pill.status-error { border-color: color-mix(in srgb, var(--run-error) 55%, transparent);
+    background: color-mix(in srgb, var(--run-error) 12%, transparent);
+    color: var(--run-error); }
+  .status-pill.status-done { border-color: color-mix(in srgb, var(--run-done) 40%, transparent);
+    color: var(--run-done); }
   /* The Linear project, shown only where the brand section is not
      self-evident — see projectLabel(). On a Conduit App card it would say
      nothing the heading above it has not already said. */
@@ -209,18 +319,20 @@
   .session-project { font-size: 10px; color: var(--text-muted); background: var(--surface-2);
                      border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
                      white-space: nowrap; }
-  .btn-done { border-color: rgba(111,191,139,.35); color: var(--run-done); }
-  .btn-done:hover { background: rgba(111,191,139,.1); color: var(--run-done); }
-  .btn-reset { border-color: rgba(224,120,100,.4); color: var(--run-error); }
-  .btn-reset:hover { background: rgba(224,120,100,.1); color: var(--run-error); }
+  .btn-done { border-color: color-mix(in srgb, var(--run-done) 40%, transparent); color: var(--run-done); }
+  .btn-done:hover { color: var(--run-done); }
+  .btn-reset { border-color: color-mix(in srgb, var(--run-error) 45%, transparent); color: var(--run-error); }
+  .btn-reset:hover { color: var(--run-error); }
 
   /* WHY IT STOPPED — one line, and the second deliberate exception to "the
      card shows no agent prose" after a gate's options. A card that has
      stopped and will not say why is a card you have to go and look up
      somewhere else, which is the trip the board exists to save. */
-  .card-note { padding: 8px 12px 9px; border-top: 1px solid var(--border); font-size: 11px; line-height: 1.45; }
-  .card-note.note-error { background: rgba(224,120,100,.06); color: var(--run-error); }
-  .card-note.note-stalled { background: rgba(224,120,100,.04); color: var(--text-muted); }
+  .card-note { padding: 9px 14px 10px; border-top: 1px solid var(--border); font: var(--type-body); font-size: 11.5px; }
+  .card-note.note-error { background: color-mix(in srgb, var(--run-error) 8%, transparent); color: var(--run-error); }
+  /* Stalled tinted with its own colour now, not error's — the note under a
+     stalled card was literally painted in the error colour. */
+  .card-note.note-stalled { background: color-mix(in srgb, var(--run-stalled) 7%, transparent); color: var(--text-muted); }
   .session-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .session-links { display: flex; gap: 6px; margin-left: auto; }
   .reassign-select { font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 4px; font-family: var(--font); }
@@ -232,11 +344,11 @@
   /* GATE — a question with a fixed set of answers. One click per option, no
      free-text box: a note typed against three directions is how "Yes" got
      recorded as a decision. */
-  .gate { padding: 9px 12px 11px; border-top: 1px solid var(--border); background: rgba(240,184,74,.05); }
+  .gate { padding: 11px 14px 13px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--run-waiting) 7%, transparent); }
   .gate-prompt { font-size: 12px; color: var(--text); line-height: 1.45; margin-bottom: 8px; }
   .gate-options { display: flex; flex-direction: column; gap: 5px; }
   .gate-option { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); cursor: pointer; font-family: var(--font); }
-  .gate-option:hover { border-color: rgba(240,184,74,.55); background: var(--surface-3); }
+  .gate-option:hover { border-color: color-mix(in srgb, var(--run-waiting) 60%, transparent); background: var(--surface-3); }
   .gate-option:disabled { opacity: .5; cursor: default; }
   .gate-option-label { display: block; font-size: 12px; font-weight: 600; }
   .gate-option-summary { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }

@@ -213,10 +213,34 @@ stay distinct *and* far enough apart to tell apart, and require a real
 Ten deliberate regressions were introduced and ten were caught — including
 re-introducing the exact 1.96:1 value.
 
-**Not yet done: the type scale (4) and the full shape scale (5).** Both touch
-every component rather than the token block, so they are worth doing as their
-own pass with the board in front of you. The audit above has the proposed
-scales.
+**The type and shape scales are in too**, along with the parts of Expressive
+that are actually visible:
+
+- **Fully-round buttons** — the most recognisable thing M3 Expressive did, and
+  most of why the board reads as current rather than as a 2019 admin panel.
+  They morph to `--shape-sm` while pressed: shape-morph at its smallest useful
+  size, one line of CSS.
+- **State layers.** `currentColor` at 8% on hover, 12% on press, as a `::before`
+  overlay — Material's interaction model, one rule for every control, rather
+  than a swapped background per button type.
+- **A filled tonal primary action**, taking the brand colour of the section it
+  sits in. That is the colour that already means something here, so it needed
+  no new accent competing with the five run states and the four brand colours.
+- **Cards** at 16px on a tonal hover surface — elevation by tone, which is
+  Material's dark-theme model, not a drop shadow.
+- **Type roles applied**: the brand header moved 15 → 19px against a 14px card
+  title, because one step apart is not enough to read as a different kind of
+  thing.
+
+### The finding that only appeared once the tokens moved
+
+Splitting the run states into five colours **changed nothing on screen**. The
+pills, the card rings, the sidebar badge and the gate all carried the old
+values as literal `rgba()` — so the tokens were right and nothing read them.
+
+Every one is `color-mix(… var(--run-state) …)` now, and `test/a11y.test.mjs`
+fails if any of the four old literals reappears anywhere in the stylesheet. A
+token nothing reads is a comment.
 
 One thing the contrast fix exposed: `--text-muted` and `--text-dim` are now
 close together, because there is not much room below 4.5:1 on this background.
