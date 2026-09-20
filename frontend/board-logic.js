@@ -236,14 +236,32 @@ function stageName(stage) {
   return 'Backlog';
 }
 
+// Store-listing screenshot work, as the wire projection flagged it
+// (lib/card.mjs, from lib/derive.mjs: the `store-screenshots` label, or the
+// word in the title). The card is styled, and its buttons say what the
+// screenshot agent will do with the press — analyze or make — because "Run
+// Research" on a screenshot set would be the button lying about the work. The
+// stages underneath are unchanged: the runner maps research to the agent's
+// ANALYZE mode and design to its MAKE mode. Nothing about the flag runs
+// anything; the press does, as on every other card.
+function isScreenshots(r) {
+  return !!(r && r.kind === 'screenshots');
+}
+
 // What the card's own pill says. A skipped stage says so: 'Researched' would
 // claim work that never happened, and 'Backlog' would hide a decision you
 // made. The column heading stays plain — the pill is where the difference goes.
+// A screenshot card says what its stages actually were: analysis and making.
 function stageLabel(r) {
   var reached = stageReached(r);
-  if (reached.how !== 'skipped') return stageName(reached.stage);
-  if (reached.stage === 'researched') return 'Research skipped';
-  if (reached.stage === 'designed') return 'Design skipped';
+  var shots = isScreenshots(r);
+  if (reached.how !== 'skipped') {
+    if (shots && reached.stage === 'researched') return 'Analyzed';
+    if (shots && reached.stage === 'designed') return 'Screenshots made';
+    return stageName(reached.stage);
+  }
+  if (reached.stage === 'researched') return shots ? 'Analysis skipped' : 'Research skipped';
+  if (reached.stage === 'designed') return shots ? 'Make skipped' : 'Design skipped';
   return stageName(reached.stage);
 }
 
@@ -270,9 +288,10 @@ function isWorking(r) {
 // column and nothing else, and the two cannot drift apart.
 function actionFor(r) {
   var stage = stageOf(r);
+  var shots = isScreenshots(r);
   if (stage === 'designed') return null;
-  if (stage === 'researched') return { stage: 'design', label: 'Run Design' };
-  return { stage: 'research', label: 'Run Research' };
+  if (stage === 'researched') return { stage: 'design', label: shots ? 'Make screenshots' : 'Run Design' };
+  return { stage: 'research', label: shots ? 'Analyze screenshots' : 'Run Research' };
 }
 
 // Everything the card offers, primary first.
@@ -295,6 +314,19 @@ function actionsFor(r) {
   var primary = actionFor(r);
   if (!primary) return [];
   if (stageOf(r) !== 'backlog') return [primary];
+  // The same skip, in the screenshot agent's words. It is still the research
+  // stage being skipped and the design stage being queued; the agent's brief
+  // says never to make a set without scoring the existing one first, so a
+  // press here is a decision to go without that, and the button says so.
+  if (isScreenshots(r)) {
+    return [primary, {
+      stage: 'design',
+      label: 'Skip to Make',
+      skips: 'research',
+      title: 'Mark analysis skipped and run the screenshot agent\'s MAKE mode — slot strategy, ' +
+             'captions, layout. Without an analysis it cannot score the existing set first, and says so.',
+    }];
+  }
   return [primary, {
     stage: 'design',
     label: 'Skip to Design',

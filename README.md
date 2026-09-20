@@ -265,6 +265,27 @@ being closed.
 straight to mockup", and a Backlog card carrying it offers **Run Design**
 instead of Run Research.
 
+### Screenshot cards
+
+Store-listing screenshot work — App Store and Google Play sets — spans the
+Psiphon App, Ryve App and Conduit App teams and goes to its own agent in the
+sibling `design-ai` repo. The board marks it: a card is a **Screenshot card**
+when its Linear issue carries the `store-screenshots` label, **or** has the
+word "screenshot" in its title. Either is enough. The rule is one function,
+`isScreenshotWork` in `lib/derive.mjs`, vendored into `design-ai` so the runner
+flags exactly the issues the board does.
+
+The card gets a teal `Screenshots` chip and a teal top edge, and its buttons say
+what the agent will do with the press — **Analyze screenshots** on the research
+stage, **Make screenshots** on the design stage, **Skip to Make** in place of
+Skip to Design. The stages underneath are unchanged; so is everything else
+about the card, the queue and the labels.
+
+**Nothing about the flag runs anything.** It is `kind: 'screenshots'` on the
+wire, derived per request from `labels` and `title` in `lib/card.mjs` and never
+stored, and the press is still the only thing that queues work — as for every
+other card.
+
 ### "Move to…" moves the card, not the work
 
 The reassign select corrects which brand section a card sits in. That is all it

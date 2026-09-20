@@ -94,6 +94,12 @@
     --run-working: #d8a03c;       /* amber: in progress, no action needed */
     --run-waiting: #7fa8f0;       /* blue: a person is the blocker */
     --run-done: #6fbf8b;          /* green */
+
+    /* One kind of work gets a mark of its own: store-listing screenshots,
+       which span the app teams and go to their own agent (see isScreenshots
+       in board-logic.js). Teal, because no run state uses it — a screenshot
+       card must never be mistaken for a card in some state. */
+    --kind-screenshots: #62c6c0;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -276,6 +282,14 @@
   /* A stage that was passed over rather than run. Outlined instead of filled:
      the card is at that level, but nothing was done to get it there. */
   .stage-pill.is-skipped { background: none; border: 1px dashed var(--border-strong); color: var(--text-dim); }
+  /* Store-listing screenshot work. The chip names the kind, and the card's top
+     edge carries the same colour so the kind reads at a glance down a column.
+     The left edge stays the brand's — the two say different things. */
+  .kind-pill { font: var(--type-meta); font-weight: 700; padding: 3px 9px;
+    border-radius: var(--shape-full);
+    background: color-mix(in srgb, var(--kind-screenshots) 18%, transparent);
+    color: var(--kind-screenshots); white-space: nowrap; letter-spacing: .02em; }
+  .session-card.kind-screenshots { border-top: 2px solid color-mix(in srgb, var(--kind-screenshots) 70%, transparent); }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
   /* The run-state chip. Every colour derived from its token with color-mix —
      these were five hardcoded rgba values, three of which no longer matched
@@ -874,10 +888,15 @@ function sessionCard(r) {
   // whether anything is running, and the one thing you can do about it. The
   // agent's research is a comment on the Linear issue and is read there — the
   // Hub deliberately shows none of its prose.
-  return `<div class="session-card state-${state}" style="border-left-color:${color}">
+  // A screenshot card is marked as one — the class for the styling, the chip
+  // for the name — and its stage buttons already speak in the screenshot
+  // agent's words (actionFor). Nothing else about the card changes.
+  const shots = isScreenshots(r);
+  return `<div class="session-card state-${state}${shots ? ' kind-screenshots' : ''}" style="border-left-color:${color}">
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || '')}</span>
+      ${shots ? `<span class="kind-pill" title="Store-listing screenshot work — flagged by the store-screenshots label, or by the word in the title. Its stage buttons run the screenshot agent: Analyze, then Make.">Screenshots</span>` : ''}
       ${projectLabel(r) ? `<span class="session-project">${esc(projectLabel(r))}</span>` : ''}
       <span class="stage-pill${isSkipped(r) ? ' is-skipped' : ''}">${esc(stageLabel(r))}</span>
       ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
