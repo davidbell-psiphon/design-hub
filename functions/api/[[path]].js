@@ -12,7 +12,11 @@
 
 const WORKER = 'https://design-hub-worker.d-bell.workers.dev';
 
-const ALLOWED = new Set(['GET', 'HEAD', 'POST', 'PATCH', 'DELETE']);
+// PUT is on the list because the board uses it: the machine picker sends
+// PUT /api/agent/working-from and the Figma path editor sends
+// PUT /api/figma-paths. OPTIONS stays off it — the board is same-origin,
+// so nothing it does is ever preflighted.
+const ALLOWED = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 export async function onRequest(context) {
   const { request, env, params } = context;

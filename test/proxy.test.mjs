@@ -190,7 +190,7 @@ describe('what comes back', () => {
 });
 
 describe('the method allowlist', () => {
-  for (const method of ['GET', 'POST', 'PATCH', 'DELETE']) {
+  for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
     test(method + ' is allowed through', async () => {
       const res = await go(inbound('/api/agent/sessions',
         { method, body: method === 'GET' ? undefined : '{}' }));
@@ -200,7 +200,7 @@ describe('the method allowlist', () => {
   }
 
   test('anything else is refused before it reaches the Worker', async () => {
-    for (const method of ['PUT', 'OPTIONS']) {
+    for (const method of ['OPTIONS']) {
       sent = null;
       const res = await go(inbound('/api/agent/sessions', { method }));
       assert.equal(res.status, 405, method + ' was not refused');
