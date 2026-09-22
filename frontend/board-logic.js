@@ -856,6 +856,40 @@ function machineToAssert(rows, remembered) {
   return remembered;
 }
 
+// Which machine a press of “I’m at this computer” should check in for, or
+// null when the browser cannot know.
+//
+// Deliberately NOT the chosen machine. Choosing says where work goes and can
+// point at a computer you are nowhere near — a laptop in another room is a
+// perfectly good thing to reserve work for. This button says something else
+// entirely: that the person pressing it is sitting at the machine the browser
+// is running on. The only thing that knows that is the browser, so it is the
+// machine this browser was told it is on.
+//
+// The single-machine fallback is not a guess. With one machine on the list
+// there is nothing else the press could be about, and requiring a trip through
+// the picker first would be ceremony for a choice that does not exist.
+//
+// Null in two cases:
+//
+//   nothing remembered, and more than one machine — the press would be
+//   picking a machine, and picking is what the rows above it are for.
+//
+//   the remembered machine is not on the list — it has never checked in, so
+//   there is no row to refresh and saying so would invent a machine the Hub
+//   has never heard from.
+function machineToCheckIn(rows, remembered) {
+  var local = localAgents(rows);
+  if (!local.length) return null;
+  if (remembered) {
+    for (var i = 0; i < local.length; i++) {
+      if (local[i].machine === remembered) return remembered;
+    }
+    return null;
+  }
+  return local.length === 1 ? local[0].machine : null;
+}
+
 // What the board should say about the machine it speaks for.
 //
 // Two facts get confused here constantly, including by the person reading the
@@ -908,7 +942,7 @@ function agentLine(rows, now) {
       ? s.row.machine + ' — work goes here. Nothing has checked in for ' + ago +
         ', so a run will wait until something on it wakes up'
       : s.row.machine + ' — work goes here, but nothing has checked in for ' + ago +
-        '. Run here.bat on it, or choose another machine' };
+        '. Press “I’m at this computer” if you are on it, or choose another machine' };
 }
 
 // Where a queued run will actually be picked up, in one sentence.

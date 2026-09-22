@@ -463,6 +463,16 @@
   .cn-dot-gone  { background: var(--run-error); }
   .cn-machines-note { font-size: 10px; padding: 3px 7px 0; opacity: .75; }
   .cn-machines-stale, .cn-machines-none { color: var(--run-waiting); opacity: 1; }
+  /* “I’m at this computer”. A bordered control rather than a bare row,
+     because it writes a check-in where the rows above it only choose. */
+  .cn-here-row { flex-shrink: 0; border-bottom: 1px solid var(--border);
+    padding: 6px 8px; }
+  .cn-here { display: block; width: 100%; background: none;
+    border: 1px solid var(--border); border-radius: 5px; padding: 5px 7px;
+    font: inherit; font-size: 11px; color: var(--text-muted);
+    text-align: center; cursor: pointer; }
+  .cn-here:hover { background: var(--surface-2); color: var(--text); }
+  .cn-here:disabled { opacity: .6; cursor: default; }
   .cn-foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: 8px 12px;
              font-family: var(--mono); font-size: 10px; color: var(--text-dim);
              display: flex; gap: 8px; }
@@ -1521,7 +1531,17 @@ function localAgentLine() {
 
   return `<div class="cn-agent cn-agent-${tone}" title="${title}">
     <span class="cn-agent-dot cn-dot-${line.state}"></span> ${esc(line.text)}
-  </div>` + (needsPicker ? machinePicker(list) : '');
+  </div>` + hereButton() + (needsPicker ? machinePicker(list) : '');
+}
+
+// The press that says "I am at this computer", wherever the board knows which
+// machine that would be. machineToCheckIn is the whole rule and it is pure, so
+// it is tested rather than reasoned about here.
+function hereButton() {
+  const machine = machineToCheckIn(heartbeats, rememberedMachine());
+  if (!machine) return '';
+  return `<div class="cn-here-row"><button class="cn-here" onclick="checkInHere(this)"
+    title="Checks ${esc(machine)} in with the Hub — the same thing here.bat does. It says where you are; it does not start a run.">I’m at this computer</button></div>`;
 }
 
 // Which machine you are working from.
@@ -1569,6 +1589,58 @@ async function chooseMachine(machine) {
   // this is the closest thing to the page knowing where it is — and it is why
   // the answer survives the next time you open the board here.
   rememberMachine(next);
+  try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep what we have */ }
+  renderBoard();
+}
+
+// “I’m at this computer” — the board's own here.bat.
+//
+// WHAT IT DOES, AND WHAT IT CANNOT DO
+//
+// It posts the same check-in here.bat posts, from the browser that is sitting
+// on the machine. That is the most a page can do: the Hub never reaches out to
+// anything, nothing here can start a process on your computer, and a page
+// cannot read its own hostname.
+//
+// It is a press rather than something the board does on load, and that is the
+// point rather than a shortcut. A load-time check-in would refresh a desktop's
+// freshness from the phone in your pocket — the phone's browser remembers the
+// same machine name — and the board would say a machine was alive because a
+// tab was open somewhere else. A press is a person saying where they are,
+// which is the only thing that can honestly answer the question.
+//
+// So it makes the board's answer to "where am I working" true. It does NOT
+// make the runner run: a queued stage starts the next time the runner wakes on
+// that machine, or when you start design-local there.
+async function checkInHere(btn) {
+  const machine = machineToCheckIn(heartbeats, rememberedMachine());
+  if (!machine) { toast('Choose which machine you are at first'); return; }
+
+  const row = (heartbeats || []).find((r) => r.machine === machine);
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking in…'; }
+  try {
+    await api('/agent/heartbeat', { method: 'POST', body: {
+      machine,
+      // The capabilities already on the row, sent back unchanged. The Worker
+      // overwrites the column with whatever it is given, and a browser knows
+      // nothing about whether Figma and Mobbin are signed in on that machine —
+      // so it must not be the thing that says they are not.
+      capabilities: (row && row.capabilities) || [],
+      kind: 'local',
+      // Claiming is what a person saying "I am here" means, and it is the
+      // default `hub.mjs here` uses for the same reason.
+      claim: true,
+    } });
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    toast(`Could not check in — ${e.message}`);
+    return;
+  }
+  // The press also settles which machine this browser is on, so opening the
+  // board here is enough from now on.
+  rememberMachine(machine);
+  toast(`${machine} checked in — work goes here. A queued run starts when the runner next wakes on it.`);
   try { heartbeats = await api('/agent/heartbeat'); } catch (e) { /* keep what we have */ }
   renderBoard();
 }

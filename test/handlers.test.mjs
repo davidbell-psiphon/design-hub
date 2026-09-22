@@ -91,9 +91,14 @@ async function mount({
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ url, method, body });
 
-    // A route the test wants to fail or shape.
-    for (const [frag, val] of Object.entries(responses)) {
-      if (url.includes(frag)) {
+    // A route the test wants to fail or shape. A key may name a method first
+    // — 'POST /agent/heartbeat' — for the routes the board both reads and
+    // writes, where failing the write must not also blind the read.
+    for (const [key, val] of Object.entries(responses)) {
+      const cut = key.indexOf(' ');
+      const wantMethod = cut > 0 ? key.slice(0, cut) : null;
+      const frag = cut > 0 ? key.slice(cut + 1) : key;
+      if (url.includes(frag) && (!wantMethod || wantMethod === method)) {
         if (val && val.status && val.status >= 400) {
           return { ok: false, status: val.status,
                    json: async () => ({ error: val.error || 'nope' }) };
@@ -111,7 +116,8 @@ async function mount({
   const ok = (v) => ({ ok: true, status: 200, json: async () => v });
 
   const exported = [
-    'loadBoard', 'assertMachine', 'chooseMachine', 'rememberedMachine', 'rememberMachine',
+    'loadBoard', 'assertMachine', 'chooseMachine', 'checkInHere', 'hereButton',
+    'rememberedMachine', 'rememberMachine',
     'triggerSession', 'resetSession', 'dismissSession', 'undismissSession', 'completeSession',
     'setAside', 'unsetAside', 'answerGate', 'chooseOwn', 'rejectAll', 'reopenGate',
     'reassignSession', 'localAgentLine', 'machinePicker', 'toast', 'key',
@@ -293,6 +299,100 @@ describe('the machine picker', () => {
     assert.match(h.board.localAgentLine(), /work goes to DaveBellJrII/);
   });
 });
+
+describe('saying you are at this computer', () => {
+  const KEY = 'design-hub:working-from';
+  const POST = (h) => h.sent('/agent/heartbeat', 'POST');
+
+  test('it checks the machine in, and claims it', async () => {
+    // The same post here.bat makes. Claiming is what a person saying "I am
+    // here" means, so the press does both halves rather than one.
+    const h = await mount({ machines: [machine()], store: { [KEY]: 'DaveBellJrII' } });
+    await h.board.checkInHere(btn());
+
+    const c = POST(h);
+    assert.ok(c, 'nothing was checked in');
+    assert.equal(c.body.machine, 'DaveBellJrII');
+    assert.equal(c.body.claim, true, 'the press said where you are but did not send work there');
+    assert.equal(c.body.kind, 'local');
+  });
+
+  test('it sends back the capabilities already on the row', async () => {
+    // The Worker overwrites the column with whatever it is given. A browser
+    // knows nothing about whether Figma and Mobbin are signed in on that
+    // machine, so a press must not be what says they are not.
+    const h = await mount({
+      machines: [machine({ capabilities: ['research', 'design', 'figma', 'mobbin'] })],
+      store: { [KEY]: 'DaveBellJrII' },
+    });
+    await h.board.checkInHere(btn());
+    assert.deepEqual(POST(h).body.capabilities, ['research', 'design', 'figma', 'mobbin']);
+  });
+
+  test('it remembers the machine, so opening the board here is enough next time', async () => {
+    const h = await mount({ machines: [machine()], store: {} });
+    await h.board.checkInHere(btn());
+    assert.equal(h.store[KEY], 'DaveBellJrII');
+  });
+
+  test('two machines and nothing remembered asks rather than guesses', async () => {
+    // Guessing here would check in a computer nobody is sitting at, which is
+    // the one thing the heartbeat exists to stop the board saying.
+    const h = await mount({
+      machines: [machine(), machine({ machine: 'dave-bell-jr' })], store: {},
+    });
+    await h.board.checkInHere(btn());
+    assert.equal(POST(h), undefined, 'the board picked a machine on its own');
+    assert.match(h.toasts.join(' '), /Choose which machine/);
+  });
+
+  test('a failure re-enables the button and is said out loud', async () => {
+    const b = btn();
+    const h = await mount({
+      machines: [machine()], store: { [KEY]: 'DaveBellJrII' },
+      // Only the write fails. A board that could not read the heartbeats
+      // either would not know which machine to offer, and the test would pass
+      // on the wrong toast.
+      responses: { 'POST /agent/heartbeat': { status: 403, error: 'Forbidden' } },
+    });
+    await h.board.checkInHere(b);
+    assert.equal(b.disabled, false, 'the button stayed dead after a failure');
+    assert.match(h.toasts.join(' '), /Could not check in/);
+  });
+
+  test('what it says does not promise a run', async () => {
+    // Checking in makes "where am I working" true. It cannot start anything:
+    // nothing on a web page can reach a process on your computer.
+    const h = await mount({ machines: [machine()], store: { [KEY]: 'DaveBellJrII' } });
+    await h.board.checkInHere(btn());
+    assert.match(h.toasts.join(' '), /checked in/);
+    assert.match(h.toasts.join(' '), /runner next wakes/);
+  });
+
+  test('the button is only offered where the browser knows which machine it is on', async () => {
+    const known = await mount({ machines: [machine()], store: { [KEY]: 'DaveBellJrII' } });
+    assert.match(known.board.hereButton(), /cn-here/);
+
+    const ambiguous = await mount({
+      machines: [machine(), machine({ machine: 'dave-bell-jr' })], store: {},
+    });
+    assert.equal(ambiguous.board.hereButton(), '',
+      'a press would have had to guess which computer you are at');
+
+    const none = await mount({ machines: [], store: {} });
+    assert.equal(none.board.hereButton(), '',
+      'the board offered to check in a machine it has never heard from');
+  });
+
+  test('private browsing still leaves one machine pressable', async () => {
+    // Nothing can be remembered, so the single-machine fallback is the whole
+    // feature there — and it cannot be ambiguous.
+    const h = await mount({ machines: [machine()], throwOnStore: true });
+    await h.board.checkInHere(btn());
+    assert.equal(POST(h).body.machine, 'DaveBellJrII');
+  });
+});
+
 
 // ──────────────────────────────────────────────────────────────────────
 // The controls — what they send, and what they say

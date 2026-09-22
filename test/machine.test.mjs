@@ -29,7 +29,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
 const { agentList, workingFrom, queueDestination, heartbeatStatus,
-        machineToAssert, agentLine } = board;
+        machineToAssert, machineToCheckIn, agentLine } = board;
 
 const SECRET = { 'X-Agent-Secret': 's' };
 
@@ -460,6 +460,62 @@ describe('a browser says which machine it is on', () => {
   });
 });
 
+describe('which machine a press of "I’m at this computer" checks in', () => {
+  // Choosing and being here are different questions, and this one can only be
+  // answered by the browser the press happened in. The Hub never reaches out,
+  // nothing on a page can start a process on your computer, and a page cannot
+  // read its own hostname — so the press is the fact, and this decides which
+  // machine it is about.
+  const NOW = Date.parse('2026-09-19T02:00:00Z');
+  const ago = (m) => new Date(NOW - m * 60000).toISOString().replace('T', ' ').slice(0, 19);
+  const rows = (selected) => [
+    { machine: 'DaveBellJrII', kind: 'local', capabilities: ['research', 'design'],
+      last_seen: ago(3), selected_at: selected === 'DaveBellJrII' ? ago(2) : null },
+    { machine: 'dave-bell-jr', kind: 'local', capabilities: ['research'],
+      last_seen: ago(1), selected_at: selected === 'dave-bell-jr' ? ago(2) : null },
+  ];
+
+  test('the machine this browser was told it is on', () => {
+    assert.equal(machineToCheckIn(rows(null), 'DaveBellJrII'), 'DaveBellJrII');
+  });
+
+  test('NOT the chosen one, when they are different', () => {
+    // Choosing can point at a laptop in another room and be entirely right.
+    // Checking that laptop in from a browser here would say somebody is
+    // sitting at it, which is the one thing the heartbeat must never invent.
+    assert.equal(machineToCheckIn(rows('dave-bell-jr'), 'DaveBellJrII'), 'DaveBellJrII');
+  });
+
+  test('one machine needs no telling', () => {
+    // Not a guess: with a single machine there is nothing else the press could
+    // be about, and a trip through the picker first would be ceremony.
+    assert.equal(machineToCheckIn([rows(null)[0]], null), 'DaveBellJrII');
+  });
+
+  test('two machines and nothing remembered is a question, not a guess', () => {
+    assert.equal(machineToCheckIn(rows(null), null), null);
+  });
+
+  test('a remembered machine that has never checked in is not invented', () => {
+    // There is no row to refresh, and creating one would put a machine on the
+    // board that the Hub has never heard from.
+    assert.equal(machineToCheckIn(rows(null), 'a-laptop-elsewhere'), null);
+  });
+
+  test('a CI runner is never somewhere you are sitting', () => {
+    const ci = [{ machine: 'gh-runner-7', kind: 'ci', capabilities: ['research'],
+                  last_seen: ago(1), selected_at: null }];
+    assert.equal(machineToCheckIn(ci, 'gh-runner-7'), null);
+    assert.equal(machineToCheckIn(ci, null), null,
+      'a GitHub runner was offered as the one machine you must be at');
+  });
+
+  test('with nothing at all there is nothing to check in', () => {
+    assert.equal(machineToCheckIn([], 'DaveBellJrII'), null);
+    assert.equal(machineToCheckIn(null, null), null);
+  });
+});
+
 describe('chosen and checked-in are different facts, and the board says which', () => {
   // These two get confused constantly, including by the person reading the
   // board. A chosen machine that has gone quiet is NOT disconnected: the work
@@ -491,7 +547,7 @@ describe('chosen and checked-in are different facts, and the board says which', 
   test('chosen and long gone says what to do about it', () => {
     const l = agentLine(m({ seen: 60 * 24 * 20, sel: 60 }), NOW);
     assert.match(l.text, /20d/);
-    assert.match(l.text, /here\.bat|choose another machine/);
+    assert.match(l.text, /at this computer|choose another machine/);
   });
 
   test('not chosen keeps the old wording, because the question is different', () => {

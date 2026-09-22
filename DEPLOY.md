@@ -8,9 +8,12 @@ board). See [README.md](./README.md) for what the app actually does.
 | Worker | `npx wrangler deploy` | https://design-hub-worker.d-bell.workers.dev |
 | Board | `npx wrangler pages deploy frontend --project-name=design-hub` | https://design-hub-7y2.pages.dev |
 
-The board is a single static `frontend/index.html` — no build step. It calls the
-Worker by absolute URL (the `API` constant at the top of its `<script>`), so the
-two deploy independently.
+The board is a single static `frontend/index.html` — no build step. It calls
+`/api/*` on its own origin, and `functions/api/[[path]].js` forwards to the
+Worker (see the same-origin proxy in CLAUDE.md, under "Invariants that look like
+cruft"). That Pages Function ships with the board deploy, from `functions/` at
+the repo root — so run the deploy from there, and remember that a proxy change
+is a board deploy rather than a Worker one. The two still deploy independently.
 
 ---
 

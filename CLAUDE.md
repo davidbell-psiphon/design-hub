@@ -229,6 +229,23 @@ quiet the moment its work finishes and the board stops believing in it. That is
 what "it keeps disconnecting" was. `hub.mjs here` (and `here.bat`) is the same
 check-in with none of the work — double-click it, or put it on a logon task.
 
+The board can now say it too: **“I’m at this computer”** in the Activity panel
+posts the same check-in from the browser sitting on the machine, and claims it
+in the same press. `machineToCheckIn` decides which machine that is — the one
+this browser was told it is on, or the only one on the list, and otherwise
+nothing, because the press would be guessing which computer you are at.
+
+It is a **press**, deliberately, and not something the board does on load. A
+load-time check-in would refresh a desktop's freshness from the phone in your
+pocket — the phone's browser remembers the same machine name — and the board
+would report a machine as alive because a tab was open somewhere else.
+
+What it cannot do, and what no button on a web page could: **start the runner.**
+The Hub never reaches out to anything. Checking in makes "where am I working"
+true; a queued stage still starts when the runner next wakes on that machine, or
+when you run `design-local` there. Anything that made the board claim otherwise
+would be re-introducing the exact lie the heartbeat exists to remove.
+
 **Being chosen.** The browser remembers which machine it is on
 (`localStorage`, key `design-hub:working-from`) and re-asserts it on page load
 and on window focus. A browser only ever runs on one machine, so this is the
