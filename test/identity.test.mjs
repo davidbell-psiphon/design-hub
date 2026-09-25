@@ -421,7 +421,8 @@ describe('§2 — nothing stores a second identity', () => {
 // piece13 is here because it ALTERs `cards`, which piece11 creates — it is
 // not about identity, it just cannot exist before the table it adds to.
 const AFTER_003 = ['migration-003-identity.sql', 'piece11-schema.sql',
-                   'migration-004-grain.sql', 'piece13-schema.sql'];
+                   'migration-004-grain.sql', 'piece13-schema.sql',
+                   'piece14-schema.sql', 'piece15-schema.sql'];
 
 describe('§2 — migration-003 renames without losing anything', () => {
   // The live database as it stands before the migration: a reader row under

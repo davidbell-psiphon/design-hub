@@ -1116,7 +1116,7 @@ describe('piece6-schema.sql merges the rows already in the table', () => {
   // with piece6's merge.
   const AFTER_006 = ['piece6-schema.sql', 'migration-003-identity.sql',
                      'piece11-schema.sql', 'migration-004-grain.sql',
-                     'piece13-schema.sql'];
+                     'piece13-schema.sql', 'piece14-schema.sql', 'piece15-schema.sql'];
 
   // `agent_sessions` directly, because `cards` does not exist at this point in
   // history and the shared helpers read it. That is the point of the block.

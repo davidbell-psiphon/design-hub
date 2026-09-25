@@ -220,6 +220,64 @@ Asking with **no** `machine` returns everything, exactly as before. The runner
 is fed entirely by this route, so a runner that has not been updated has to
 keep working.
 
+### A press says whether anything will come
+
+The queue is pull-only, so a press cannot make a run happen. It records the
+request and fires a `workflow_dispatch` at GitHub Actions — and that dispatch
+used to be the whole of `started: true`, whatever stage had been queued.
+Actions declares research only, so a design press said "run started", the
+cloud runner was shown an empty queue and left, and the card sat under
+"Stalled — never came back" with nothing dead anywhere. WEB-279, 21 Sep 2026.
+
+`whoWillCome` in the Worker asks the queue's own capability rule in advance:
+would any cloud runner that has checked in be shown this stage? If not, no
+dispatch, `started: false`, and the detail names the machine the work waits
+on and how long since it checked in. `nobodyComing` on the board does the
+same for a stalled card, so the note says "nothing that can run design has
+checked in since" rather than blaming a runner that was never sent. Both
+return to the old behaviour when they have nothing to go on — no cloud runner
+ever seen, or one that declared nothing.
+
+**What actually takes design work is a scheduled `design-local.bat --no-claim`
+on the machine you design at** — registered on DaveBellJrII as "Design AI
+local", every fifteen minutes on weekdays. See design-ai's
+`headless-runner.md`. The flag matters: a schedule is not you sitting there,
+and without it every wake would re-claim the machine and undo a choice made on
+the board.
+
+### A run in progress is seen as one
+
+The runner runs `claude -p` with `spawnSync`, so for the length of a stage it
+cannot speak: it posted `active` once and then nothing for up to forty
+minutes. Two misreadings followed, both on WEB-279 the same afternoon. The
+machine went stale twenty minutes into a healthy run, because its only
+heartbeat was the one at wake. And a Stop then a Run nine minutes in rewrote
+`requested_at` and `updated_at` to the same second, so the board's one signal
+for "the runner has spoken since the press" was gone: the card read Queued
+while Claude drew frames in Figma, and the second press was accepted as if
+nothing were running.
+
+Three things, and they must agree:
+
+- **design-ai's `keepalive.mjs`** repeats the runner's heartbeat and its
+  `active` post every two minutes from a separate process while the runner is
+  blocked. It exits when its parent dies or after a hard maximum, so it can
+  never paint a dead run as a live one.
+- **`stage_sessions.agent_seen_at`** (piece14) is the agent's LAST post,
+  moved by every post and by nothing else. `agent_posted_at` is the FIRST and
+  never moves; `updated_at` is moved by a press and a Stop too. Neither can
+  stand in for it.
+- **`RUN_QUIET_MIN = 6`**, in both `worker/index.js` and `board-logic.js`.
+  A fresh `agent_seen_at` on an `active` row is a run in progress: the board
+  reads it as Working whatever the press stamps say, judges a running card
+  stalled by its own silence rather than the age of the press, and the
+  trigger route answers a press on it with 409 "already running" instead of
+  queuing a second one. Past the window, silence on an `active` row means
+  the run stopped, and everything behaves as it did before.
+
+Stop still cannot interrupt a Claude call. It clears the queue entry, and the
+runner reports when it finishes regardless — the 409 says so.
+
 ### Staying connected
 
 Two separate problems, and they were both being solved by accident:
@@ -261,8 +319,9 @@ never checked in, which is what stops work being routed at nothing.
 
 Four things, and no more: stage labels (`AI-research done`, `AI-design done`)
 when a stage reports finished, `no-design` when you dismiss a card, its removal
-when you undo that, and **issue status — but only from `POST
-/api/agent/session/:id/complete`.**
+when you undo that, and **issue status — but only from
+`/api/agent/session/:id/complete`, POST to mark it done and DELETE to take
+that back.**
 
 That last one is a deliberate exception to §6, which says "Never issue status".
 §15 asked which of the code and the document should move, and the answer is the
@@ -272,11 +331,18 @@ evidence read. That is still forbidden and nothing does it. A human pressing
 Complete is not that; it is the press being carried to Linear instead of you
 opening Linear to do the same thing by hand.
 
+**Undo is the same exception, not a second one.** Mark done remembers the
+state the issue left in `cards.done_from` (piece15, Hub-owned, never touched
+by the reader), and Undo puts it back there. When nothing was remembered — the
+issue was closed in Linear by hand — it goes to the team's earliest
+`unstarted` state, then `started`, then `backlog`, by type and never by
+name, because every team names its states differently.
+
 **What keeps it honest is that nothing else can reach that mutation.** The
 cron read, the agent post, stage-done, dismiss and set-aside are each asserted
 never to write status in `test/invariants.test.mjs`. If you add a path that
-completes an issue, you are removing the exception's only justification — do
-not, without changing this section first.
+completes or reopens an issue, you are removing the exception's only
+justification — do not, without changing this section first.
 
 ## The Hub stays generic
 

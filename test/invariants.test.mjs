@@ -162,7 +162,8 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
       `UPDATE cards
           SET figma_url = 'https://figma.com/file/abc',
               set_aside_at = '2026-09-01 10:00:00',
-              brand = 'conduit'
+              brand = 'conduit',
+              done_from = '{"id":"st-progress"}'
         WHERE issue_key = 'RYV-84'`
     ).run();
     // …and a run queued on the session, which is a different table now. The
@@ -181,6 +182,7 @@ describe('§5 — a Linear-owned fact is refreshed, never merged', () => {
     assert.equal(row.set_aside_at, '2026-09-01 10:00:00', 'a read un-set-aside a card');
     assert.equal(row.brand, 'conduit', 'a read undid a manual brand reassignment');
     assert.equal(wire(db, 'RYV-84').requested_stage, 'design', 'a read cleared a queued run');
+    assert.equal(row.done_from, '{"id":"st-progress"}', 'a read forgot where Mark done came from');
   });
 
   // The one CLAUDE.md calls out by name, and the one the first pass of this
@@ -352,7 +354,7 @@ describe('§6 — every write to Linear is idempotent', () => {
   });
 });
 
-describe('§6 — issue status moves only when a human presses Complete', () => {
+describe('§6 — issue status moves only when a human presses Complete, or takes it back', () => {
   // §15 asked whether the Manager advances Linear status. It does, through one
   // route, and §6 says it never should. The document moves rather than the
   // code: the rule is there to stop the Manager *inventing* a fact it does not
@@ -422,6 +424,17 @@ describe('§6 — issue status moves only when a human presses Complete', () => 
     });
     assert.equal(statusWrites(queries).length, 1,
       'the one route that is supposed to write status stopped doing it');
+  });
+
+  test('and so does Undo, which is the same exception and not a second one', async () => {
+    const queries = await withRecorder(async (db, e, rec) => {
+      db.prepare(`UPDATE cards SET linear_state = 'completed' WHERE issue_key = 'RYV-84'`).run();
+      stubLinear([issue({ identifier: 'RYV-84', state: 'completed' })], null, { queries: rec });
+      const res = await call(e, 'DELETE', '/api/agent/session/RYV-84/complete');
+      assert.equal(res.status, 200);
+    });
+    assert.equal(statusWrites(queries).length, 1,
+      'Undo stopped reopening the issue in Linear');
   });
 
   test('and it refuses a card with no Linear issue behind it', async () => {

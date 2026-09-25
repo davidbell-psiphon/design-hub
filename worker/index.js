@@ -291,6 +291,98 @@ async function workingFrom(env) {
   }
 }
 
+// Whether anything is going to come for a stage just queued.
+//
+// The queue is pull-only, so a press cannot make a run happen. It records the
+// request and, for the cloud runner, fires a dispatch — and until this existed
+// the press reported "started" whenever that dispatch went through. True, and
+// useless: GitHub Actions declares research only, the queue filters design out
+// of what it is shown, and the card sat there under a toast saying a run had
+// begun. WEB-279 waited like that for an hour on 21 Sep 2026 and read as
+// Stalled with nothing wrong anywhere, because the only machine that could
+// take design had not woken up since the day before.
+//
+// This is the queue's own rule — GET /api/agent/queue's capability filter —
+// asked in advance and in the aggregate: of the machines that have checked in,
+// which would be shown this stage. The Hub matches the stage name against what
+// each runner declared and knows no more than that. A runner that declared
+// nothing has not said, and counts as able, exactly as the queue treats it.
+//
+// `ci` is whether a dispatch is worth firing. True unless every cloud runner
+// that has ever checked in declared a list that leaves this stage out. Never
+// having seen one is the world before heartbeats, and the answer there is
+// what it always was: dispatch.
+//
+// `reason` is what the press carries back when the cloud will not come: which
+// machine the work waits on, and how long since anything on it checked in.
+// "Start the local runner" rather than a script name, because the Hub does
+// not know what the runner is called — see "The Hub stays generic".
+async function whoWillCome(env, stage) {
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT machine, capabilities, kind, selected_at,
+              CAST((julianday('now') - julianday(last_seen)) * 1440 AS INTEGER) AS mins_ago
+         FROM agent_heartbeats ORDER BY last_seen DESC`
+    ).all());
+  } catch (e) {
+    return { ci: true, reason: null };   // pre-piece12: nothing to consult
+  }
+  rows = rows || [];
+  const can = (r) => {
+    const c = parseOptions(r.capabilities);
+    return !c.length || c.includes(stage);
+  };
+  const cloud = rows.filter((r) => r.kind === 'ci');
+  const local = rows.filter((r) => r.kind !== 'ci');
+  if (!cloud.length || cloud.some(can)) return { ci: true, reason: null };
+
+  const ago = (m) => m < 90 ? `${m}m` : m < 60 * 48 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
+  const chosen = local.find((r) => r.selected_at) || null;
+  const able = local.filter(can);
+  let where;
+  if (!able.length) {
+    where = `no machine that can run ${stage} has ever checked in`;
+  } else if (chosen && !can(chosen)) {
+    where = `${stage} is reserved for ${chosen.machine}, which does not run it — ` +
+            `choose ${able.map((r) => r.machine).join(' or ')}`;
+  } else {
+    const at = chosen || able[0];
+    const held = chosen ? 'is reserved for' : 'goes to';
+    where = at.mins_ago <= 20
+      ? `${stage} ${held} ${at.machine}, which checked in ${ago(at.mins_ago)} ago and should pick it up on its next wake`
+      : `${stage} ${held} ${at.machine}, which last checked in ${ago(at.mins_ago)} ago — ` +
+        `start the local runner on it, or choose another machine`;
+  }
+  return { ci: false, reason: `nothing was started: the cloud runner does not run ${stage}. ${where}` };
+}
+
+// Is the agent mid-run on this stage right now?
+//
+// "Right now" is a fresh `agent_seen_at` on an `active` row. The runner posts
+// `active` every two minutes for as long as a Claude call has it blocked, so
+// three missed posts is the line: past it, silence on an active row means the
+// run stopped, and a press is a press. The board draws the same line
+// (RUN_QUIET_MIN in board-logic.js), and the two must agree, or the card would
+// say Working while the button said nothing is running.
+//
+// Null before piece14, and null for anything but `active` — a gate waiting on
+// you and an error are both a runner that has stopped, whatever it said last.
+const RUN_QUIET_MIN = 6;
+async function agentAlive(env, key, stage) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT CAST((julianday('now') - julianday(agent_seen_at)) * 1440 AS INTEGER) AS mins
+         FROM stage_sessions
+        WHERE issue_key = ? AND stage = ? AND status = 'active' AND agent_seen_at IS NOT NULL`
+    ).bind(key, stage).first();
+    if (!row || row.mins === null || row.mins > RUN_QUIET_MIN) return null;
+    return { mins: Math.max(0, row.mins) };
+  } catch (e) {
+    return null;   // pre-piece14: no column, no guard, exactly as before
+  }
+}
+
 // Every session on a card, oldest stage first.
 async function sessionsFor(env, key) {
   const { results } = await env.DB.prepare(
@@ -761,8 +853,11 @@ query IssueStates($id: String!) {
   }
 }`;
 
-const COMPLETE_MUTATION = `
-mutation Complete($id: String!, $stateId: String!) {
+// One mutation serves both directions: Mark done and its undo are the same
+// write with a different target, and `issueUpdate` is what the §6 recorder in
+// test/invariants.test.mjs counts.
+const SET_STATE_MUTATION = `
+mutation SetState($id: String!, $stateId: String!) {
   issueUpdate(id: $id, input: { stateId: $stateId }) { success }
 }`;
 
@@ -782,7 +877,59 @@ async function completedStateFor(env, issueId) {
   if (!done.length) {
     return { error: `team "${(issue.team && issue.team.name) || '?'}" has no completed state` };
   }
-  return { state: done[0] };
+  // `from` is where the issue is leaving, kept so Undo can put it back there.
+  return { state: done[0], from: issue.state };
+}
+
+// ─── TAKING IT BACK ───────────────────────────────────
+// Undo goes to the state the issue was in when Mark done was pressed, which
+// the press remembered in `cards.done_from` (piece15). Where the Hub never
+// saw the press — the issue was closed in Linear by hand, or before piece15 —
+// the team's earliest `unstarted` state stands in (Todo, on most teams), then
+// `started`, then `backlog`. By type and never by name, for the same reason
+// as completedStateFor. A remembered state the team has since deleted falls
+// through to the same default rather than failing the undo.
+async function reopenStateFor(env, issueId, remembered) {
+  const data = await linearGraphQL(env, ISSUE_STATES_QUERY, { id: String(issueId) });
+  if (data.errors) return { error: data.errors };
+  const issue = data.data && data.data.issue;
+  if (!issue) return { error: 'no such issue in Linear' };
+  const type = issue.state && issue.state.type;
+  // Already open. Nothing to write in Linear; the local row is what is stale.
+  if (type !== 'completed' && type !== 'canceled') {
+    return { already: true, state: issue.state };
+  }
+  const states = ((issue.team && issue.team.states && issue.team.states.nodes) || [])
+    .filter(Boolean);
+  const back = remembered && remembered.id && states.find((st) => st.id === remembered.id);
+  if (back) return { state: back };
+  for (const want of ['unstarted', 'started', 'backlog']) {
+    const found = states.filter((st) => st.type === want)
+      .sort((a, b) => (a.position || 0) - (b.position || 0))[0];
+    if (found) return { state: found };
+  }
+  return { error: `team "${(issue.team && issue.team.name) || '?'}" has no open state` };
+}
+
+// `cards.done_from` may not exist yet on a Worker deployed ahead of piece15.
+// Both sides tolerate that: a press that cannot remember still completes, and
+// an undo that cannot read falls through to the team's default open state.
+// Hub-owned, like dismissed_at — the reader never mentions it.
+async function doneFrom(env, key) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT done_from FROM cards WHERE issue_key = ?`
+    ).bind(key).first();
+    return row && row.done_from ? JSON.parse(row.done_from) : null;
+  } catch { return null; }
+}
+async function rememberDoneFrom(env, key, state) {
+  try {
+    await env.DB.prepare(
+      `UPDATE cards SET done_from = ? WHERE issue_key = ?`
+    ).bind(state ? JSON.stringify({ id: state.id, name: state.name, type: state.type }) : null,
+           key).run();
+  } catch { /* column not applied yet; see DEPLOY.md */ }
 }
 
 async function removeLabelFromIssue(env, issueId, labelId) {
@@ -915,7 +1062,15 @@ async function route(request, env) {
             .slice(0, 4000)
         : null;
 
-      await env.DB.prepare(
+      //
+      // Two stamps, two meanings. `agent_posted_at` is the FIRST post and never
+      // moves — it is "an agent has written here", which the Stop route reads
+      // to tell a phantom row from a real one. `agent_seen_at` is the LAST
+      // post and moves every time — it is "the agent is alive", which the
+      // board and the trigger route read. Neither can stand in for the other,
+      // and `updated_at` can stand in for neither: a press and a Stop move it
+      // too, which is how WEB-279 read Queued mid-run (piece14).
+      const write = (withSeen) => env.DB.prepare(
         `UPDATE stage_sessions SET
            system          = ?,
            status          = ?,
@@ -925,12 +1080,20 @@ async function route(request, env) {
            last_error      = ?,
            last_error_at   = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,
            agent_posted_at = COALESCE(agent_posted_at, datetime('now')),
+           ${withSeen ? `agent_seen_at   = datetime('now'),` : ''}
            updated_at      = datetime('now')
          WHERE issue_key = ? AND stage = ?`
       ).bind(
         b.system, status, b.prompt || null, b.detail || null, options,
         lastError, lastError, key, stage
       ).run();
+      try {
+        await write(true);
+      } catch (e) {
+        // pre-piece14: the agent's post is the one write that must never be
+        // lost to a column the deploy has not caught up with.
+        await write(false);
+      }
 
       // The three Linear-owned fields an agent may still send are only ever
       // filled in where the card has nothing, so a post cannot rename a card,
@@ -1025,6 +1188,20 @@ async function route(request, env) {
       // it in Linear has nothing to run against.
       if (!card.linear_uuid) return err('session has no linked Linear issue');
 
+      // A run in progress is not a thing to queue again. The runner says
+      // "still here" every couple of minutes while a Claude call has it
+      // blocked (piece14, agent_seen_at), so a fresh word on an `active` row
+      // is a run going right now — and a press on it is either a double
+      // press or a Stop-then-Run from someone who took the board's silence
+      // for a dead run. Stop cannot interrupt a Claude call; it clears the
+      // queue entry, and the runner reports when it finishes regardless. So
+      // the honest answer is to say so, and to queue nothing.
+      const live = await agentAlive(env, key, b.stage);
+      if (live) {
+        return err(`${b.stage} is already running — the runner last spoke ${live.mins}m ago. ` +
+                   `Stop only clears the queue entry; a run in progress reports when it finishes`, 409);
+      }
+
       // One run per card at a time, still. A card can hold a session per stage
       // now, but runs are serialised and queuing design while research is
       // waiting to start would put two rows in the queue for one issue — which
@@ -1055,7 +1232,13 @@ async function route(request, env) {
             AND c.set_aside_at IS NULL`
       ).first();
 
-      const run = await startRunner(env, queued && queued.n);
+      // Only fire the cloud runner when it would be shown this stage. A
+      // dispatch it cannot take is a wasted run and, worse, a "started" the
+      // board repeats as if it meant something — see whoWillCome.
+      const who = await whoWillCome(env, b.stage);
+      const run = who.ci
+        ? await startRunner(env, queued && queued.n)
+        : { started: false, reason: who.reason };
       return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason });
     }
 
@@ -1472,7 +1655,14 @@ async function route(request, env) {
     // dismiss route follows and for the same reason — a card moved to Completed
     // here but not there is put back by the next reconciliation pass, and
     // flickers on and off the board with every read.
-    if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/complete$/)) {
+    //
+    // DELETE takes it back, the same way dismiss has DELETE. It is the same
+    // exception, not a second one: a human pressing Undo on a card they marked
+    // done by mistake, carried to Linear. The press remembered where the issue
+    // came from, and Undo puts it back there — see reopenStateFor for what
+    // happens when nothing was remembered.
+    if (path.match(/^\/api\/agent\/session\/[^/]+\/complete$/) &&
+        (method === 'POST' || method === 'DELETE')) {
       const id = await resolveKey(env, path.split('/')[4]);
       const row = id && await env.DB.prepare(
         `SELECT linear_uuid FROM cards WHERE issue_key = ?`
@@ -1480,15 +1670,46 @@ async function route(request, env) {
       if (!row) return err('not found', 404);
       if (!row.linear_uuid) return err('session has no linked Linear issue');
 
+      if (method === 'DELETE') {
+        const found = await reopenStateFor(env, row.linear_uuid, await doneFrom(env, id));
+        if (found.error) return err('Linear: ' + JSON.stringify(found.error), 502);
+        if (!found.already) {
+          const res = await linearGraphQL(env, SET_STATE_MUTATION,
+            { id: row.linear_uuid, stateId: found.state.id });
+          // linearGraphQL folds HTTP and GraphQL failures into `error`, singular.
+          // This read `errors` once, so a refused write reported success and moved
+          // the local row anyway — a card under Completed that Linear still had open.
+          if (res.error) {
+            return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
+          }
+        }
+        // Local row second, and only once Linear agrees. The type is what the
+        // board files on, so the card leaves the Completed drawer now rather
+        // than on the next read.
+        await env.DB.prepare(
+          `UPDATE cards SET linear_state = ?, updated_at = datetime('now')
+            WHERE issue_key = ?`
+        ).bind((found.state && found.state.type) || 'unstarted', id).run();
+        await rememberDoneFrom(env, id, null);
+        return json({ ok: true, state: found.state && found.state.name, already: !!found.already });
+      }
+
       const found = await completedStateFor(env, row.linear_uuid);
       if (found.error) return err('Linear: ' + JSON.stringify(found.error), 502);
 
       if (!found.already) {
-        const res = await linearGraphQL(env, COMPLETE_MUTATION,
+        const res = await linearGraphQL(env, SET_STATE_MUTATION,
           { id: row.linear_uuid, stateId: found.state.id });
-        if (res.errors) {
-          return err('Linear mutation failed: ' + JSON.stringify(res.errors), 502);
+        // linearGraphQL folds HTTP and GraphQL failures into `error`, singular.
+        // This read `errors` once, so a refused write reported success and moved
+        // the local row anyway — a card under Completed that Linear still had open.
+        if (res.error) {
+          return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
         }
+        // Where it came from, so Undo can put it back. Only when this press
+        // moved it: an issue already finished in Linear came from nowhere the
+        // Hub saw, and Undo falls back to the team's default open state.
+        await rememberDoneFrom(env, id, found.from);
       }
 
       // The queue entry goes with it. A finished issue is not work the runner

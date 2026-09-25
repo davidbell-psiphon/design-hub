@@ -350,6 +350,23 @@ function actionsFor(r) {
 // trips it; short enough that a dead process is caught inside the hour.
 var STALL_AFTER_MIN = 30;
 
+// How long the runner may go without a word before its last word stops being
+// proof it is alive. It posts `active` every two minutes for as long as a
+// Claude call has it blocked — the keepalive in design-ai — so three missed
+// posts is the line. The Worker draws the same line (RUN_QUIET_MIN in
+// worker/index.js) for refusing a press mid-run; the two must agree.
+var RUN_QUIET_MIN = 6;
+
+// Has the agent posted within the quiet window? `agent_seen_at` is the one
+// stamp on the row that only the agent moves (piece14): a press, a Stop and a
+// Linear read all leave it alone. Absent on a Hub that predates it, and then
+// this is simply never true, which hands the question back to the old rule.
+function agentSpokeRecently(r, now) {
+  var t = stampMs(r && r.agent_seen_at);
+  if (isNaN(t)) return false;
+  return ((now === undefined ? Date.now() : now) - t) <= RUN_QUIET_MIN * 60000;
+}
+
 // A SQLite `datetime('now')` stamp — "2026-09-16 20:31:47", always UTC — as
 // milliseconds. NaN for anything that will not parse, which every caller
 // treats as "cannot tell" rather than as a value.
@@ -396,8 +413,17 @@ function queuedSince(r) {
 // Comparing the two timestamps rather than trusting `status` alone is what
 // makes it safe: a row left `active` by a previous run and then re-triggered
 // would otherwise claim to be running the moment you pressed the button.
-function isRunning(r) {
+//
+// Unless the runner has spoken within the last few minutes, in which case it
+// is running whatever the two stamps say. WEB-279, 21 Sep 2026: Stop and then
+// Run, nine minutes into a design run, rewrote `requested_at` and
+// `updated_at` to the same second, and the runner's one post was now OLDER
+// than the request — so the card read Queued while Claude drew frames in
+// Figma on the machine beside it. A re-press cannot un-run a run, and a board
+// that says it can is the reason a second one gets pressed.
+function isRunning(r, now) {
   if (!isWorking(r) || !r || r.status !== 'active') return false;
+  if (agentSpokeRecently(r, now)) return true;
   var at = stampMs(lastActivity(r));
   var asked = stampMs(r.requested_at);
   if (isNaN(at) || isNaN(asked)) return false;
@@ -460,9 +486,17 @@ function queueLabel(r, rows) {
 // A row whose timestamp will not parse is deliberately *not* stalled. Flagging
 // on missing data would flag the whole board the first time a column comes
 // back null, and a board crying wolf is a board nobody reads.
+//
+// A run that has started is judged on its own silence — the time since the
+// runner last moved the row — and not on the age of the press. A queued card
+// still counts from the press, because nothing else has happened to it. The
+// press used to be the clock for both, which made every design run read
+// Stalled at thirty minutes while it was drawing; the keepalive moves
+// `updated_at` every two minutes now, so silence means what it says.
 function isStalled(r, now, rows) {
   if (!isWorking(r)) return false;
-  var t = stampMs(queuedSince(r));
+  var running = isRunning(r, now);
+  var t = stampMs(running ? lastActivity(r) : queuedSince(r));
   if (isNaN(t)) return false;
   if (((now === undefined ? Date.now() : now) - t) < STALL_AFTER_MIN * 60000) return false;
 
@@ -475,10 +509,10 @@ function isStalled(r, now, rows) {
   // runner took its two issues, deferred the rest, and nothing re-dispatched.
   // So a queued card is stalled once it is old AND nothing in the queue is
   // running. The card being worked is judged on its own silence, as before.
-  if (rows && !isRunning(r)) {
+  if (rows && !running) {
     var q = queuedRows(rows);
     for (var i = 0; i < q.length; i++) {
-      if (isRunning(q[i])) return false;
+      if (isRunning(q[i], now)) return false;
     }
   }
   return true;
@@ -943,6 +977,52 @@ function agentLine(rows, now) {
         ', so a run will wait until something on it wakes up'
       : s.row.machine + ' — work goes here, but nothing has checked in for ' + ago +
         '. Press “I’m at this computer” if you are on it, or choose another machine' };
+}
+
+// Why a queued run may never come, or null when the board cannot tell.
+//
+// The stall flag says a request is old and nothing is running. It does not say
+// whether anything was ever going to come — and for a stage only a machine you
+// sit at can run, that is the usual reason: the machine it is reserved for has
+// not woken up since the press. WEB-279 sat like that for an hour on 21 Sep
+// 2026, "Stalled" and "never came back", when nothing had died: the cloud
+// runner declares research only and the one machine that runs design had last
+// checked in the day before. This names that, from the same heartbeat rows
+// the picker draws.
+//
+// Null whenever there is nothing to go on, so the old wording stands: no
+// heartbeat rows at all, no stage on the row, or a cloud runner that declares
+// this stage — a dispatch went out, so a stall there really is a run that
+// stopped answering. Null too when the machine that would take it is fresh:
+// something on it is awake and asking, so silence is again the runner's.
+function nobodyComing(r, machines, now) {
+  var stage = r && r.requested_stage;
+  var rows = machines || [];
+  if (!stage || !rows.length) return null;
+  var can = function (m) {
+    var c = (m && m.capabilities) || [];
+    return !c.length || c.indexOf(stage) >= 0;
+  };
+  var cloud = rows.filter(function (m) { return m && m.kind === 'ci'; });
+  if (!cloud.length || cloud.some(can)) return null;
+
+  var able = localAgents(rows).filter(can);
+  if (!able.length) return 'no machine that can run ' + stage + ' has ever checked in.';
+  var chosen = workingFrom(rows);
+  if (chosen && !can(chosen)) {
+    return stage + ' is reserved for ' + chosen.machine + ', which does not run it. Choose another machine.';
+  }
+  var at = chosen || able.slice().sort(function (a, b) {
+    return stampMs(b.last_seen) - stampMs(a.last_seen);
+  })[0];
+  var f = agentFreshness(at, now);
+  if (f.state === 'fresh') return null;
+  var ago = f.minsAgo < 90 ? f.minsAgo + 'm'
+          : f.minsAgo < 60 * 48 ? Math.floor(f.minsAgo / 60) + 'h'
+          : Math.floor(f.minsAgo / 1440) + 'd';
+  return 'nothing that can run ' + stage + ' has checked in since. ' + at.machine +
+         (chosen ? ' has it reserved and' : '') + ' last checked in ' + ago +
+         ' ago \u2014 start the local runner on it, or choose another machine.';
 }
 
 // Where a queued run will actually be picked up, in one sentence.

@@ -1,0 +1,26 @@
+-- piece15 — where Mark done came from, so Undo can put it back.
+--
+-- Additive only, and safe to fail: re-running this errors on a duplicate
+-- column rather than dropping anything. Never run schema.sql.
+--
+-- WHY
+--
+-- Mark done moves the Linear issue to its team's finished state. Pressing it
+-- on the wrong card had no way back but opening Linear, which is the trip
+-- the Hub exists to save. Undo needs a destination, and the Hub did not have
+-- one: `cards.linear_state` holds the state's TYPE ('completed'), not which
+-- state the issue was in before the press.
+--
+-- So the press remembers. `done_from` is the state the issue left, as JSON
+-- {id, name, type}, written by the complete route when it actually moved the
+-- issue and cleared by its undo. Hub-owned, like dismissed_at: the reader
+-- never mentions it, and test/invariants.test.mjs holds that down.
+--
+-- When it is empty — the issue was closed in Linear by hand, or before this
+-- piece — Undo goes to the team's earliest `unstarted` state, then `started`,
+-- then `backlog`. By type and never by name; see reopenStateFor.
+--
+-- The Worker tolerates this column being missing, so deploying it ahead of
+-- this file costs only the remembered destination.
+
+ALTER TABLE cards ADD COLUMN done_from TEXT;   -- the state Mark done left, JSON {id, name, type}

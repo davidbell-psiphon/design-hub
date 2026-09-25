@@ -1,0 +1,30 @@
+-- piece14 — when the agent last spoke.
+--
+-- Additive only, and safe to fail: re-running this errors on a duplicate
+-- column rather than dropping anything. Never run schema.sql.
+--
+-- WHY
+--
+-- WEB-279, 21 Sep 2026, the second time. The design run had been going for
+-- nine minutes when Stop was pressed and then Run again. Stop cleared the
+-- queue entry and Run wrote a new one, and both moved `updated_at` — so the
+-- one signal the board had for "the runner has spoken since the press"
+-- (`updated_at` later than `requested_at`) was gone. The card read Queued
+-- while Claude was drawing frames in Figma on the machine next to it, and the
+-- second press was accepted as if nothing were running.
+--
+-- `agent_posted_at` cannot answer this: it is the FIRST post, kept as "an
+-- agent has written here" for the Stop route's phantom-row check, and it
+-- never moves. `updated_at` cannot either, because a press and a Stop move it
+-- too. So: one more column, one meaning — the moment the agent last posted,
+-- whatever it said. Written by the agent post route and nothing else.
+--
+-- The runner posts `active` every two minutes while it is blocked in a Claude
+-- call (design-ai's keepalive.mjs), so a fresh value here means a run is
+-- going, and a stale one on an `active` row means it stopped. The board reads
+-- it as such, and the trigger route refuses a re-press while it is fresh.
+--
+-- Generic on purpose: "the agent last spoke at" is a fact about any agent
+-- system, not about Design AI. The Hub stays generic.
+
+ALTER TABLE stage_sessions ADD COLUMN agent_seen_at TEXT;   -- the agent's last post, moved by every post

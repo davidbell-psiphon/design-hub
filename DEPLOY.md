@@ -65,7 +65,20 @@ npx wrangler d1 execute design-hub --remote --file=./piece11-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./migration-004-grain.sql
 npx wrangler d1 execute design-hub --remote --file=./piece12-schema.sql
 npx wrangler d1 execute design-hub --remote --file=./piece13-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece14-schema.sql
+npx wrangler d1 execute design-hub --remote --file=./piece15-schema.sql
 ```
+
+`piece15-schema.sql` adds `cards.done_from`, the state an issue left when
+Mark done was pressed, so Undo can put it back there. The Worker tolerates the
+column being missing: a press still completes, and an undo goes to the team's
+first open state instead of the remembered one.
+
+
+`piece14-schema.sql` adds `stage_sessions.agent_seen_at`, the moment the agent
+last posted. The Worker writes it on every agent post and falls back to the old
+statement if the column is missing, so deploying before applying it costs
+nothing but the "already running" guard on the trigger route.
 
 `piece13-schema.sql` adds `figma_paths`, two override columns on `cards`, and
 seeds the destinations that were already live in

@@ -549,5 +549,6 @@ import { PIECES, applyPieces } from './helpers.mjs';
 // piece13 joins them because it ALTERs `cards`, which piece11 creates. It has
 // nothing to do with the grain split; it simply cannot be applied before the
 // table it adds columns to exists.
-const AFTER = ['piece11-schema.sql', 'migration-004-grain.sql', 'piece13-schema.sql'];
+const AFTER = ['piece11-schema.sql', 'migration-004-grain.sql', 'piece13-schema.sql',
+               'piece14-schema.sql', 'piece15-schema.sql'];
 const PIECES_BEFORE = PIECES.filter((p) => !AFTER.includes(p));

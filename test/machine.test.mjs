@@ -22,14 +22,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  freshDb, env, call, readLinear, issue, stubLinear, PIECES,
+  freshDb, env, call, readLinear, issue, stubLinear, PIECES, session,
 } from './helpers.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const board = vm.createContext({ Date, Math, isNaN, String });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'frontend/board-logic.js'), 'utf8'), board);
 const { agentList, workingFrom, queueDestination, heartbeatStatus,
-        machineToAssert, machineToCheckIn, agentLine } = board;
+        machineToAssert, machineToCheckIn, agentLine, nobodyComing } = board;
 
 const SECRET = { 'X-Agent-Secret': 's' };
 
@@ -635,5 +635,190 @@ describe('the Worker survives a database without piece12', () => {
   test('and clearing it succeeds, because there is nothing to clear', async () => {
     const res = await call(unmigrated(), 'PUT', '/api/agent/working-from', { machine: null });
     assert.equal(res.status, 200);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// A press says whether anything will come for it
+// ──────────────────────────────────────────────────────────────────────
+//
+// WEB-279, 21 Sep 2026. Design was pressed at 15:19 UTC. The Hub queued it,
+// dispatched GitHub Actions, and answered "started" because the dispatch
+// returned 204. Actions arrived seventeen seconds later, declared research
+// only, was correctly shown an empty queue, and left. The only machine that
+// runs design had last checked in the day before and nothing was scheduled on
+// it. An hour later the card read Stalled — "never came back" — with nothing
+// wrong anywhere. Every one of those pieces behaved as designed; what was
+// missing was the press saying so at the moment it mattered.
+
+describe('a press says whether anything will come for it', () => {
+  // Record GitHub dispatches and answer them the way GitHub does, leaving
+  // Linear to the stub already installed.
+  function github() {
+    const dispatched = [];
+    const linear = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('api.github.com')) {
+        dispatched.push(JSON.parse(init.body));
+        return new Response(null, { status: 204 });
+      }
+      return linear(url, init);
+    };
+    return dispatched;
+  }
+
+  async function board() {
+    const db = freshDb();
+    const e = env(db, { GITHUB_TOKEN: 't' });
+    stubLinear([issue({ identifier: 'WEB-279' })]);
+    await readLinear(e);
+    const dispatched = github();
+    return { db, e, dispatched };
+  }
+
+  const press = async (e, stage) =>
+    (await call(e, 'POST', '/api/agent/session/WEB-279/trigger', { stage })).json();
+
+  const asleep = (db, machine, hours) =>
+    db.prepare(`UPDATE agent_heartbeats SET last_seen = datetime('now', ?) WHERE machine = ?`)
+      .run(`-${hours} hours`, machine);
+
+  test('design, when the cloud runner declares research only, starts nothing and says who it waits on', async () => {
+    const { db, e, dispatched } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: ['research'] });
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
+    asleep(db, 'DaveBellJrII', 21);
+
+    const res = await press(e, 'design');
+    assert.equal(res.started, false, 'the press claimed a run had started');
+    assert.match(res.detail, /does not run design/);
+    assert.match(res.detail, /DaveBellJrII/, 'the machine the work waits on is not named');
+    assert.match(res.detail, /21h ago/, 'how long it has been asleep is not said');
+    assert.match(res.detail, /start the local runner/);
+    assert.deepEqual(dispatched, [], 'a cloud run was fired for a stage it would be shown none of');
+    assert.ok(session(db, 'WEB-279', 'design').requested_at,
+      'the request itself must still be recorded — the press is the record, the start is a convenience');
+  });
+
+  test('research on the same board is dispatched, exactly as before', async () => {
+    const { db, e, dispatched } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: ['research'] });
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
+    asleep(db, 'DaveBellJrII', 21);
+
+    const res = await press(e, 'research');
+    assert.equal(res.started, true);
+    assert.equal(dispatched.length, 1);
+  });
+
+  test('with no cloud runner ever seen, design is dispatched, as it always was', async () => {
+    // The world before heartbeats. Nothing here may change what a Hub with
+    // no check-ins does, or a fresh deploy stops every run.
+    const { e, dispatched } = await board();
+    await beat(e, 'DaveBellJrII', { kind: 'local' });
+
+    assert.equal((await press(e, 'design')).started, true);
+    assert.equal(dispatched.length, 1);
+  });
+
+  test('a cloud runner that has not said what it runs is still dispatched', async () => {
+    // Declaring nothing is not declaring nothing-can-be-done — the same
+    // reading the queue gives it.
+    const { e, dispatched } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: [] });
+
+    assert.equal((await press(e, 'design')).started, true);
+    assert.equal(dispatched.length, 1);
+  });
+
+  test('a chosen machine that is awake is named as the one that will pick it up', async () => {
+    const { e, dispatched } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: ['research'] });
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true });
+
+    const res = await press(e, 'design');
+    assert.equal(res.started, false);
+    assert.match(res.detail, /DaveBellJrII, which checked in 0m ago and should pick it up/);
+    assert.deepEqual(dispatched, []);
+  });
+
+  test('nothing chosen: whichever able machine checked in last is named', async () => {
+    const { db, e } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: ['research'] });
+    await beat(e, 'dave-bell-jr', { kind: 'local' });
+    await beat(e, 'DaveBellJrII', { kind: 'local' });
+    asleep(db, 'dave-bell-jr', 72);
+    asleep(db, 'DaveBellJrII', 21);
+
+    const res = await press(e, 'design');
+    assert.match(res.detail, /design goes to DaveBellJrII, which last checked in 21h ago/);
+  });
+
+  test('a chosen machine that does not run the stage is said to be the wrong one', async () => {
+    const { e } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: ['research'] });
+    await beat(e, 'DaveBellJrII', { kind: 'local', claim: true, capabilities: ['research'] });
+    await beat(e, 'dave-bell-jr', { kind: 'local', capabilities: ['research', 'design'] });
+
+    const res = await press(e, 'design');
+    assert.match(res.detail, /reserved for DaveBellJrII, which does not run it — choose dave-bell-jr/);
+  });
+
+  test('no machine at all that runs the stage says exactly that', async () => {
+    const { e } = await board();
+    await beat(e, 'github-actions', { kind: 'ci', capabilities: ['research'] });
+
+    const res = await press(e, 'design');
+    assert.equal(res.started, false);
+    assert.match(res.detail, /no machine that can run design has ever checked in/);
+  });
+});
+
+describe('a stalled card says when nobody was coming', () => {
+  const NOW = Date.parse('2026-09-21T16:30:00Z');
+  const at = (iso) => iso.replace('T', ' ').replace('Z', '');
+  const ci = { machine: 'github-actions', kind: 'ci', capabilities: ['research'],
+               last_seen: at('2026-09-21T15:20:05Z') };
+  const asleep = { machine: 'DaveBellJrII', kind: 'local', capabilities: ['research', 'design'],
+                   selected_at: at('2026-09-18T19:09:14Z'), last_seen: at('2026-09-20T18:36:09Z') };
+  const design = { id: 'WEB-279', requested_stage: 'design', requested_at: at('2026-09-21T15:19:48Z') };
+
+  test('the WEB-279 board, as it stood', () => {
+    const why = nobodyComing(design, [ci, asleep], NOW);
+    assert.match(why, /nothing that can run design has checked in since/);
+    assert.match(why, /DaveBellJrII has it reserved and last checked in 21h ago/);
+  });
+
+  test('research on the same board is a real stall — the cloud was dispatched', () => {
+    assert.equal(nobodyComing({ ...design, requested_stage: 'research' }, [ci, asleep], NOW), null);
+  });
+
+  test('a chosen machine that is awake makes it a real stall too', () => {
+    const awake = { ...asleep, last_seen: at('2026-09-21T16:25:00Z') };
+    assert.equal(nobodyComing(design, [ci, awake], NOW), null);
+  });
+
+  test('with no heartbeats there is nothing to say, and the old wording stands', () => {
+    assert.equal(nobodyComing(design, [], NOW), null);
+    assert.equal(nobodyComing(design, undefined, NOW), null);
+  });
+
+  test('with no cloud runner seen, the board cannot tell, and says nothing', () => {
+    assert.equal(nobodyComing(design, [asleep], NOW), null);
+  });
+
+  test('nothing chosen: the freshest able machine is the one named', () => {
+    const older = { machine: 'dave-bell-jr', kind: 'local', capabilities: ['research', 'design'],
+                    last_seen: at('2026-09-17T21:30:01Z') };
+    const unchosen = { ...asleep, selected_at: null };
+    const why = nobodyComing(design, [ci, older, unchosen], NOW);
+    assert.match(why, /DaveBellJrII last checked in 21h ago/);
+    assert.equal(why.includes('reserved'), false);
+  });
+
+  test('no local machine runs the stage', () => {
+    const researchOnly = { ...asleep, capabilities: ['research'], selected_at: null };
+    assert.match(nobodyComing(design, [ci, researchOnly], NOW),
+                 /no machine that can run design has ever checked in/);
   });
 });

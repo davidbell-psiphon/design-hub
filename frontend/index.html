@@ -769,8 +769,12 @@ function sessionCard(r) {
 
   let actionsHtml;
   if (section === 'completed') {
-    // Closed in Linear. Nothing to do from here but look at it.
-    actionsHtml = linksHtml;
+    // Closed in Linear. Undo reopens it — back to the state it was in when
+    // Mark done was pressed, or the team's first open state when it was
+    // closed in Linear by hand and the Hub never saw where it came from.
+    actionsHtml = `
+      <button class="btn" onclick="uncompleteSession('${esc(id)}', this)" title="Reopen the Linear issue \u2014 back to the state it was in before Mark done, or the team's first open state">Undo \u2014 not done</button>
+      ${linksHtml}`;
   } else if (section === 'nodesign') {
     // Un-dismissable from where it sits, per the brief.
     actionsHtml = `
@@ -842,9 +846,12 @@ function sessionCard(r) {
   if (section === 'board' && state === 'error' && failureReason(r)) {
     noteHtml = `<div class="card-note note-error">${esc(failureReason(r))}</div>`;
   } else if (section === 'board' && state === 'stalled') {
+    // Nobody coming is a different fault from a run that died, and the
+    // heartbeats usually know which — see nobodyComing.
+    const why = nobodyComing(r, heartbeats);
     noteHtml = `<div class="card-note note-stalled">Queued for ${esc(r.requested_stage || 'a run')}
-      ${esc(timeAgo(queuedSince(r)))} ago and still queued \u2014 the run never came back,
-      or was never picked up.</div>`;
+      ${esc(timeAgo(queuedSince(r)))} ago and still queued \u2014 ${esc(why ||
+      'the run never came back, or was never picked up.')}</div>`;
   }
 
   const gk = key(id);
@@ -1463,7 +1470,8 @@ function renderConsole() {
     const color = (brandsById[r.project] || {}).color || '#888780';
     const doing = r.requested_stage || r.phase || '';
     const why = state === 'error' ? failureReason(r)
-              : state === 'stalled' ? ('queued ' + timeAgo(queuedSince(r)) + ' ago, never came back') : '';
+              : state === 'stalled' ? ('queued ' + timeAgo(queuedSince(r)) + ' ago, ' +
+                  (nobodyComing(r, heartbeats) ? 'nothing to pick it up' : 'never came back')) : '';
     return `<button class="cn-line" onclick="setFilter('${jsq(groupOf(r))}')"
                     title="${esc(r.title || '')}">
       <span class="cn-t">${esc(clockTime(lastActivity(r)))}</span>
@@ -1862,6 +1870,24 @@ async function completeSession(id, btn) {
   } catch (e) {
     toast('Could not mark done \u2014 ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = 'Mark done'; }
+  }
+}
+
+// The undo of Mark done. Same route, DELETE — the pair dismiss already has.
+// The Worker says which state it went back to, and that is the toast, so a
+// card reopened to Todo rather than In Progress says so.
+async function uncompleteSession(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '\u2026'; }
+  try {
+    const res = await api(`/agent/session/${encodeURIComponent(id)}/complete`, { method: 'DELETE' });
+    const state = (res && res.state) || 'open';
+    toast(res && res.already
+      ? `Already ${state} in Linear \u2014 back on the board`
+      : `Back to ${state} in Linear`);
+    await loadBoard();
+  } catch (e) {
+    toast('Could not undo \u2014 ' + String(e.message || e).slice(0, 120));
+    if (btn) { btn.disabled = false; btn.textContent = 'Undo \u2014 not done'; }
   }
 }
 

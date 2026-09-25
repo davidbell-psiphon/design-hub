@@ -118,7 +118,7 @@ async function mount({
   const exported = [
     'loadBoard', 'assertMachine', 'chooseMachine', 'checkInHere', 'hereButton',
     'rememberedMachine', 'rememberMachine',
-    'triggerSession', 'resetSession', 'dismissSession', 'undismissSession', 'completeSession',
+    'triggerSession', 'resetSession', 'dismissSession', 'undismissSession', 'completeSession', 'uncompleteSession',
     'setAside', 'unsetAside', 'answerGate', 'chooseOwn', 'rejectAll', 'reopenGate',
     'reassignSession', 'localAgentLine', 'machinePicker', 'toast', 'key',
     'openFigmaPaths', 'closeFigmaPaths', 'renderFigmaPaths', 'refreshFigmaPaths',
@@ -521,6 +521,22 @@ describe('the destructive-ish controls', () => {
     await h.board.completeSession('RYV-84', btn());
     assert.equal(h.sent('/complete', 'POST').method, 'POST');
     assert.match(h.toasts.join(' '), /Design Done/);
+  });
+
+  test('its undo is the same route with DELETE, and says where it went back to', async () => {
+    const h = await mount({ responses: { '/complete': { ok: true, state: 'In Progress' } } });
+    await h.board.uncompleteSession('RYV-84', btn());
+    assert.equal(h.sent('/complete', 'DELETE').method, 'DELETE');
+    assert.match(h.toasts.join(' '), /Back to In Progress/);
+  });
+
+  test('a failed undo puts the button back so it can be pressed again', async () => {
+    const h = await mount({ responses: { '/complete': { status: 502, error: 'Linear said no' } } });
+    const b = btn();
+    await h.board.uncompleteSession('RYV-84', b);
+    assert.equal(b.disabled, false);
+    assert.match(b.textContent, /Undo/);
+    assert.match(h.toasts.join(' '), /Could not undo/);
   });
 
   test('a reassignment sends the brand under the name the API takes', async () => {
