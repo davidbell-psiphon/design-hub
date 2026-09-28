@@ -1154,7 +1154,10 @@ function renderSidebar() {
 
   // A team whose open rows all sit in one brand borrows that brand's colour.
   // Where they do not, no colour would be honest, so it gets a neutral dot.
-  const dotFor = (rows) => {
+  // Websites spans every brand by design, so it has a colour of its own.
+  const TEAM_COLOR = { 'Websites': '#14A3A3' };
+  const dotFor = (rows, name) => {
+    if (TEAM_COLOR[name]) return TEAM_COLOR[name];
     const brandIds = [...new Set(rows.map(r => r.project).filter(id => brandsById[id]))];
     return brandIds.length === 1 ? brandsById[brandIds[0]].color : 'var(--text-dim)';
   };
@@ -1167,7 +1170,7 @@ function renderSidebar() {
     }).length;
     const active = filterTeam === name ? ' active' : '';
     return `<button class="sb-item${active}" onclick="setFilter('${jsq(name)}')">
-      <div class="sb-dot" style="background:${esc(dotFor(rows))}"></div>
+      <div class="sb-dot" style="background:${esc(dotFor(rows, name))}"></div>
       <span class="sb-name">${esc(name)}</span>
       <span class="sb-badge${live ? ' waiting' : ''}">${rows.length}</span>
     </button>`;
