@@ -35,13 +35,20 @@ repo. The Hub links out to both and owns neither.
 ## The board
 
 One scrolling surface. Every brand, stacked, always — that is the point. Within
-each brand, three columns, in the order work moves through them:
+each brand, four columns, in the order work moves through them:
 
 | Column | What is in it | The card's button |
 |---|---|---|
 | **Backlog** | Nothing has been run yet | **Run Research** |
 | **Researched** | The research agent has finished | **Run Design** |
-| **AI-designed** | The design agent has finished | — |
+| **AI-designed** | The design agent has finished | **Run Prototype** |
+| **Prototyped** | The prototype agent has finished — the drawn flows are wired into a playable Figma prototype, one per user story | — |
+
+A screenshot card ends at AI-designed: a store listing is a set of ranked
+assets, not a journey, so there is no flow to wire and the card offers nothing
+there. The prototype stage needs Figma, exactly as design does, so only a
+machine where a person has signed in ever takes it — see *Which machine
+you are at* in `CLAUDE.md`.
 
 There was a fourth, **QA'd**, fed by a **Run QA** button. Nothing implemented
 the stage. Pressing it queued a run that failed with *"the qa stage is not
@@ -51,7 +58,9 @@ left holding a queue entry for ever, reading as **Working…** on a stage that
 does not exist. A stage the Hub will queue has to be one something runs, so QA
 is out of `STAGES`, out of the ladder and out of the columns until something
 does it. An issue still carrying `AI-QA done` from before renders as
-AI-designed, which is the last stage that actually ran on it.
+whichever stage actually ran on it. Prototype is not QA come back: there is
+something behind the button (design-ai's runner, with `--with-figma`), which
+is the whole condition for a stage to be in `STAGES`.
 
 **Which column a card is in comes from what the agent finished, never from when
 you clicked.** It is read from the Linear labels the system writes at the end of
@@ -574,6 +583,7 @@ been done. Dave never applies one and nothing triggers off them:
 |---|---|
 | `AI-research done` | the research agent finishes |
 | `AI-design done` | the design agent finishes |
+| `AI-prototype done` | the prototype agent finishes |
 | `AI-audit done` | an audit finishes — on an audit card, and again on every re-run |
 
 Keeping the stage in Linear rather than in a Hub-only column means the board
@@ -586,6 +596,7 @@ single read if the database is ever lost.
 |---|---|
 | `no-research` | Skip research — the card advances to Researched, marked skipped |
 | `no-design` | Not design work at all — collapses the card into No design |
+| `no-prototype` | Skip the prototype — the card advances to Prototyped, marked skipped |
 
 All of them are workspace-level in Linear, so one name resolves to one id.
 
@@ -597,8 +608,8 @@ The skip labels already recorded the difference; the board now reads it:
 | State | Comes from | On the card |
 |---|---|---|
 | not started | neither label | the previous column, plain pill |
-| done | `AI-research done` / `AI-design done` | that column, plain pill |
-| skipped | `no-research` / `no-design` | that column, **dashed pill saying "Research skipped"** |
+| done | `AI-research done` / `AI-design done` / `AI-prototype done` | that column, plain pill |
+| skipped | `no-research` / `no-design` / `no-prototype` | that column, **dashed pill saying "Research skipped"** |
 
 Skipped counts as complete for grouping — the card advances a column and
 becomes eligible for the next stage, exactly as a completed one does — but it
@@ -618,10 +629,10 @@ piece of trivia every reader, human or agent, has to know in order to ignore.
 test in `test/invariants.test.mjs` asserting it would change nothing if it came
 back.
 
-The four labels in §12 are the whole vocabulary: `AI-research done`,
-`AI-design done`, `no-research`, `no-design` — plus `AI-audit done`, which
-Dave added for audit cards and which moves no card between columns. Absence
-means "not yet" and nothing else.
+The six labels in §12 are the whole vocabulary: `AI-research done`,
+`AI-design done`, `AI-prototype done`, `no-research`, `no-design`,
+`no-prototype` — plus `AI-audit done`, which Dave added for audit cards and
+which moves no card between columns. Absence means "not yet" and nothing else.
 
 ---
 

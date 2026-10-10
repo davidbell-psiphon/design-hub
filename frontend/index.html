@@ -797,7 +797,8 @@ function sessionCard(r) {
     // One stage button, always rendered. actionFor returns null only at the
     // final stage, and there is deliberately no other path to a card with no
     // actions row — a card that offers nothing is the bug this replaced.
-    // actionFor returns null at AI-designed, which is now the last stage.
+    // actionFor returns null at Prototyped, which is the last stage (and at
+    // AI-designed for a screenshot card, which has no flow to prototype).
     // While a stage is queued the button is disabled and says what the row is
     // actually doing — Working…, Stalled, or Error — rather than always
     // claiming to be working. A queued row keeps its queue entry even when the
@@ -952,18 +953,20 @@ function bucketsFor(rows) {
       <div class="bucket-label">${label}</div>
       ${list.length ? list.map(sessionCard).join('') : '<div class="empty-bucket">Nothing here</div>'}
     </div>`;
-  // Three columns, in the order the work moves through them. Which one a card
+  // Four columns, in the order the work moves through them. Which one a card
   // is in comes from what the agent has finished, never from when you clicked.
   //
-  // There was a fourth, QA'd, and a Run QA button that fed it. Nothing
+  // There was once a QA'd column, and a Run QA button that fed it. Nothing
   // implemented the stage: the run failed with "the qa stage is not
   // implemented yet" and the card then sat in AI-designed claiming to be
-  // working on it. AI-designed is the end of the board until something
-  // actually does QA.
+  // working on it. Prototyped is the end of the board: the design-ai runner
+  // wires the drawn flows into a Figma prototype, so unlike QA there is
+  // something behind the button.
   return `<div class="buckets">
     ${section('Backlog',     rows.filter(r => stageOf(r) === 'backlog'))}
     ${section('Researched',  rows.filter(r => stageOf(r) === 'researched'))}
     ${section('AI-designed', rows.filter(r => stageOf(r) === 'designed'))}
+    ${section('Prototyped',  rows.filter(r => stageOf(r) === 'prototyped'))}
   </div>`;
 }
 
@@ -1525,7 +1528,8 @@ function renderConsole() {
   `;
 }
 
-// Whether pressing Run Design right now will actually get picked up. Figma
+// Whether pressing Run Design or Run Prototype right now will actually get
+// picked up. Figma
 // and Mobbin are both local-only — reachable only from a machine where a
 // person has signed in, never from GitHub Actions — so a card queued for
 // either used to look identical whether or not any machine was going to do

@@ -313,12 +313,12 @@ describe('the card shows no agent prose', () => {
   });
 });
 
-describe('the three stage columns', () => {
-  test('all three render, in order, and QA is not among them', () => {
+describe('the four stage columns', () => {
+  test('all four render, in order, and QA is not among them', () => {
     const labels = [...drawers.above.matchAll(/bucket-label">([^<]+)</g)].map(m => m[1]);
-    // One set per brand section; every set is the same three in the same order.
-    assert.ok(labels.length >= 3, 'no buckets rendered');
-    assert.deepEqual(labels.slice(0, 3), ['Backlog', 'Researched', 'AI-designed']);
+    // One set per brand section; every set is the same four in the same order.
+    assert.ok(labels.length >= 4, 'no buckets rendered');
+    assert.deepEqual(labels.slice(0, 4), ['Backlog', 'Researched', 'AI-designed', 'Prototyped']);
     assert.equal(drawers.above.includes("QA&#39;d"), false, "the QA'd column came back");
     assert.equal(board.includes('Run QA'), false, 'the Run QA button came back');
   });

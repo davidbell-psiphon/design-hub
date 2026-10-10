@@ -17,9 +17,14 @@ var UNASSIGNED = { id: '_unassigned', name: 'Unassigned', color: '#888780' };
 // stage is not implemented yet", and the card then sat there claiming to be
 // working on it. An issue still carrying that label from before reads as
 // AI-designed, which is the last stage that actually ran on it.
+//
+// `AI-prototype done` is the third stage: the drawn flows wired into a
+// playable Figma prototype, one flow per user story. Like design it needs
+// Figma, so only a local machine ever takes it.
 var STAGE_LABELS = {
   research: 'AI-research done',
   design: 'AI-design done',
+  prototype: 'AI-prototype done',
   audit: 'AI-audit done',
 };
 
@@ -200,6 +205,7 @@ function chosenLabel(r) {
 var SKIP_LABELS = {
   research: 'no-research',
   design: 'no-design',
+  prototype: 'no-prototype',
 };
 
 // How far one stage got: 'done', 'skipped', or null for not started.
@@ -223,6 +229,7 @@ function stageState(r, stage) {
 // it must not do is *look* the same, which is what `how` carries.
 function stageReached(r) {
   var levels = [
+    { stage: 'prototyped', of: 'prototype' },
     { stage: 'designed', of: 'design' },
     { stage: 'researched', of: 'research' },
   ];
@@ -243,6 +250,7 @@ function stageOf(r) {
 function stageName(stage) {
   if (stage === 'researched') return 'Researched';
   if (stage === 'designed') return 'AI-designed';
+  if (stage === 'prototyped') return 'Prototyped';
   return 'Backlog';
 }
 
@@ -303,6 +311,7 @@ function stageLabel(r) {
   }
   if (reached.stage === 'researched') return shots ? 'Analysis skipped' : 'Research skipped';
   if (reached.stage === 'designed') return shots ? 'Make skipped' : 'Design skipped';
+  if (reached.stage === 'prototyped') return 'Prototype skipped';
   return stageName(reached.stage);
 }
 
@@ -337,7 +346,11 @@ function actionFor(r) {
   }
   var stage = stageOf(r);
   var shots = isScreenshots(r);
-  if (stage === 'designed') return null;
+  // Prototyped is the end of the board. A screenshot card ends one stage
+  // earlier: a store listing is a set of ranked assets, not a journey, and
+  // there is no flow to wire.
+  if (stage === 'prototyped') return null;
+  if (stage === 'designed') return shots ? null : { stage: 'prototype', label: 'Run Prototype' };
   if (stage === 'researched') return { stage: 'design', label: shots ? 'Make screenshots' : 'Run Design' };
   return { stage: 'research', label: shots ? 'Analyze screenshots' : 'Run Research' };
 }

@@ -382,8 +382,10 @@ describe('the board offers the audit, and only on an audit card', () => {
     same(actionFor(row()), { stage: 'research', label: 'Run Research' });
     assert.equal(actionsFor(row())[1].label, 'Skip to Design');
     same(actionFor(row({ labels: ['AI-research done'] })), { stage: 'design', label: 'Run Design' });
-    assert.equal(actionFor(row({ labels: ['AI-design done'] })), null,
-      'design finished and the card offered something again');
+    // After design comes prototype (never the audit), and after prototype, nothing.
+    same(actionFor(row({ labels: ['AI-design done'] })), { stage: 'prototype', label: 'Run Prototype' });
+    assert.equal(actionFor(row({ labels: ['AI-design done', 'AI-prototype done'] })), null,
+      'prototype finished and the card offered something again');
     // An AI-audit done label on an ordinary card changes nothing.
     assert.equal(stageOf(row({ labels: ['AI-audit done'] })), 'backlog');
     same(actionFor(row({ labels: ['AI-audit done'] })), { stage: 'research', label: 'Run Research' });

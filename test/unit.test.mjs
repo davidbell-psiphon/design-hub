@@ -144,6 +144,7 @@ describe('stageOf — which column a card is in', () => {
   test('each done-label moves the card on', () => {
     assert.equal(stageOf(rowWith('AI-research done')), 'researched');
     assert.equal(stageOf(rowWith('AI-design done')), 'designed');
+    assert.equal(stageOf(rowWith('AI-prototype done')), 'prototyped');
   });
 
   test('AI-QA done is no longer a level', () => {
@@ -156,6 +157,7 @@ describe('stageOf — which column a card is in', () => {
 
   test('the most advanced label wins', () => {
     assert.equal(stageOf(rowWith('AI-research done', 'AI-design done')), 'designed');
+    assert.equal(stageOf(rowWith('AI-research done', 'AI-design done', 'AI-prototype done')), 'prototyped');
   });
 
   test('a skipped stage advances the card, same as a completed one', () => {
@@ -163,6 +165,7 @@ describe('stageOf — which column a card is in', () => {
     // card you marked no-research look like one whose research failed.
     assert.equal(stageOf(rowWith('no-research')), 'researched');
     assert.equal(stageOf(rowWith('Design', 'no-design')), 'designed');
+    assert.equal(stageOf(rowWith('no-prototype')), 'prototyped');
   });
 
   test('malformed labels render as Backlog rather than throwing', () => {
@@ -179,6 +182,7 @@ describe('stageOf — which column a card is in', () => {
     assert.equal(stageName('backlog'), 'Backlog');
     assert.equal(stageName('researched'), 'Researched');
     assert.equal(stageName('designed'), 'AI-designed');
+    assert.equal(stageName('prototyped'), 'Prototyped');
     // Nothing answers to 'qa' any more, heading included.
     assert.equal(stageName('qa'), 'Backlog');
   });
@@ -201,9 +205,13 @@ describe('stage completion — done, skipped, or not started', () => {
     assert.equal(stageState(rowWith(), 'design'), null);
     assert.equal(stageState(rowWith('AI-design done'), 'design'), 'done');
     assert.equal(stageState(rowWith('no-design'), 'design'), 'skipped');
+
+    assert.equal(stageState(rowWith(), 'prototype'), null);
+    assert.equal(stageState(rowWith('AI-prototype done'), 'prototype'), 'done');
+    assert.equal(stageState(rowWith('no-prototype'), 'prototype'), 'skipped');
   });
 
-  test('the Hub knows two stages, and QA is not one of them', () => {
+  test('the Hub knows three stages, and QA is not one of them', () => {
     // Removed end to end rather than hidden: there is no label for it to read
     // and no rung on the ladder for it to land on.
     assert.equal(stageState(rowWith('AI-QA done'), 'qa'), null);
@@ -221,6 +229,8 @@ describe('stage completion — done, skipped, or not started', () => {
     assert.equal(stageLabel(rowWith('AI-research done')), 'Researched');
     assert.equal(stageLabel(rowWith('no-research')), 'Research skipped');
     assert.equal(stageLabel(rowWith('no-design')), 'Design skipped');
+    assert.equal(stageLabel(rowWith('AI-prototype done')), 'Prototyped');
+    assert.equal(stageLabel(rowWith('no-prototype')), 'Prototype skipped');
     assert.equal(stageLabel(rowWith('AI-QA done')), 'Backlog');
   });
 
@@ -240,10 +250,15 @@ describe('stage completion — done, skipped, or not started', () => {
     const act = (r) => { const a = actionFor(r); return a && a.stage + '/' + a.label; };
     assert.equal(stageOf(rowWith('no-research')), 'researched');
     assert.equal(act(rowWith('no-research')), 'design/Run Design');
-    // Skipping design lands the card at the end of the board, so there is no
-    // next stage to be eligible for — which is a column, not a missing button.
+    // Skipping design makes the card eligible for the prototype stage, the
+    // same as designing it would — there are drawn frames or there are not,
+    // and the agent says so if not.
     assert.equal(stageOf(rowWith('no-design')), 'designed');
-    assert.equal(act(rowWith('no-design')), null);
+    assert.equal(act(rowWith('no-design')), 'prototype/Run Prototype');
+    // Skipping the prototype lands the card at the end of the board, so there
+    // is no next stage to be eligible for — a column, not a missing button.
+    assert.equal(stageOf(rowWith('no-prototype')), 'prototyped');
+    assert.equal(act(rowWith('no-prototype')), null);
   });
 });
 
@@ -268,17 +283,25 @@ describe('actionFor — the one button a card offers', () => {
     assert.equal(act(rowWith('AI-research done')), 'design/Run Design');
   });
 
-  test('AI-designed is the end of the board', () => {
-    // It offered Run QA, and nothing implemented QA: the run failed and the
-    // card was left holding a queue entry that only stage-done ever clears.
-    assert.equal(actionFor(rowWith('AI-design done')), null);
-    assert.equal(actionFor(rowWith('AI-design done', 'AI-QA done')), null);
+  test('designed offers Prototype', () => {
+    assert.equal(act(rowWith('AI-design done')), 'prototype/Run Prototype');
+    // The retired QA label changes nothing about what the card offers.
+    assert.equal(act(rowWith('AI-design done', 'AI-QA done')), 'prototype/Run Prototype');
+  });
+
+  test('Prototyped is the end of the board', () => {
+    // AI-designed used to be: it offered Run QA, and nothing implemented QA,
+    // so the run failed and the card was left holding a queue entry that only
+    // stage-done ever clears. Prototype has something behind the button.
+    assert.equal(actionFor(rowWith('AI-prototype done')), null);
+    assert.equal(actionFor(rowWith('AI-prototype done', 'AI-QA done')), null);
   });
 
   test('every stage short of the last offers a button — no card renders empty', () => {
     // This is the bug the column board replaced: a card whose status did not
     // match any branch fell through and rendered with no actions at all.
-    for (const r of [rowWith(), rowWith('no-research'), rowWith('AI-research done')]) {
+    for (const r of [rowWith(), rowWith('no-research'), rowWith('AI-research done'),
+                     rowWith('AI-design done'), rowWith('no-design')]) {
       assert.ok(actionFor(r), 'expected an action for ' + r.labels);
     }
   });

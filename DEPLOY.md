@@ -238,15 +238,26 @@ completes, and must exist before the first run reports back:
 |---|---|
 | `AI-research done` | the research agent finishes |
 | `AI-design done` | the design agent finishes |
-| `AI-QA done` | QA finishes |
+| `AI-prototype done` | the prototype agent finishes |
 | `AI-audit done` | an audit finishes — written again on every re-run, which is not an error |
 
-Two are Dave's own, and already exist:
+`AI-QA done` was in this table and is retired with the QA stage (README §12);
+leave it alone.
+
+Three are Dave's own:
 
 | Label | Id |
 |---|---|
 | `no-research` | `d058267a-a646-4069-850c-1e146de837a7` |
 | `no-design` | applied by the dismiss route |
+| `no-prototype` | applied by the skip route for the prototype stage |
+
+**Before the first Run Prototype press** (added 10 October 2026): create
+`AI-prototype done` and `no-prototype` in Linear, workspace-level, exactly
+once each. Without the first, `stage-done` answers 502 and the queue entry is
+left in place after the prototype has already been paid for; without the
+second, the skip route answers 502. `runner.mjs --smoke` in design-ai checks
+both. Neither existed when this was written.
 
 `design-ai:go` (`fb951ac2-96c5-4006-af3b-c20392cd115e`) and `design-ai:qa`
 (`a6b89043-5824-4ad5-83b8-4192878d9e82`) are retired. Nothing writes or reads

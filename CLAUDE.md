@@ -38,7 +38,7 @@ Three kinds of fact, three homes, split on who owns them:
 | `gate_decisions` | one per round | decision history | `closeRound` only |
 
 ```
-cards.issue_key ─┬─ stage_sessions (issue_key, stage)  research | design | audit
+cards.issue_key ─┬─ stage_sessions (issue_key, stage)  research | design | prototype | audit
                  └─ gate_decisions (session_id = issue_key, stage, gate_round)
 ```
 
@@ -337,7 +337,8 @@ never checked in, which is what stops work being routed at nothing.
 ## What the Hub writes to Linear
 
 Four things, and no more: stage labels (`AI-research done`, `AI-design done`,
-`AI-audit done`) when a stage reports finished, `no-design` when you dismiss a card, its removal
+`AI-prototype done`, `AI-audit done`) when a stage reports finished, `no-design` when you
+dismiss a card (and `no-research` / `no-prototype` from the skip route), its removal
 when you undo that, and **issue status — but only from
 `/api/agent/session/:id/complete`, POST to mark it done and DELETE to take
 that back.**

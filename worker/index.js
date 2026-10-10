@@ -106,10 +106,15 @@ async function closeRound(env, key, stage, row, note) {
 // DELETE that removes the card.
 const SESSION_ID_PATH = /^\/api\/agent\/session\/[^/]+$/;
 
-const STAGES = ['research', 'design', 'audit'];
+// Stages, in the order the work moves: research, design, prototype.
+// `prototype` wires the drawn flows into a playable Figma prototype, so like
+// design it needs Figma and runs only where a person has signed in.
+// `audit` is the one stage of an audit card (lib/audit.mjs).
+const STAGES = ['research', 'design', 'prototype', 'audit'];
 const STAGE_LABEL = {
   research: 'AI-research done',
   design: 'AI-design done',
+  prototype: 'AI-prototype done',
   audit: 'AI-audit done',
 };
 
@@ -140,6 +145,7 @@ const isLocalOnly = (stage) => LOCAL_ONLY_STAGES.includes(stage);
 const SKIP_LABEL = {
   research: 'no-research',
   design: 'no-design',
+  prototype: 'no-prototype',
 };
 
 // Where the runner lives. Overridable by env vars so a fork or a rename does
@@ -217,8 +223,8 @@ function keyFor(idOrSegment) {
 //
 // The Hub does not police this: `stage` is unconstrained in the schema on
 // purpose (CLAUDE.md — the Hub stays generic and does not own another agent
-// system's vocabulary). The trigger route is where 'research' and 'design' are
-// required, because that is the Hub deciding what it will queue.
+// system's vocabulary). The trigger route is where 'research', 'design' and
+// 'prototype' are required, because that is the Hub deciding what it will queue.
 function stageFor(sessionId, explicit) {
   const given = explicit === undefined || explicit === null ? '' : String(explicit).trim();
   if (given) return given;

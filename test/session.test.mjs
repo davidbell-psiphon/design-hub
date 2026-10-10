@@ -217,7 +217,7 @@ describe('the agent still addresses its own session id', () => {
     const trigger = await call(e, 'POST',
       '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger', { stage: 'qa' });
     assert.equal(trigger.status, 400);
-    assert.match((await trigger.json()).error, /research, design/);
+    assert.match((await trigger.json()).error, /research, design, prototype/);
     assert.equal(only(db).requested_stage, null, 'a refused stage was still queued');
 
     const done = await call(e, 'POST', '/api/agent/stage-done',
@@ -604,6 +604,29 @@ describe('the agent still addresses its own session id', () => {
     assert.ok(JSON.parse(rows(db)[0].labels).includes('AI-research done'),
               'the done label was not recorded on the card');
     assert.ok(mutations.length >= 1, 'no Linear label was applied');
+  });
+
+  test('the prototype stage is queued and reported like the other two', async () => {
+    const db = freshDb();
+    const e = env(db);
+    const mutations = [];
+    stubLinear([issue({ identifier: 'RYV-84', labels: [{ name: 'AI-design done' }] })], mutations);
+    await readLinear(e);
+
+    const trigger = await call(e, 'POST',
+      '/api/agent/session/' + encodeURIComponent('linear/RYV-84') + '/trigger',
+      { stage: 'prototype' });
+    assert.equal(trigger.status, 200);
+    assert.equal(only(db).requested_stage, 'prototype', 'the press did not queue the prototype stage');
+
+    const res = await call(e, 'POST', '/api/agent/stage-done',
+      { linear_id: 'RYV-84', stage: 'prototype' }, { 'X-Agent-Secret': 's' });
+    assert.equal(res.status, 200);
+    assert.equal(only(db).requested_stage, null, 'still queued after reporting done');
+    assert.equal(onlySession(db, 'prototype').status, 'done');
+    assert.ok(JSON.parse(rows(db)[0].labels).includes('AI-prototype done'),
+              'the done label was not recorded on the card');
+    assert.ok(mutations.some((m) => /issueAddLabel/.test(m)), 'no Linear label was applied');
   });
 
   test('a later phase posted as its own session is the same card', async () => {

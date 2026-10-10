@@ -73,15 +73,20 @@ describe('a Backlog card offers a way past research', () => {
     }
   });
 
-  test('a designed card offers nothing, as before', () => {
-    assert.equal(actionsFor(card(['AI-design done'])).length, 0);
+  test('a designed card offers the prototype, and only that', () => {
+    assert.equal(actionsFor(card(['AI-design done'])).map((a) => a.label).join(), 'Run Prototype');
+  });
+
+  test('a prototyped card offers nothing — the end of the board', () => {
+    assert.equal(actionsFor(card(['AI-prototype done'])).length, 0);
+    assert.equal(actionsFor(card(['no-prototype'])).length, 0);
   });
 
   test('the primary is still exactly what actionFor says', () => {
     // §5: the button and the column come from one derivation. Two functions
     // that could disagree about the primary would be the same bug in a new
     // place, so the second is built from the first.
-    for (const labels of [[], ['AI-research done'], ['no-research'], ['AI-design done']]) {
+    for (const labels of [[], ['AI-research done'], ['no-research'], ['AI-design done'], ['AI-prototype done']]) {
       const acts = actionsFor(card(labels));
       const one = actionFor(card(labels));
       if (!one) assert.equal(acts.length, 0);
@@ -157,7 +162,19 @@ describe('skipping a stage writes it down', () => {
     const { e } = await onBoard();
     const res = await skip(e, 'qa');
     assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /research, design/);
+    assert.match((await res.json()).error, /research, design, prototype/);
+  });
+
+  test('skipping the prototype writes no-prototype and ends the board', async () => {
+    const { db, e } = await onBoard(['AI-design done']);
+    const res = await skip(e, 'prototype');
+    assert.equal(res.status, 200);
+    assert.ok(JSON.parse(one(db, 'RYV-84').labels).includes('no-prototype'));
+    const r = wire(db, 'RYV-84');
+    assert.equal(stageOf(r), 'prototyped', 'the card did not advance');
+    assert.equal(isSkipped(r), true);
+    assert.equal(stageLabel(r), 'Prototype skipped');
+    assert.equal(actionsFor(r).length, 0, 'a prototyped card still offered an action');
   });
 
   test('it refuses a card with no Linear issue behind it', async () => {

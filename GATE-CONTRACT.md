@@ -146,8 +146,10 @@ The agent posts a fresh `options` array for the new round. History survives.
 ```
 
 Two completion levels that previously had nowhere to live. `AI-design done`
-means a spec exists; `mockups_at` means something was drawn; `handoff_at`
-means it is ready for a developer.
+means a spec exists; `mockups_at` means something was drawn; `AI-prototype
+done` (a stage of its own since 10 October 2026) means the drawn flows are
+wired into a playable Figma prototype; `handoff_at` means it is ready for a
+developer.
 
 ---
 

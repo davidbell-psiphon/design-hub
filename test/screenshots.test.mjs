@@ -160,6 +160,13 @@ describe('the buttons speak in the screenshot agent\'s words', () => {
     assert.equal(skip.stage, 'design');
   });
 
+  test('a screenshot set has no flow to prototype — designed is its last stage', () => {
+    assert.equal(actionFor(row({ kind: 'screenshots', labels: ['AI-design done'] })), null);
+    assert.equal(actionsFor(row({ kind: 'screenshots', labels: ['AI-design done'] })).length, 0);
+    // An ordinary card at the same stage does offer it.
+    same(actionFor(row({ labels: ['AI-design done'] })), { stage: 'prototype', label: 'Run Prototype' });
+  });
+
   test('the pill says what the stages were', () => {
     assert.equal(stageLabel(row({ kind: 'screenshots', labels: ['AI-research done'] })), 'Analyzed');
     assert.equal(stageLabel(row({ kind: 'screenshots', labels: ['AI-design done'] })), 'Screenshots made');

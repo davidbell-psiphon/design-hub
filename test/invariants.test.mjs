@@ -229,9 +229,10 @@ describe('§5 — the button and the column come from one derivation', () => {
   // is invisible until someone presses the button." This asserts on the
   // derivation rather than on markup, so it holds when the UI changes.
   //
-  // Every combination of the four reserved labels, which is the whole input
+  // Every combination of the six reserved labels, which is the whole input
   // space the board's column logic has.
-  const RESERVED = ['AI-research done', 'AI-design done', 'no-research', 'no-design'];
+  const RESERVED = ['AI-research done', 'AI-design done', 'AI-prototype done',
+                    'no-research', 'no-design', 'no-prototype'];
 
   const combinations = () => {
     const out = [];
@@ -253,9 +254,12 @@ describe('§5 — the button and the column come from one derivation', () => {
       } else if (column === 'researched') {
         assertAction(action, 'design', 'Run Design',
           `a card in Researched offered ${JSON.stringify(action)} — labels: ${labels}`);
+      } else if (column === 'designed') {
+        assertAction(action, 'prototype', 'Run Prototype',
+          `a card in AI-designed offered ${JSON.stringify(action)} — labels: ${labels}`);
       } else {
         assert.equal(action, null,
-          `a card in AI-designed still offered an action — labels: ${labels}`);
+          `a card in Prototyped still offered an action — labels: ${labels}`);
       }
     }
   });
@@ -263,7 +267,7 @@ describe('§5 — the button and the column come from one derivation', () => {
   test('every combination lands in exactly one column', () => {
     for (const labels of combinations()) {
       const column = stageOf(card(labels));
-      assert.ok(['backlog', 'researched', 'designed'].includes(column),
+      assert.ok(['backlog', 'researched', 'designed', 'prototyped'].includes(column),
         `labels ${JSON.stringify(labels)} produced column "${column}"`);
     }
   });
@@ -590,8 +594,9 @@ describe('§12 — the label list is closed', () => {
       'the retired design-ai:go label changed what the card offers');
   });
 
-  test('only the four reserved labels are recognised', () => {
-    const recognised = ['AI-research done', 'AI-design done', 'no-research', 'no-design'];
+  test('only the six reserved labels are recognised', () => {
+    const recognised = ['AI-research done', 'AI-design done', 'AI-prototype done',
+                        'no-research', 'no-design', 'no-prototype'];
     for (const name of recognised) {
       assert.notEqual(stageOf(card([name])), 'backlog',
         `the reserved label "${name}" was ignored`);
@@ -603,6 +608,7 @@ describe('§12 — the label list is closed', () => {
     const r = card([]);
     assert.equal(stageState(r, 'research'), null, 'absence was read as something other than "not yet"');
     assert.equal(stageState(r, 'design'), null);
+    assert.equal(stageState(r, 'prototype'), null);
   });
 });
 

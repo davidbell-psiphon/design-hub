@@ -79,6 +79,7 @@ describe('§2 — the key is parsed out of whatever was sent', () => {
 
   test('the stage is read from the segments, not assumed to be last', () => {
     assert.equal(stageFromSessionId('RYV-84/design'), 'design');
+    assert.equal(stageFromSessionId('ryve/ryv-84/prototype'), 'prototype');
     assert.equal(stageFromSessionId('ryve/ryv-84/research'), 'research');
     assert.equal(stageFromSessionId('RYV-84'), null);
     assert.equal(stageFromSessionId('ryve/ryv-84/qa'), null, 'qa is not a stage the Hub runs');
