@@ -8,6 +8,7 @@ import { diagnose } from '../lib/diagnostics.mjs';
 // this file is the §5 drift the split exists to end.
 import { parseOptions, normaliseOptions, sameOptions } from '../lib/gate.mjs';
 import { toWire, activeSession } from '../lib/card.mjs';
+import { isAuditTitle, AUDIT_STAGE } from '../lib/audit.mjs';
 
 // Allowed origins - your Pages deployments
 const ALLOWED_ORIGINS = [
@@ -105,11 +106,28 @@ async function closeRound(env, key, stage, row, note) {
 // DELETE that removes the card.
 const SESSION_ID_PATH = /^\/api\/agent\/session\/[^/]+$/;
 
-const STAGES = ['research', 'design'];
+const STAGES = ['research', 'design', 'audit'];
 const STAGE_LABEL = {
   research: 'AI-research done',
   design: 'AI-design done',
+  audit: 'AI-audit done',
 };
+
+// Stages only a machine that names them may take, and that are never sent to
+// the cloud. `audit` is the one: it runs in the design-ai runner on a machine
+// you sit at, and GitHub Actions must never be handed it or dispatched for it.
+//
+// Stricter than the rule every other stage follows, on purpose. Elsewhere a
+// runner that declared nothing counts as able, so an old runner keeps
+// working; here declaring nothing means it is not offered, because an old
+// runner shown an audit would fail it. Nothing about the queue's shape
+// changes — the runner still reads `requested_stage`, and an audit row says
+// 'audit'.
+//
+// The board keeps a copy (LOCAL_ONLY_STAGES in board-logic.js), by hand, the
+// same way it keeps STAGE_LABELS.
+const LOCAL_ONLY_STAGES = [AUDIT_STAGE];
+const isLocalOnly = (stage) => LOCAL_ONLY_STAGES.includes(stage);
 
 // §12's other half. `AI-… done` is the record that a stage RAN; these are the
 // record that one was deliberately passed over, and the difference is the
@@ -317,7 +335,15 @@ async function workingFrom(env) {
 // machine the work waits on, and how long since anything on it checked in.
 // "Start the local runner" rather than a script name, because the Hub does
 // not know what the runner is called — see "The Hub stays generic".
+//
+// A local-only stage (LOCAL_ONLY_STAGES) never dispatches, whatever has
+// checked in, and only a machine that named the stage counts as able — the
+// queue's own rule for it. The reason then says it is queued for a local
+// runner, and which one.
 async function whoWillCome(env, stage) {
+  const localOnly = isLocalOnly(stage);
+  const queuedLocal = `nothing was started: ${stage} runs only on a local machine that declares it, ` +
+                      `so it is queued for a local runner.`;
   let rows;
   try {
     ({ results: rows } = await env.DB.prepare(
@@ -326,16 +352,18 @@ async function whoWillCome(env, stage) {
          FROM agent_heartbeats ORDER BY last_seen DESC`
     ).all());
   } catch (e) {
-    return { ci: true, reason: null };   // pre-piece12: nothing to consult
+    // pre-piece12: nothing to consult
+    return localOnly ? { ci: false, reason: queuedLocal } : { ci: true, reason: null };
   }
   rows = rows || [];
   const can = (r) => {
     const c = parseOptions(r.capabilities);
+    if (localOnly) return c.includes(stage);
     return !c.length || c.includes(stage);
   };
   const cloud = rows.filter((r) => r.kind === 'ci');
   const local = rows.filter((r) => r.kind !== 'ci');
-  if (!cloud.length || cloud.some(can)) return { ci: true, reason: null };
+  if (!localOnly && (!cloud.length || cloud.some(can))) return { ci: true, reason: null };
 
   const ago = (m) => m < 90 ? `${m}m` : m < 60 * 48 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
   const chosen = local.find((r) => r.selected_at) || null;
@@ -354,6 +382,7 @@ async function whoWillCome(env, stage) {
       : `${stage} ${held} ${at.machine}, which last checked in ${ago(at.mins_ago)} ago — ` +
         `start the local runner on it, or choose another machine`;
   }
+  if (localOnly) return { ci: false, reason: `${queuedLocal} ${where}` };
   return { ci: false, reason: `nothing was started: the cloud runner does not run ${stage}. ${where}` };
 }
 
@@ -1181,12 +1210,26 @@ async function route(request, env) {
       }
       if (!key) return err('not found', 404);
       const card = await env.DB.prepare(
-        `SELECT linear_uuid FROM cards WHERE issue_key = ?`
+        `SELECT linear_uuid, title FROM cards WHERE issue_key = ?`
       ).bind(key).first();
       if (!card) return err('not found', 404);
       // The runner works from the Linear issue, so a card with nothing behind
       // it in Linear has nothing to run against.
       if (!card.linear_uuid) return err('session has no linked Linear issue');
+
+      // An audit card's one stage is the audit, and the audit is for audit
+      // cards only — the word in the title (lib/audit.mjs), the same rule
+      // the board draws its buttons from. Refused both ways here, because a
+      // button the board did not draw can still be pressed by anything that
+      // can reach this route.
+      const auditCard = isAuditTitle(card.title);
+      if (b.stage === AUDIT_STAGE && !auditCard) {
+        return err(`${key} is not an audit card — audit runs only on a Linear issue ` +
+                   `whose title has the word "Audit" in it`);
+      }
+      if (b.stage !== AUDIT_STAGE && auditCard) {
+        return err(`${key} is an audit card — its one stage is audit, not ${b.stage}`);
+      }
 
       // A run in progress is not a thing to queue again. The runner says
       // "still here" every couple of minutes while a Claude call has it
@@ -1223,23 +1266,28 @@ async function route(request, env) {
       // What the runner will find when it reads the queue, including the row
       // just written. Deliberately the same WHERE clause as /api/agent/queue:
       // if the two ever disagreed, the Hub would be telling the runner to take
-      // a number of issues it is not going to be shown.
+      // a number of issues it is not going to be shown. Local-only stages are
+      // left out for the same reason — the cloud runner is never shown them.
       const queued = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM stage_sessions s
            JOIN cards c ON c.issue_key = s.issue_key
           WHERE s.requested_at IS NOT NULL
             AND c.dismissed_at IS NULL
-            AND c.set_aside_at IS NULL`
-      ).first();
+            AND c.set_aside_at IS NULL
+            AND s.stage NOT IN (${LOCAL_ONLY_STAGES.map(() => '?').join(', ')})`
+      ).bind(...LOCAL_ONLY_STAGES).first();
 
       // Only fire the cloud runner when it would be shown this stage. A
       // dispatch it cannot take is a wasted run and, worse, a "started" the
-      // board repeats as if it meant something — see whoWillCome.
+      // board repeats as if it meant something — see whoWillCome. A
+      // local-only stage never fires it at all; `local: true` says the press
+      // is waiting on a machine you sit at.
       const who = await whoWillCome(env, b.stage);
       const run = who.ci
         ? await startRunner(env, queued && queued.n)
         : { started: false, reason: who.reason };
-      return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason });
+      return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason,
+                    local: isLocalOnly(b.stage) });
     }
 
     // DELETE /api/agent/session/:id/trigger — take a request back out of the
@@ -1404,13 +1452,21 @@ async function route(request, env) {
       ).all();
 
       let queue = results || [];
+      const can = me ? parseOptions(me.capabilities) : [];
       if (me) {
-        const can = parseOptions(me.capabilities);
         // No declared capabilities is not "can do nothing" — it is a runner
         // that has not said. Filtering it to nothing would strand the queue on
         // a single missing field.
         if (can.length) queue = queue.filter((r) => can.includes(r.requested_stage));
       }
+      // Except for a local-only stage, which goes only to a machine you sit at
+      // that named it in its heartbeat. Not to a runner that declared nothing,
+      // not to one that did not say who it is, and never to CI — an audit row
+      // handed to anything else is a run that fails or, worse, runs somewhere
+      // nobody meant it to.
+      const mayTakeLocalOnly = !!me && me.kind !== 'ci';
+      queue = queue.filter((r) => !isLocalOnly(r.requested_stage) ||
+                                  (mayTakeLocalOnly && can.includes(r.requested_stage)));
       return json(queue);
     }
 
@@ -1436,20 +1492,27 @@ async function route(request, env) {
       const name = STAGE_LABEL[b.stage];
       const labelId = await getLabelId(env, name);
       if (!labelId) return err(`Linear label "${name}" not found`, 502);
+
+      let labels = [];
+      try { labels = JSON.parse(row.labels || '[]'); } catch { labels = []; }
+      if (!Array.isArray(labels)) labels = [];
+
       const res = await addLabelToIssue(env, row.linear_uuid, labelId);
       // Deliberately leave requested_stage set. A stage whose label could not
       // be written must stay in the queue and be retried, not silently vanish
       // from both the board and the runner's view of the work.
-      if (res.error) {
+      //
+      // Unless the issue already carries the label. An audit runs again and
+      // again, and its second finish writes a label the first one already
+      // wrote: if Linear refuses that, the record it asked for is already
+      // there, and failing would strand a finished run in the queue.
+      if (res.error && !labels.includes(name)) {
         return err('Linear mutation failed: ' + JSON.stringify(res.error), 502);
       }
 
       // Write the label locally as well. The reader only runs Wednesday and
       // Friday; without this the card would sit in the wrong column for days
       // after the work was actually finished.
-      let labels = [];
-      try { labels = JSON.parse(row.labels || '[]'); } catch { labels = []; }
-      if (!Array.isArray(labels)) labels = [];
       if (!labels.includes(name)) labels.push(name);
 
       // Two writes now, because they are two facts. The label is the issue's
@@ -1496,8 +1559,12 @@ async function route(request, env) {
       const key = await resolveKey(env, path.split('/')[4]);
       let b;
       try { b = await request.json(); } catch { return err('Invalid JSON'); }
-      if (!STAGES.includes(b.stage)) {
-        return err(`stage must be one of: ${STAGES.join(', ')}`);
+      // Only a stage with a skip label can be skipped. The audit has none: it
+      // is the whole of an audit card's work, so "do not run it" is Dismiss,
+      // and nothing comes after it to move on to.
+      if (!Object.keys(SKIP_LABEL).includes(b.stage)) {
+        return err(`${STAGES.includes(b.stage) ? `${b.stage} cannot be skipped — ` : ''}` +
+                   `stage must be one of: ${Object.keys(SKIP_LABEL).join(', ')}`);
       }
       const row = key && await env.DB.prepare(
         `SELECT linear_uuid, labels FROM cards WHERE issue_key = ?`

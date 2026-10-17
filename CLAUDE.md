@@ -38,7 +38,7 @@ Three kinds of fact, three homes, split on who owns them:
 | `gate_decisions` | one per round | decision history | `closeRound` only |
 
 ```
-cards.issue_key ─┬─ stage_sessions (issue_key, stage)  research | design
+cards.issue_key ─┬─ stage_sessions (issue_key, stage)  research | design | audit
                  └─ gate_decisions (session_id = issue_key, stage, gate_round)
 ```
 
@@ -146,7 +146,7 @@ answer.
 always been sent, **computed per request and never stored**. A stored
 flattening would be a third copy of two facts, which is how §11's bugs started.
 
-It also serves `stages: { research: {…}, design: {…} }`, which is what to read
+It also serves `stages: { research: {…}, design: {…}, audit: {…} }`, which is what to read
 once a card has to say that research is Drift while design is Unverified.
 
 Two names are translated there and nowhere else: `issue_key` → `id`, and
@@ -219,6 +219,25 @@ rather than the work:
 Asking with **no** `machine` returns everything, exactly as before. The runner
 is fed entirely by this route, so a runner that has not been updated has to
 keep working.
+
+**Except `audit`, which is local-only** (`LOCAL_ONLY_STAGES`, in the Worker and
+the board). It goes only to a non-CI machine whose heartbeat names `audit` —
+not to a runner that declared nothing, not to one that did not say who it is,
+never to Actions — and a press on it never dispatches. That is stricter than
+every other stage on purpose: an old runner handed an audit would fail it.
+
+### Audit cards
+
+A Linear issue whose **title** has the word "Audit" (whole word, any case) is an
+audit card. The rule is `isAuditTitle` in `lib/audit.mjs` — its own file, not
+`lib/derive.mjs`, because derive.mjs is vendored into design-ai and
+hash-checked. The wire serves it as `kind: 'audit'` and the board reads that;
+the trigger route refuses `audit` on any other card and research/design on an
+audit card.
+
+An audit card's one stage is `audit`, and it is the only stage that is pressed
+again after it finishes ("Run audit again"). There is no skip label for it.
+Research and design are unchanged: one run each, and the button moves on.
 
 ### A press says whether anything will come
 
@@ -317,8 +336,8 @@ never checked in, which is what stops work being routed at nothing.
 
 ## What the Hub writes to Linear
 
-Four things, and no more: stage labels (`AI-research done`, `AI-design done`)
-when a stage reports finished, `no-design` when you dismiss a card, its removal
+Four things, and no more: stage labels (`AI-research done`, `AI-design done`,
+`AI-audit done`) when a stage reports finished, `no-design` when you dismiss a card, its removal
 when you undo that, and **issue status — but only from
 `/api/agent/session/:id/complete`, POST to mark it done and DELETE to take
 that back.**
@@ -362,6 +381,7 @@ node --test test/grain.test.mjs      # the card/session split, and the projectio
 node --test test/machine.test.mjs    # which machine you are at, and queue routing
 node --test test/handlers.test.mjs   # the board's own handlers (§14.5)
 node --test test/figma.test.mjs      # Figma paths: defaults, overrides, ownership
+node --test test/audit.test.mjs      # audit cards: the title rule, local-only, run again
 node --test test/a11y.test.mjs       # tokens, contrast, focus, the editor dialog
 node --test test/sql.test.mjs        # the pieces, against a production-shaped database
 ```

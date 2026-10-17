@@ -34,6 +34,10 @@ it until someone starts a run. With it, pressing a button fires a
 `workflow_dispatch` at the runner's GitHub Actions workflow and the work begins
 in seconds.
 
+**Audit never dispatches**, token or not. It runs only on a local machine whose
+heartbeat declares `audit` (design-ai, via design-local), so pressing it
+queues the request and says it is waiting for a local runner.
+
 Make it a **fine-grained personal access token** on
 `davidbell-psiphon/design-ai`, with one permission: **Actions: Read and write**.
 Nothing else — it never reads code, issues, or secrets. GitHub → Settings →
@@ -235,6 +239,7 @@ completes, and must exist before the first run reports back:
 | `AI-research done` | the research agent finishes |
 | `AI-design done` | the design agent finishes |
 | `AI-QA done` | QA finishes |
+| `AI-audit done` | an audit finishes — written again on every re-run, which is not an error |
 
 Two are Dave's own, and already exist:
 

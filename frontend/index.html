@@ -100,6 +100,9 @@
        in board-logic.js). Teal, because no run state uses it — a screenshot
        card must never be mistaken for a card in some state. */
     --kind-screenshots: #62c6c0;
+    /* Audit cards (isAudit): a standing audit, run again and again.
+       Violet, for the same reason — no run state uses it. */
+    --kind-audit: #a99be0;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -290,6 +293,10 @@
     background: color-mix(in srgb, var(--kind-screenshots) 18%, transparent);
     color: var(--kind-screenshots); white-space: nowrap; letter-spacing: .02em; }
   .session-card.kind-screenshots { border-top: 2px solid color-mix(in srgb, var(--kind-screenshots) 70%, transparent); }
+  /* An audit card: the same chip and edge, in its own token. */
+  .kind-pill.kind-pill-audit { background: color-mix(in srgb, var(--kind-audit) 18%, transparent);
+    color: var(--kind-audit); }
+  .session-card.kind-audit { border-top: 2px solid color-mix(in srgb, var(--kind-audit) 70%, transparent); }
   .session-track { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
   /* The run-state chip. Every colour derived from its token with color-mix —
      these were five hardcoded rgba values, three of which no longer matched
@@ -908,18 +915,26 @@ function sessionCard(r) {
   // A screenshot card is marked as one — the class for the styling, the chip
   // for the name — and its stage buttons already speak in the screenshot
   // agent's words (actionFor). Nothing else about the card changes.
+  //
+  // An audit card gets its own chip and edge, and says when it last ran — the
+  // audit is pressed again and again, so "when did this last happen" is the
+  // thing you are deciding on.
   const shots = isScreenshots(r);
-  return `<div class="session-card state-${state}${shots ? ' kind-screenshots' : ''}" style="border-left-color:${color}">
+  const audit = isAudit(r);
+  const lastAudit = audit ? lastAuditAt(r) : '';
+  return `<div class="session-card state-${state}${shots ? ' kind-screenshots' : ''}${audit ? ' kind-audit' : ''}" style="border-left-color:${color}">
     <div class="session-top">
       <span class="session-id">${esc(r.linear_id || r.id)}</span>
       <span class="session-title">${esc(r.title || '')}</span>
       ${shots ? `<span class="kind-pill" title="Store-listing screenshot work — flagged by the store-screenshots label, or by the word in the title. Its stage buttons run the screenshot agent: Analyze, then Make.">Screenshots</span>` : ''}
+      ${audit ? `<span class="kind-pill kind-pill-audit" title="A design audit — flagged by the word Audit in the title. Its one button runs the audit on a local machine that declares it, and can be pressed again after every run.">Audit</span>` : ''}
       ${projectLabel(r) ? `<span class="session-project">${esc(projectLabel(r))}</span>` : ''}
       <span class="stage-pill${isSkipped(r) ? ' is-skipped' : ''}">${esc(stageLabel(r))}</span>
       ${pill ? `<span class="status-pill status-${pill.kind}">${esc(pill.text)}</span>` : ''}
       ${(state === 'working' || state === 'stalled')
         ? `<span class="session-elapsed" data-since="${esc(clockFrom(r))}">${esc(elapsed(clockFrom(r)))}</span>`
         : ''}
+      ${lastAudit ? `<span class="session-track audit-last" title="When the last audit reported done">last audit ${timeAgo(lastAudit) === 'now' ? 'just now' : esc(timeAgo(lastAudit)) + ' ago'}</span>` : ''}
       ${r.track ? `<span class="session-track">${esc(r.track)}</span>` : ''}
       ${r.updated_at ? `<span class="session-track">${timeAgo(r.updated_at)}</span>` : ''}
     </div>
@@ -1731,6 +1746,7 @@ function nowStamp() {
 const STAGE_TOAST = {
   research: 'Research requested',
   design: 'Design requested',
+  audit: 'Audit requested',
 };
 
 async function triggerSession(id, stage, btn) {
@@ -1744,7 +1760,12 @@ async function triggerSession(id, stage, btn) {
     // press that could not start the run is a press that will sit there until
     // someone starts one by hand, and saying "requested" for both hides the
     // difference at exactly the moment it matters.
-    toast(res && res.started === false
+    // A local-only stage (the audit) is never started from here: it waits for
+    // a machine you sit at, and the toast says that rather than "did not
+    // start", which would read as a fault.
+    toast(res && res.started === false && (res.local || isLocalOnly(stage))
+      ? `${STAGE_TOAST[stage] || 'Requested'} — queued for a local runner. ${res.detail || ''}`.trim()
+      : res && res.started === false
       ? `${STAGE_TOAST[stage] || 'Requested'} — queued, but the run did not start. ${res.detail || ''}`.trim()
       : `${STAGE_TOAST[stage] || 'Requested'} — run started`);
     await loadBoard();

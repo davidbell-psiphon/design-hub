@@ -286,6 +286,35 @@ wire, derived per request from `labels` and `title` in `lib/card.mjs` and never
 stored, and the press is still the only thing that queues work — as for every
 other card.
 
+### Audit cards
+
+A design audit is a standing issue — "Design audit: Ryve" — that is pressed
+again and again over time, each run producing a new report and a diff against
+the last. A card is an **Audit card** when its Linear issue's **title** has the
+word "Audit" in it, whole and in any case: "Audit the Conduit onboarding" is
+one, "Auditorium seating" is not. The rule is `isAuditTitle` in
+[`lib/audit.mjs`](./lib/audit.mjs), served as `kind: 'audit'` on the wire.
+
+The card gets a violet `Audit` chip and top edge, and one stage button:
+**Run audit**, then **Run audit again** once it has run, with when the last one
+finished beside it. No research, no design, no skip — an audit card's job is
+the audit. Everything else a card has (No design, Dismiss, Mark done, the
+links) is unchanged. The trigger route refuses `audit` on any other card and
+research or design on an audit card, so a button the board did not draw cannot
+be pressed some other way.
+
+**It runs only on a machine you sit at.** The design-audit agent lives in the
+design-ai runner and needs a local machine whose heartbeat declares `audit`.
+So a press queues the request and never fires GitHub Actions; the toast says
+it is queued for a local runner and names the machine it waits on, and
+`GET /api/agent/queue` hands an audit row only to a non-CI machine that named
+the stage — not to a runner that declared nothing, which every other stage
+would accept. When the runner reports the stage done the Hub writes
+`AI-audit done`; a re-run writes it again, and that is not an error.
+
+Research and design behave exactly as before: one run each, and the button
+moves on.
+
 ### "Move to…" moves the card, not the work
 
 The reassign select corrects which brand section a card sits in. That is all it
@@ -545,6 +574,7 @@ been done. Dave never applies one and nothing triggers off them:
 |---|---|
 | `AI-research done` | the research agent finishes |
 | `AI-design done` | the design agent finishes |
+| `AI-audit done` | an audit finishes — on an audit card, and again on every re-run |
 
 Keeping the stage in Linear rather than in a Hub-only column means the board
 cannot drift out of sync with the issue, and rebuilds itself correctly from a
@@ -589,8 +619,9 @@ test in `test/invariants.test.mjs` asserting it would change nothing if it came
 back.
 
 The four labels in §12 are the whole vocabulary: `AI-research done`,
-`AI-design done`, `no-research`, `no-design`. Absence means "not yet" and
-nothing else.
+`AI-design done`, `no-research`, `no-design` — plus `AI-audit done`, which
+Dave added for audit cards and which moves no card between columns. Absence
+means "not yet" and nothing else.
 
 ---
 
@@ -861,9 +892,9 @@ Used by the board:
 |---|---|
 | `GET /api/brands` | Brand id, name, colour |
 | `GET /api/agent/sessions` | Every session, waiting first |
-| `POST /api/agent/session/:id/trigger` | Queue a stage for the runner (`{"stage":"research"\|"design"}`) |
+| `POST /api/agent/session/:id/trigger` | Queue a stage for the runner (`{"stage":"research"\|"design"\|"audit"}` — audit only on an audit card, and never dispatched) |
 | `DELETE /api/agent/session/:id/trigger` | Reset — take the request back out of the queue, and clear an error with it |
-| `GET /api/agent/queue` | What the runner reads — every row with a stage requested |
+| `GET /api/agent/queue` | What the runner reads — every row with a stage requested (`audit` rows only to a local machine that declared it) |
 | `POST /api/agent/stage-done` | The runner reports a finished stage (`{"linear_id","stage"}`) |
 | `POST /api/agent/session/:id/dismiss` | Apply `no-design`, file the card away |
 | `DELETE /api/agent/session/:id/dismiss` | Remove `no-design`, put it back |
@@ -1053,6 +1084,13 @@ than first — the one with no usable timestamp, and the finished run with none.
 `mount()` exists for that: a suite renders its own rows rather than adding them
 to the shared fixture, whose counts three other suites assert on.
 
+**`test/audit.test.mjs`** holds down audit cards: the title rule ("Audit" yes,
+"Auditorium" no), the trigger refusing the wrong stage both ways, no dispatch
+for an audit whatever has checked in, the queue's capability gate, stage-done
+writing `AI-audit done` and surviving a re-run, and the board drawing the
+button on audit cards only — while research and design keep their one-shot
+buttons.
+
 QA's removal is pinned at both ends — `POST .../trigger` and
 `POST /api/agent/stage-done` each answer 400 for `{"stage":"qa"}` and neither
 touches the row — and on the board, where the column and the button are asserted
@@ -1094,6 +1132,7 @@ migration-001-gates.sql        options, the constrained decision, gate_round,
                                mockups/handoff, and the gate_decisions table
 legacy-hierarchy-export.json   every row of the removed layer, with its DDL
 lib/derive.mjs                 brand + track derivation, shared and testable
+lib/audit.mjs                  which cards are audits — the word in the title
 lib/access.mjs                 Access JWT verification
 lib/session-id.mjs             the Linear key inside an agent session id
 frontend/board-logic.js        pure board logic (stages, the card's action, hashing)

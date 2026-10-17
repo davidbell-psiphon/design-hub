@@ -20,7 +20,17 @@ var UNASSIGNED = { id: '_unassigned', name: 'Unassigned', color: '#888780' };
 var STAGE_LABELS = {
   research: 'AI-research done',
   design: 'AI-design done',
+  audit: 'AI-audit done',
 };
+
+// Stages only a machine you sit at, that named the stage in its heartbeat,
+// will be handed — and that are never dispatched to the cloud. Kept in step
+// with LOCAL_ONLY_STAGES in worker/index.js by hand, like STAGE_LABELS.
+var LOCAL_ONLY_STAGES = ['audit'];
+
+function isLocalOnly(stage) {
+  return LOCAL_ONLY_STAGES.indexOf(stage) !== -1;
+}
 
 // Where a session belongs on the whole board: one of the collapsed sections
 // at the bottom, or the brand buckets above them.
@@ -248,11 +258,42 @@ function isScreenshots(r) {
   return !!(r && r.kind === 'screenshots');
 }
 
+// An audit card, as the wire projection flagged it (lib/card.mjs, from
+// lib/audit.mjs: the word "Audit" in the title). Its one stage is the audit,
+// so it offers that and nothing else — no research, no design, no skip — and
+// the audit can be run again after it finishes, because a standing audit is
+// pressed again and again over time. Read from the wire, never re-derived
+// here, so the board and the Worker's refusal cannot disagree.
+function isAudit(r) {
+  return !!(r && r.kind === 'audit');
+}
+
+// Has this card been audited at least once? The label the Hub writes when the
+// audit reports done, or the audit session's own status — the second covers
+// the window before the next Linear read on a Hub whose local label write
+// raced it.
+function isAudited(r) {
+  if (stageState(r, 'audit') === 'done') return true;
+  var s = r && r.stages && r.stages.audit;
+  return !!(s && s.status === 'done');
+}
+
+// When the last audit finished, or '' when the board cannot say. A finished
+// audit row is one stage-done left at 'done' with nothing queued, and its
+// `updated_at` is the moment it finished. While a re-run is queued or going,
+// that stamp belongs to the press, so there is nothing honest to show.
+function lastAuditAt(r) {
+  var s = r && r.stages && r.stages.audit;
+  if (!s || s.status !== 'done' || s.requested_at) return '';
+  return s.updated_at || '';
+}
+
 // What the card's own pill says. A skipped stage says so: 'Researched' would
 // claim work that never happened, and 'Backlog' would hide a decision you
 // made. The column heading stays plain — the pill is where the difference goes.
 // A screenshot card says what its stages actually were: analysis and making.
 function stageLabel(r) {
+  if (isAudit(r)) return isAudited(r) ? 'Audited' : 'Not audited';
   var reached = stageReached(r);
   var shots = isScreenshots(r);
   if (reached.how !== 'skipped') {
@@ -286,7 +327,14 @@ function isWorking(r) {
 // the board still showed in Backlog — the button and the column disagreed
 // about where the card was. Skipping is part of stageOf now, so this reads the
 // column and nothing else, and the two cannot drift apart.
+//
+// An audit card offers the audit, always — before the first run and after
+// every one since. It is the only action here that does not disappear once
+// its stage is done.
 function actionFor(r) {
+  if (isAudit(r)) {
+    return { stage: 'audit', label: isAudited(r) ? 'Run audit again' : 'Run audit' };
+  }
   var stage = stageOf(r);
   var shots = isScreenshots(r);
   if (stage === 'designed') return null;
@@ -313,6 +361,8 @@ function actionFor(r) {
 function actionsFor(r) {
   var primary = actionFor(r);
   if (!primary) return [];
+  // An audit has nothing to skip to.
+  if (isAudit(r)) return [primary];
   if (stageOf(r) !== 'backlog') return [primary];
   // The same skip, in the screenshot agent's words. It is still the research
   // stage being skipped and the design stage being queued; the agent's brief
@@ -995,16 +1045,22 @@ function agentLine(rows, now) {
 // this stage — a dispatch went out, so a stall there really is a run that
 // stopped answering. Null too when the machine that would take it is fresh:
 // something on it is awake and asking, so silence is again the runner's.
+//
+// A local-only stage is never dispatched, so the cloud is never the answer
+// for it, and only a machine that named the stage counts — the queue's own
+// rule. There the board always has something to say, even with no heartbeats.
 function nobodyComing(r, machines, now) {
   var stage = r && r.requested_stage;
   var rows = machines || [];
-  if (!stage || !rows.length) return null;
+  var localOnly = isLocalOnly(stage);
+  if (!stage || (!rows.length && !localOnly)) return null;
   var can = function (m) {
     var c = (m && m.capabilities) || [];
+    if (localOnly) return c.indexOf(stage) >= 0;
     return !c.length || c.indexOf(stage) >= 0;
   };
   var cloud = rows.filter(function (m) { return m && m.kind === 'ci'; });
-  if (!cloud.length || cloud.some(can)) return null;
+  if (!localOnly && (!cloud.length || cloud.some(can))) return null;
 
   var able = localAgents(rows).filter(can);
   if (!able.length) return 'no machine that can run ' + stage + ' has ever checked in.';
