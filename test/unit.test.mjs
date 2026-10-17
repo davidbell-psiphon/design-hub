@@ -999,6 +999,20 @@ describe('accessIdentity — Access JWT verification', () => {
     assert.equal(await accessIdentity(req(await sign({ ...good(), aud: ['another-app'] })), env), null);
   });
 
+  test('an extra audience (the Design Portal) is accepted only when listed', async () => {
+    const token = await sign({ ...good(), aud: ['portal-aud'] });
+    assert.equal(await accessIdentity(req(token), env), null);
+    const withPortal = { ...env, ACCESS_EXTRA_AUDS: 'other-aud, portal-aud' };
+    assert.ok(await accessIdentity(req(token), withPortal));
+    assert.equal(await accessIdentity(req(await sign({ ...good(), aud: ['nope'] })), withPortal), null);
+  });
+
+  test('an extra audience does not relax the issuer check', async () => {
+    const withPortal = { ...env, ACCESS_EXTRA_AUDS: 'portal-aud' };
+    assert.equal(await accessIdentity(req(await sign({ ...good(), aud: ['portal-aud'],
+      iss: 'https://evil.cloudflareaccess.com' })), withPortal), null);
+  });
+
   test('wrong issuer is rejected', async () => {
     assert.equal(await accessIdentity(
       req(await sign({ ...good(), iss: 'https://evil.cloudflareaccess.com' })), env), null);

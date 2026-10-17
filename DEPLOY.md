@@ -284,6 +284,19 @@ no cross-origin call left for Access to break.
    ```
    Until both are set the Worker runs open. Setting them closes every route
    except `POST /api/agent/session`, which authenticates with `X-Agent-Secret`.
+
+   **The Design Portal embeds the board** (Oct 2026). It serves it at
+   `design-portal-2t2.pages.dev/hub/` through its own `functions/hub/[[path]].js`
+   and forwards the portal's Access token, so the Worker must also accept the
+   portal's AUD:
+   ```bash
+   npx wrangler secret put ACCESS_EXTRA_AUDS   # comma-separated; the portal app's AUD
+   ```
+   Same team, so the same certs and issuer check apply. The portal fetches the
+   board HTML from this Pages site, so this site's own Access application has
+   to go (or carry a Service Auth policy whose token the portal holds). With it
+   gone the board shell here is public, but its `/api` gets 403 from the Worker
+   — the data stays behind a psiphon.ca sign-in.
 5. **Protect the Worker itself.** Workers & Pages → design-hub-worker → Access →
    Protect this Worker behind Access. Then give the proxy a service token so it
    can still get through:
