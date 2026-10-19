@@ -265,6 +265,11 @@
     transition: background var(--dur-short) var(--ease-standard),
                 border-color var(--dur-short) var(--ease-standard),
                 transform var(--dur-medium) var(--ease-spring); }
+  .fix-dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; padding: 18px; max-width: 420px; width: calc(100% - 32px); font-family: var(--font); }
+  .fix-dialog::backdrop { background: rgba(0,0,0,.55); }
+  .fix-title { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .fix-why { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0 0 12px; }
+  .fix-opts { display: grid; gap: 6px; margin-bottom: 12px; }
   .session-card:hover { background: var(--surface-2); }
   /* Each state ringed in its OWN colour. These were two hardcoded rgba values
      covering four states, so error looked like stalled and working looked like
@@ -1774,8 +1779,47 @@ async function triggerSession(id, stage, btn) {
       : `${STAGE_TOAST[stage] || 'Requested'} — run started`);
     await loadBoard();
   } catch (e) {
-    toast('Could not request — ' + String(e.message || e).slice(0, 120));
     if (btn) { btn.disabled = false; btn.textContent = original; }
+    // A press the runner would have stopped on comes back refused, with the
+    // fix attached. Offer the fix instead of a toast that only says "no".
+    let body = null;
+    try { body = JSON.parse(e.message); } catch (x) { body = null; }
+    if (body && body.fix) { showFix(id, stage, body); return; }
+    toast('Could not request — ' + String((body && body.error) || e.message || e).slice(0, 160));
+  }
+}
+
+// The fix dialog for a refused press. `no-brand` offers the four brands: one
+// click writes the brand into the Linear title and presses the stage again.
+// `no-figma-destination` opens the Figma paths editor for that team/brand.
+function showFix(id, stage, body) {
+  const old = document.getElementById('fix-dialog');
+  if (old) old.remove();
+  const d = document.createElement('dialog');
+  d.id = 'fix-dialog';
+  d.className = 'fix-dialog';
+  const opts = body.fix.kind === 'brand'
+    ? body.fix.options.map((b) =>
+        `<button class="gate-option" onclick="applyBrandFix('${esc(id)}','${esc(stage)}','${esc(b)}')">This is ${esc(b.charAt(0).toUpperCase() + b.slice(1))} — fix and run</button>`).join('')
+    : `<button class="gate-option" onclick="document.getElementById('fix-dialog').close(); (window.openFigmaPaths||function(){})()">Open Figma paths</button>`;
+  d.innerHTML = `<div class="fix-title">Can’t run ${esc(stage)} on ${esc(id)} yet</div>
+    <p class="fix-why">${esc(body.error)}</p>
+    <div class="fix-opts">${opts}</div>
+    <button class="btn" onclick="document.getElementById('fix-dialog').close()">Cancel</button>`;
+  document.body.appendChild(d);
+  d.showModal();
+}
+
+async function applyBrandFix(id, stage, brand) {
+  const d = document.getElementById('fix-dialog');
+  try {
+    await api(`/agent/session/${encodeURIComponent(id)}/fix-brand`, { method: 'POST', body: { brand } });
+    if (d) d.close();
+    toast(`Fixed — ${brand} added to the Linear title. Running ${stage}…`);
+    await triggerSession(id, stage, null);
+  } catch (e) {
+    let msg = e.message; try { msg = JSON.parse(e.message).error || msg; } catch (x) {}
+    toast('Fix failed — ' + String(msg).slice(0, 160));
   }
 }
 

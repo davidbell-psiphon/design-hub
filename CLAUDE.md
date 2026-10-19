@@ -264,6 +264,17 @@ local", every fifteen minutes on weekdays. See design-ai's
 and without it every wake would re-claim the machine and undo a choice made on
 the board.
 
+### A press the runner would stop on is refused, with the fix
+
+`preflight` in the Worker runs before every press is queued and asks what the
+runner would refuse: no brand derivable from Linear (team, project, labels,
+title — the runner's own rule, not the board's `brand` column), or, for design,
+no Figma file for the (team, brand) pair. It answers 422 with `code`, `error`
+and `fix`, and nothing is queued. The board opens a fix dialog: pick the brand
+and `/fix-brand` writes it into the Linear title and presses again; a missing
+Figma file opens Figma paths. WEB-325, 19 Oct 2026: a Websites issue titled
+"psix" sat on Queued with a free machine and an empty queue. `test/preflight.test.mjs`.
+
 ### A run in progress is seen as one
 
 The runner runs `claude -p` with `spawnSync`, so for the length of a stage it
@@ -336,10 +347,12 @@ never checked in, which is what stops work being routed at nothing.
 
 ## What the Hub writes to Linear
 
-Four things, and no more: stage labels (`AI-research done`, `AI-design done`,
+Five things, and no more: stage labels (`AI-research done`, `AI-design done`,
 `AI-prototype done`, `AI-audit done`) when a stage reports finished, `no-design` when you
 dismiss a card (and `no-research` / `no-prototype` from the skip route), its removal
-when you undo that, and **issue status — but only from
+when you undo that, **a brand word at the front of the title** — only from
+`/api/agent/session/:id/fix-brand`, when you pick a brand in the fix dialog —
+and **issue status — but only from
 `/api/agent/session/:id/complete`, POST to mark it done and DELETE to take
 that back.**
 

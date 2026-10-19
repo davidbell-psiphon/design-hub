@@ -1,4 +1,4 @@
-import { deriveBrand, deriveTrack, TEAM_TRACK } from '../lib/derive.mjs';
+import { deriveBrand, deriveTrack, TEAM_TRACK, BRAND_KEYWORDS } from '../lib/derive.mjs';
 import { accessIdentity } from '../lib/access.mjs';
 import { linearKeyFromSessionId, stageFromSessionId } from '../lib/session-id.mjs';
 import { diagnose } from '../lib/diagnostics.mjs';
@@ -739,6 +739,69 @@ function nowStamp() {
 // The Hub's entire "start work" mechanism: apply a label to the Linear
 // issue. The agent on the other end watches for that label; the Hub never
 // starts work itself.
+// ─── PRE-FLIGHT ────────────────────────────────────
+//
+// What the runner will refuse, asked BEFORE a press is queued. A press the
+// runner is going to stop on used to be queued anyway, and the card read
+// "Queued" for ever while nothing happened — WEB-325 sat like that on
+// 19 October with a free machine and an empty queue, because a Websites issue
+// with no brand word has no Figma file to go to.
+//
+// The runner derives brand from the Linear issue (deriveBrand, vendored), not
+// from the Hub's `brand` column, so this asks the same question of the same
+// facts: team, Linear project, labels, title. A "Move to…" correction on the
+// board does not count, because it does not reach the runner.
+//
+// Returns null when the press can go ahead, or { code, error, fix } — `fix`
+// names the one-click repair the board offers.
+async function preflight(env, key, stage) {
+  const card = await env.DB.prepare(
+    `SELECT title, team, labels, linear_project, figma_file_key FROM cards WHERE issue_key = ?`
+  ).bind(key).first();
+  if (!card) return null;
+  let labels = [];
+  try { labels = JSON.parse(card.labels || '[]'); } catch (e) { labels = []; }
+  if (!Array.isArray(labels)) labels = [];
+  const brand = deriveBrand({
+    team: card.team ? { name: card.team } : null,
+    project: card.linear_project ? { name: card.linear_project } : null,
+    labels: { nodes: labels.map((l) => ({ name: typeof l === 'object' && l ? l.name : l })) },
+    title: card.title,
+  });
+  if (!brand) {
+    return {
+      code: 'no-brand',
+      error: `${key} has no brand, so the runner cannot tell which Figma file it belongs to ` +
+             `and would stop without drawing anything. Pick the brand and it is fixed in Linear and run.`,
+      fix: { kind: 'brand', options: BRAND_KEYWORDS },
+    };
+  }
+  if (stage === 'design' && !card.figma_file_key) {
+    let dest = null;
+    try {
+      dest = await env.DB.prepare(
+        `SELECT file_key FROM figma_paths WHERE team = ? AND brand = ?`
+      ).bind(card.team, brand).first();
+    } catch (e) { dest = { file_key: 'unknown' }; }   // pre-piece13: the runner falls back to routing.json
+    if (!dest || !dest.file_key) {
+      return {
+        code: 'no-figma-destination',
+        error: `No Figma file is set for ${card.team} / ${brand}, so a design run has nowhere to draw. ` +
+               `Add one under Figma paths, then press Design again.`,
+        fix: { kind: 'figma-paths', team: card.team, brand },
+      };
+    }
+  }
+  return null;
+}
+
+const TITLE_MUTATION = `
+mutation SetTitle($id: String!, $title: String!) {
+  issueUpdate(id: $id, input: { title: $title }) { success }
+}`;
+
+const BRAND_NAME = { psiphon: 'Psiphon', conduit: 'Conduit', ryve: 'Ryve', forge: 'Forge' };
+
 async function linearGraphQL(env, query, variables) {
   const res = await fetch('https://api.linear.app/graphql', {
     method: 'POST',
@@ -1245,6 +1308,11 @@ async function route(request, env) {
       // for a dead run. Stop cannot interrupt a Claude call; it clears the
       // queue entry, and the runner reports when it finishes regardless. So
       // the honest answer is to say so, and to queue nothing.
+      // Refuse what the runner would refuse, now, with the fix attached —
+      // rather than queuing a run that stops and leaves the card on "Queued".
+      const blocked = await preflight(env, key, b.stage);
+      if (blocked) return json(blocked, 422);
+
       const live = await agentAlive(env, key, b.stage);
       if (live) {
         return err(`${b.stage} is already running — the runner last spoke ${live.mins}m ago. ` +
@@ -1294,6 +1362,37 @@ async function route(request, env) {
         : { started: false, reason: who.reason };
       return json({ ok: true, requested: b.stage, started: run.started, detail: run.reason,
                     local: isLocalOnly(b.stage) });
+    }
+
+    // POST /api/agent/session/:id/fix-brand — the one-click repair for a
+    // press refused with `no-brand`. Puts the brand word at the front of the
+    // Linear title ("Psiphon: …"), because the runner reads brand from Linear
+    // and the title is the one place every issue has. Then the board presses
+    // the stage again. A title that already has a brand word is left alone.
+    if (method === 'POST' && path.match(/^\/api\/agent\/session\/[^/]+\/fix-brand$/)) {
+      const key = await resolveKey(env, path.split('/')[4]);
+      if (!key) return err('not found', 404);
+      let b;
+      try { b = await request.json(); } catch { return err('Invalid JSON'); }
+      const brand = String(b.brand || '').toLowerCase();
+      if (!BRAND_KEYWORDS.includes(brand)) {
+        return err(`brand must be one of: ${BRAND_KEYWORDS.join(', ')}`);
+      }
+      const card = await env.DB.prepare(
+        `SELECT linear_uuid, title FROM cards WHERE issue_key = ?`
+      ).bind(key).first();
+      if (!card) return err('not found', 404);
+      if (!card.linear_uuid) return err('session has no linked Linear issue');
+      const title = String(card.title || '');
+      const next = title.toLowerCase().includes(brand) ? title : `${BRAND_NAME[brand]}: ${title}`;
+      if (next !== title) {
+        const r = await linearGraphQL(env, TITLE_MUTATION, { id: card.linear_uuid, title: next });
+        if (r.error) return err(`Linear refused the title change: ${JSON.stringify(r.error).slice(0, 200)}`, 502);
+      }
+      await env.DB.prepare(
+        `UPDATE cards SET title = ?, brand = ? WHERE issue_key = ?`
+      ).bind(next, brand, key).run();
+      return json({ ok: true, title: next, brand });
     }
 
     // DELETE /api/agent/session/:id/trigger — take a request back out of the
